@@ -1,0 +1,256 @@
+"""
+Spatial density analysis — hexagonal heatmaps and hotspot detection.
+
+Uses coordinate grid aggregation (DuckDB-native, no h3 dependency required
+for the basic version). H3 hexagonal indexing can be added later for
+finer resolution.
+
+Results feed DeckGL HeatmapLayer and HexagonLayer.
+"""
+
+from fastapi import APIRouter, Query
+from typing import Optional
+from ..db import get_connection, build_trip_filter
+
+router = APIRouter()
+
+
+@router.get("/analysis/spatial/density-grid")
+async def density_grid(
+    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    resolution: float = Query(0.01, ge=0.001, le=0.1,
+                              description="Grid cell size in degrees (~0.01=1km)"),
+    point_type: str = Query("origin", pattern="^(origin|destination|both)$"),
+    min_hour: Optional[int] = Query(None, ge=0, le=23),
+    max_hour: Optional[int] = Query(None, ge=0, le=23),
+):
+    """Grid-based spatial density of trip origins, destinations, or both.
+
+    Returns [{lon, lat, weight}, ...] for DeckGL HeatmapLayer.
+    Resolution 0.01° ≈ 1km at Japan's latitude.
+    """
+    conn = get_connection()
+
+    extra: list[str] = []
+    if min_hour is not None:
+        extra.append(f"dep_hour >= {min_hour}")
+    if max_hour is not None:
+        extra.append(f"dep_hour <= {max_hour}")
+
+    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+
+    queries = []
+    if point_type in ("origin", "both"):
+        queries.append(f"""
+            SELECT
+                ROUND(start_lon / {resolution}) * {resolution} AS lon,
+                ROUND(start_lat / {resolution}) * {resolution} AS lat,
+                COUNT(*) AS weight
+            FROM trips {where}
+            GROUP BY lon, lat
+        """)
+
+    if point_type in ("destination", "both"):
+        queries.append(f"""
+            SELECT
+                ROUND(end_lon / {resolution}) * {resolution} AS lon,
+                ROUND(end_lat / {resolution}) * {resolution} AS lat,
+                COUNT(*) AS weight
+            FROM trips {where}
+            GROUP BY lon, lat
+        """)
+
+    if len(queries) == 2:
+        # Union and re-aggregate
+        combined = f"""
+            SELECT lon, lat, SUM(weight) AS weight FROM (
+                ({queries[0]}) UNION ALL ({queries[1]})
+            ) GROUP BY lon, lat
+            ORDER BY weight DESC
+            LIMIT 5000
+        """
+    else:
+        combined = queries[0] + " ORDER BY weight DESC LIMIT 5000"
+
+    rows = conn.execute(combined).fetchall()
+
+    return {
+        "points": [
+            {"lon": r[0], "lat": r[1], "weight": r[2]}
+            for r in rows
+        ],
+        "count": len(rows),
+        "resolution_deg": resolution,
+    }
+
+
+@router.get("/analysis/spatial/waypoint-density")
+async def waypoint_density(
+    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    resolution: float = Query(0.005, ge=0.001, le=0.05,
+                              description="Grid cell size in degrees (~0.005=500m)"),
+    limit: int = Query(5000, ge=100, le=20000),
+):
+    """Waypoint spatial density — where vehicles actually travel (not just OD).
+
+    Higher resolution than trip-level density since waypoints are denser.
+    Requires trajectory data to be ingested.
+    """
+    conn = get_connection()
+
+    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+
+    if trip_where:
+        waypoint_where = f"WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
+    else:
+        waypoint_where = ""
+
+    rows = conn.execute(f"""
+        SELECT
+            ROUND(lon / {resolution}) * {resolution} AS grid_lon,
+            ROUND(lat / {resolution}) * {resolution} AS grid_lat,
+            COUNT(*) AS weight
+        FROM waypoints
+        {waypoint_where}
+        GROUP BY grid_lon, grid_lat
+        ORDER BY weight DESC
+        LIMIT {limit}
+    """).fetchall()
+
+    return {
+        "points": [
+            {"lon": r[0], "lat": r[1], "weight": r[2]}
+            for r in rows
+        ],
+        "count": len(rows),
+        "resolution_deg": resolution,
+    }
+
+
+@router.get("/analysis/spatial/link-density")
+async def link_density(
+    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    top_n: int = Query(500, ge=10, le=5000),
+    min_waypoints: int = Query(50, ge=1, le=10000,
+                               description="Skip links with fewer than this many waypoints"),
+    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+):
+    """DRM link-level waypoint density.
+
+    Aggregates waypoints by `link_id` to reveal which road segments the
+    generated trajectories actually traverse. Used to validate that the
+    routing model threads trajectories through realistic arterials rather
+    than random shortcuts.
+
+    Returns each top link with its waypoint count, unique-vehicle count,
+    unique-trip count, and a centroid (AVG lon/lat) for map placement.
+
+    `min_waypoints` filters out sparse links so the top-N list highlights
+    consistently-used corridors rather than outliers.
+    """
+    conn = get_connection()
+
+    trip_extra = []
+    if goods_type:
+        trip_extra.append(f"goods_type = '{goods_type}'")
+    trip_where = build_trip_filter(vehicle_type, city, simulation_day, extra=trip_extra if trip_extra else None)
+    if trip_where:
+        waypoint_scope = f"AND vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
+    else:
+        waypoint_scope = ""
+
+    # Note: no COUNT DISTINCT on (vehicle_id, trip_id) — that composite is
+    # ~30-60s on 289M truck waypoints. unique_vehicles alone is almost as
+    # informative for the hypothesis-validation use case.
+    rows = conn.execute(f"""
+        SELECT
+            link_id,
+            COUNT(*)                    AS waypoint_count,
+            COUNT(DISTINCT vehicle_key) AS unique_vehicles,
+            AVG(lon)                    AS centroid_lon,
+            AVG(lat)                    AS centroid_lat
+        FROM waypoints
+        WHERE link_id IS NOT NULL
+          AND link_id != ''
+          {waypoint_scope}
+        GROUP BY link_id
+        HAVING COUNT(*) >= {min_waypoints}
+        ORDER BY waypoint_count DESC
+        LIMIT {top_n}
+    """).fetchall()
+
+    # Total distinct links in the scoped set — context for the top-N selection
+    total_links = conn.execute(f"""
+        SELECT COUNT(DISTINCT link_id)
+        FROM waypoints
+        WHERE link_id IS NOT NULL AND link_id != ''
+          {waypoint_scope}
+    """).fetchone()[0]
+
+    return {
+        "links": [
+            {
+                "link_id": r[0],
+                "waypoint_count": r[1],
+                "unique_vehicles": r[2],
+                "centroid": [round(r[3], 6), round(r[4], 6)],
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+        "total_links": total_links,
+    }
+
+
+@router.get("/analysis/spatial/hotspots")
+async def hotspots(
+    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    point_type: str = Query("origin", pattern="^(origin|destination)$"),
+    top_n: int = Query(20, ge=5, le=100),
+    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+):
+    """Top-N densest locations (hotspots).
+
+    Returns the grid cells with the highest trip concentration.
+    """
+    conn = get_connection()
+
+    if point_type == "origin":
+        lon_col, lat_col = "start_lon", "start_lat"
+    else:
+        lon_col, lat_col = "end_lon", "end_lat"
+
+    extra = [f"{lon_col} IS NOT NULL"]
+    if goods_type:
+        extra.append(f"goods_type = '{goods_type}'")
+    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+
+    rows = conn.execute(f"""
+        SELECT
+            ROUND({lon_col} * 100) / 100 AS lon,
+            ROUND({lat_col} * 100) / 100 AS lat,
+            COUNT(*) AS volume,
+            COUNT(DISTINCT vehicle_key) AS unique_vehicles
+        FROM trips
+        {where}
+        GROUP BY lon, lat
+        ORDER BY volume DESC
+        LIMIT {top_n}
+    """).fetchall()
+
+    return [
+        {
+            "lon": r[0], "lat": r[1],
+            "volume": r[2], "unique_vehicles": r[3],
+            "rank": i + 1,
+        }
+        for i, r in enumerate(rows)
+    ]

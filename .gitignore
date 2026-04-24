@@ -1,0 +1,59 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtualenvs ─────────────────────────────────────────
+.venv-viz/
+.venv/
+venv/
+env/
+
+# ── Frontend ────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/*.tsbuildinfo
+
+# ── Database & data ─────────────────────────────────────
+# Never commit the ingested DuckDB (gigabytes, regenerable)
+*.duckdb
+*.duckdb.wal
+output/
+data/
+
+# ── Env files (never commit secrets) ────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── OS / editor ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# ── Logs / temp ─────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+/tmp/
+
+# ── Dropbox conflict files ──────────────────────────────
+*conflicted copy*
+
+# ── Stray artifacts from external scripts (defensive) ───
+# A rogue batch script on the host machine was creating files with
+# mangled paths-as-names (e.g. "H:Dropboxobsidian-vaultAIedit-log.txt")
+# that Dropbox syncs into whatever folder is open. Block them here.
+*edit-log*.txt
+*%date%*
+H[:]Dropbox*
