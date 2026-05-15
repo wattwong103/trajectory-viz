@@ -9,6 +9,7 @@ __pycache__/
 
 # ── Virtualenvs ─────────────────────────────────────────
 .venv-viz/
+.venv-viz-*/         # backup/recovery names (e.g. .venv-viz-old-broken)
 .venv/
 venv/
 env/
