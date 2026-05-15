@@ -12,11 +12,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo =^> Installing Python dependencies...
-.venv-viz\Scripts\python.exe -m pip install --upgrade pip
-.venv-viz\Scripts\python.exe -m pip install fastapi uvicorn duckdb scikit-learn pydantic
+echo =^> Installing project (editable mode)...
+.venv-viz\Scripts\python.exe -m pip install -e .
 if errorlevel 1 (
-    echo [ERROR] pip install failed.
+    echo [ERROR] pip install failed. If pip is broken from a partial upgrade, run:
+    echo   .venv-viz\Scripts\python.exe -m ensurepip --upgrade
     exit /b 1
 )
 
@@ -33,11 +33,15 @@ echo.
 echo Bootstrap complete.
 echo.
 echo Start the backend (monorepo mode):
-echo   .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
+echo   .venv-viz\Scripts\trajectory-viz-serve.exe
+echo   (or: .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999)
 echo.
 echo Start the backend (standalone mode):
 echo   set PFLOW_VIZ_DB=C:\path\to\pflow.duckdb
-echo   .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
+echo   .venv-viz\Scripts\trajectory-viz-serve.exe
+echo.
+echo Ingest data:
+echo   .venv-viz\Scripts\trajectory-viz-ingest.exe --reset
 echo.
 echo Start the frontend (from trajectory-viz\frontend\):
 echo   npm run dev

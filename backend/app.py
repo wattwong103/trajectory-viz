@@ -58,3 +58,17 @@ async def root():
         "docs": "/docs",
         "stats": "/api/stats",
     }
+
+
+def serve():
+    """Entry point for `trajectory-viz-serve`.
+
+    Reads host/port from env (default 127.0.0.1:9999). Use `--reload` via uvicorn
+    directly for dev; this wrapper is the production-style single-command start.
+    """
+    import os
+    import uvicorn
+
+    host = os.environ.get("TRAJECTORY_VIZ_HOST", "127.0.0.1")
+    port = int(os.environ.get("TRAJECTORY_VIZ_PORT", "9999"))
+    uvicorn.run("backend.app:app", host=host, port=port, reload=False)
