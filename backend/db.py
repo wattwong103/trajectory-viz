@@ -102,6 +102,27 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    # Indexes — without these, filter scans on 4.43M trips / 233M waypoints
+    # become full table scans and blow past the p99 budgets (200ms/1s/500ms).
+    # DuckDB uses ART for VARCHAR and min-max zone-maps for numeric cols.
+    _index_statements = [
+        # trips
+        "CREATE INDEX IF NOT EXISTS idx_trips_vehicle_type ON trips(vehicle_type)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_vehicle_key  ON trips(vehicle_key)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_city_day     ON trips(city, simulation_day)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_dep_hour     ON trips(dep_hour)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_distance     ON trips(distance_km)",
+        # waypoints
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_vehicle_key ON waypoints(vehicle_key)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_trip        ON waypoints(vehicle_id, trip_id)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_link_id     ON waypoints(link_id)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_lonlat      ON waypoints(lon, lat)",
+        # validation
+        "CREATE INDEX IF NOT EXISTS idx_validation_run_id ON validation_runs(run_id)",
+    ]
+    for stmt in _index_statements:
+        conn.execute(stmt)
+
 
 def reset_db() -> None:
     """Drop all tables and re-create schema. Used for re-ingestion."""
