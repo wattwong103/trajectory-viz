@@ -5,7 +5,7 @@ Interactive visualization dashboard for PFLOW trip + trajectory data. FastAPI + 
 ## Architecture
 
 ```
-viz/
+trajectory-viz/
 ├── backend/          FastAPI app serving /api/* from pflow.duckdb (≈ 8.4 GB)
 │   ├── app.py        Uvicorn entry + router registration
 │   ├── db.py         DuckDB connection + build_trip_filter helper
@@ -32,9 +32,9 @@ Two processes — backend on 9999, frontend on 5173 (proxy to backend).
 ### Backend
 
 ```bash
-# From the repo root (PFLOW monorepo or extracted viz/)
-./.venv-viz/bin/python -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999
-# Windows: .venv-viz\Scripts\python.exe -m uvicorn ...
+# From inside trajectory-viz/
+./.venv-viz/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
+# Windows: .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
 ```
 
 Verify: `curl http://127.0.0.1:9999/api/stats/filter-options`
@@ -42,7 +42,7 @@ Verify: `curl http://127.0.0.1:9999/api/stats/filter-options`
 ### Frontend
 
 ```bash
-cd viz/frontend
+cd trajectory-viz/frontend
 npm install    # first time only
 npm run dev
 ```
@@ -77,7 +77,7 @@ WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {build_trip_filter(
 ## Ingest
 
 ```bash
-.venv-viz/Scripts/python.exe -m viz.backend.ingest --reset
+.venv-viz/Scripts/python.exe -m backend.ingest --reset
 ```
 
 - `--reset` drops and recreates tables. Without it, re-runs **duplicate rows** (ingest is not idempotent).
@@ -113,19 +113,19 @@ Analysis
 
 ## Standalone mode
 
-The viz module can run against any pre-ingested `pflow.duckdb` file without needing the full PFLOW monorepo on disk. Set `PFLOW_VIZ_DB` to an absolute path and the backend will serve from that file without ever resolving `PFLOW_HOME`.
+The trajectory-viz module can run against any pre-ingested `pflow.duckdb` file without needing the full PFLOW monorepo on disk. Set `PFLOW_VIZ_DB` to an absolute path and the backend will serve from that file without ever resolving `PFLOW_HOME`.
 
 Quick start (DB already ingested):
 
 ```bash
 export PFLOW_VIZ_DB=/path/to/pflow.duckdb
-python -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
 ```
 
 If you have the raw CSV outputs but not the monorepo, ingest them first using `--output-root` to point at the directory containing `trips/` and `trajectory/` subtrees:
 
 ```bash
-python -m viz.backend.ingest \
+python -m backend.ingest \
   --db-path /path/to/out.duckdb \
   --output-root /path/to/pflow_output \
   --reset
@@ -136,8 +136,8 @@ For a persistent standalone setup without repeating CLI flags, export both env v
 ```bash
 export PFLOW_VIZ_DB=/path/to/pflow.duckdb
 export PFLOW_VIZ_OUTPUT_ROOT=/path/to/pflow_output
-python -m viz.backend.ingest --reset
-python -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999
+python -m backend.ingest --reset
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
 ```
 
 ## Troubleshooting

@@ -5,7 +5,7 @@ Scans the output/ directory for the latest simulation runs and imports them.
 Handles both trips-only mode (no trajectories yet) and full mode.
 
 Usage:
-    python -m viz.backend.ingest [--pflow-home PATH] [--db-path PATH] [--output-root PATH] [--reset]
+    python -m backend.ingest [--pflow-home PATH] [--db-path PATH] [--output-root PATH] [--reset]
 
 CSV column formats parsed (from Java writers):
     Truck trips:  id,sim_day,starttime,start_lon,start_lat,end_lon,end_lat,
@@ -29,7 +29,6 @@ from pathlib import Path
 from glob import glob
 
 # Allow running as `python -m backend.ingest` from trajectory-viz/
-# OR as `python -m viz.backend.ingest` from PFLOW root (if symlinked)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.config import get_pflow_home, get_viz_db_path, get_output_root

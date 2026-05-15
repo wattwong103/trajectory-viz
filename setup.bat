@@ -1,5 +1,5 @@
 @echo off
-REM Bootstrap the viz module: create .venv-viz, install Python and npm deps.
+REM Bootstrap the trajectory-viz module: create .venv-viz, install Python and npm deps.
 REM Run once from any directory — script changes to its own location.
 setlocal
 
@@ -33,13 +33,13 @@ echo.
 echo Bootstrap complete.
 echo.
 echo Start the backend (monorepo mode):
-echo   .venv-viz\Scripts\python.exe -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999
+echo   .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
 echo.
 echo Start the backend (standalone mode):
 echo   set PFLOW_VIZ_DB=C:\path\to\pflow.duckdb
-echo   .venv-viz\Scripts\python.exe -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999
+echo   .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999
 echo.
-echo Start the frontend (from viz\frontend\):
+echo Start the frontend (from trajectory-viz\frontend\):
 echo   npm run dev
 
 endlocal

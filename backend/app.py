@@ -2,7 +2,7 @@
 FastAPI application — PFLOW Trajectory Visualization & Mining API.
 
 Serves trip and trajectory data from DuckDB to the React/DeckGL frontend.
-Run with: uvicorn viz.backend.app:app --host 0.0.0.0 --port 9999 --reload
+Run with: uvicorn backend.app:app --host 0.0.0.0 --port 9999 --reload
 """
 
 from fastapi import FastAPI, Request

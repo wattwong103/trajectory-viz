@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap the viz module: create .venv-viz, install Python and npm deps.
-# Run once from the viz/ directory (or any directory — script cd's to its own location).
+# Bootstrap the trajectory-viz module: create .venv-viz, install Python and npm deps.
+# Run once from the trajectory-viz/ directory (or any directory — script cd's to its own location).
 set -e
 cd "$(dirname "$0")"
 
@@ -18,10 +18,10 @@ echo ""
 echo "Bootstrap complete."
 echo ""
 echo "Start the backend (monorepo mode):"
-echo "  ./.venv-viz/bin/python -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999"
+echo "  ./.venv-viz/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 9999"
 echo ""
 echo "Start the backend (standalone mode):"
-echo "  PFLOW_VIZ_DB=/path/to/pflow.duckdb ./.venv-viz/bin/python -m uvicorn viz.backend.app:app --host 127.0.0.1 --port 9999"
+echo "  PFLOW_VIZ_DB=/path/to/pflow.duckdb ./.venv-viz/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 9999"
 echo ""
-echo "Start the frontend (from viz/frontend/):"
+echo "Start the frontend (from trajectory-viz/frontend/):"
 echo "  npm run dev"
