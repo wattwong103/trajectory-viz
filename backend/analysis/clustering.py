@@ -205,7 +205,13 @@ async def route_similarity(
     simulation_day: Optional[int] = Query(None, ge=0),
     sample_size: int = Query(
         200, ge=20, le=2000,
-        description="Number of trajectories sampled. O(N^2) memory — keep modest.",
+        description=(
+            "Number of trajectories sampled. O(N^2) memory + compute. "
+            "Sprint B6 benchmark on synthetic link sets (vocab=500, 10-100 links/trip): "
+            "N=200 → 0.05s, N=500 → 0.3s, N=1000 → 1.3s, N=2000 → 5.2s. "
+            "Wall time is dominated by the pairwise Jaccard kernel (pure Python); "
+            "raise the cap only if you've vectorized with numpy bitsets or MinHash LSH."
+        ),
     ),
     eps: float = Query(
         0.3, ge=0.01, le=0.95,

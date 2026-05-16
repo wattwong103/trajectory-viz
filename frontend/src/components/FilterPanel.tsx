@@ -97,6 +97,27 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
     maxDetourRatio: undefined,
   });
 
+  // Sprint B5 — per-source F1 availability. When vehicleType is '' (All),
+  // assume any source MIGHT have data → enable all sliders. When a specific
+  // source is selected, consult metrics_available; disabled sliders show
+  // a tooltip explaining why.
+  const metricsForSource = filter.vehicleType
+    ? filterOptions?.metrics_available?.[filter.vehicleType]
+    : undefined;
+  const speedEnabled  = !filter.vehicleType || !metricsForSource || metricsForSource.speed;
+  const dwellEnabled  = !filter.vehicleType || !metricsForSource || metricsForSource.dwell;
+  const detourEnabled = !filter.vehicleType || !metricsForSource || metricsForSource.detour;
+  const disabledTip = (kind: 'speed' | 'dwell' | 'detour') => {
+    const why = {
+      speed:  'Requires trajectory data (waypoints) — not ingested for this source.',
+      dwell:  'Requires ≥ 2 trips per vehicle on the same day — none in this source.',
+      detour: 'All trips are < 100m OD distance (haversine NULL-guard).',
+    }[kind];
+    return `${kind}_avg not populated for "${filter.vehicleType}". ${why}`;
+  };
+  // Visual treatment for a disabled slider row.
+  const disabledStyle: React.CSSProperties = { opacity: 0.4, pointerEvents: 'none' };
+
   const totalTrips = stats?.trips?.row_count ?? 0;
   const totalWaypoints = stats?.waypoints?.row_count ?? 0;
   const noData = !loading && totalTrips === 0;
@@ -250,9 +271,13 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </button>
         {advancedExpanded && (
           <div style={{ marginTop: 6, paddingLeft: 4 }}>
-            <div style={styles.section}>
+            <div
+              style={{ ...styles.section, ...(!speedEnabled ? disabledStyle : {}) }}
+              title={!speedEnabled ? disabledTip('speed') : undefined}
+            >
               <label style={styles.sectionLabel}>
                 Speed: {minSpeedVal} – {maxSpeedVal} km/h
+                {!speedEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
               </label>
               <div style={styles.row}>
                 <input
@@ -260,29 +285,40 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                   value={minSpeedVal}
                   onChange={e => onChange({ ...filter, minSpeed: Number(e.target.value) })}
                   style={styles.rangeInput}
+                  disabled={!speedEnabled}
                 />
                 <input
                   type="range" min={0} max={SPEED_BOUND}
                   value={maxSpeedVal}
                   onChange={e => onChange({ ...filter, maxSpeed: Number(e.target.value) })}
                   style={styles.rangeInput}
+                  disabled={!speedEnabled}
                 />
               </div>
             </div>
-            <div style={styles.section}>
+            <div
+              style={{ ...styles.section, ...(!dwellEnabled ? disabledStyle : {}) }}
+              title={!dwellEnabled ? disabledTip('dwell') : undefined}
+            >
               <label style={styles.sectionLabel}>
                 Max dwell: {maxDwellVal} min
+                {!dwellEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
               </label>
               <input
                 type="range" min={0} max={DWELL_BOUND}
                 value={maxDwellVal}
                 onChange={e => onChange({ ...filter, maxDwellMinutes: Number(e.target.value) })}
                 style={styles.rangeInput}
+                disabled={!dwellEnabled}
               />
             </div>
-            <div style={styles.section}>
+            <div
+              style={{ ...styles.section, ...(!detourEnabled ? disabledStyle : {}) }}
+              title={!detourEnabled ? disabledTip('detour') : undefined}
+            >
               <label style={styles.sectionLabel}>
                 Detour: {minDetourVal.toFixed(2)} – {maxDetourVal.toFixed(2)}
+                {!detourEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
               </label>
               <div style={styles.row}>
                 <input
@@ -290,12 +326,14 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                   value={minDetourVal}
                   onChange={e => onChange({ ...filter, minDetourRatio: Number(e.target.value) })}
                   style={styles.rangeInput}
+                  disabled={!detourEnabled}
                 />
                 <input
                   type="range" min={DETOUR_MIN_BOUND} max={DETOUR_MAX_BOUND} step="0.01"
                   value={maxDetourVal}
                   onChange={e => onChange({ ...filter, maxDetourRatio: Number(e.target.value) })}
                   style={styles.rangeInput}
+                  disabled={!detourEnabled}
                 />
               </div>
             </div>

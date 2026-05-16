@@ -118,12 +118,23 @@ export interface InsightsResponse {
 
 // ─── Filter Options ──────────────────────────────────────
 
+// Per-source F1-metric availability (Sprint B5).
+// Used by FilterPanel to disable sliders that would silently filter to zero
+// rows. Backend computes via COUNT(metric_col) > 0 per source.
+export interface MetricsAvailable {
+  speed: boolean;     // speed_avg_kmh populated (requires trajectory data)
+  dwell: boolean;     // dwell_minutes populated (>= 2 trips per vehicle_key)
+  detour: boolean;    // detour_ratio populated (haversine ≥ 0.1 km)
+}
+
 export interface FilterOptions {
   vehicle_types: string[];
   cities: string[];
   city_centers: Record<string, [number, number]>; // [lon, lat]
   simulation_days: number[];
   goods_types: string[];
+  // Sprint B5 — `{source_id: {speed, dwell, detour}}`; absent for sources with no trips.
+  metrics_available?: Record<string, MetricsAvailable>;
 }
 
 // ─── Filter State ────────────────────────────────────────

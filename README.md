@@ -26,7 +26,7 @@ Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the Universit
 | Tests | none | **25 pytest unit tests** |
 | Distribution | none | `pyproject.toml`, `CITATION.cff`, `Dockerfile` |
 
-Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full release history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -209,4 +209,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgements
 
-Built on the PFLOW research lineage (Kashiyama et al. 2024, Zhang et al. 2023, OpenPFLOW 2017) at the Sekimoto Lab, Center for Spatial Information Science, The University of Tokyo. See the parent [PFLOW](https://github.com/sekilab) repo for the underlying simulation framework.
+Built on the PFLOW research lineage (Kashiyama et al. 2024 [Pseudo-PFLOW], Zhang et al. 2023 [Truck Logistics ext.], OpenPFLOW 2017) at the Sekimoto Lab, Center for Spatial Information Science, The University of Tokyo. See [OpenPFLOW](https://github.com/sekilab/OpenPFLOW) for the original open dataset and queue-based ABM, and the parent `Pseudo-PFLOW` workspace (this fork's upstream) for the Java simulation that produces the trips + waypoint CSVs ingested here.

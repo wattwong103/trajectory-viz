@@ -8,15 +8,18 @@ Two paths: **Docker** (fastest, one command) or **native** (Mac/Windows dev, wit
 
 **Prerequisite**: Docker Desktop installed.
 
-1. Place a pre-ingested DuckDB file at `./data/pflow.duckdb` (relative to the repo root).
+1. **Create the data mount directory** (one-time): `./data/` is the docker-compose
+   volume mount target. `setup.sh` / `setup.bat` create it automatically; if you
+   haven't run either yet, just `mkdir data`.
+2. **Place a pre-ingested DuckDB file at `./data/pflow.duckdb`**.
    - If you don't have one, see *Path B → Ingest* below, then come back.
-2. Run:
+3. Run:
 
    ```bash
    docker compose up --build
    ```
 
-3. Visit **<http://localhost:8080>**. The dashboard loads; map renders; vehicle-type filter buttons populate from the DB.
+4. Visit **<http://localhost:8080>**. The dashboard loads; map renders; vehicle-type filter buttons populate from the DB.
 
 The container serves both the FastAPI backend and the built React frontend from a single port. To rebuild after pulling new code: `docker compose up --build --force-recreate`.
 
@@ -31,6 +34,19 @@ Best for development with Vite HMR. Two processes: backend on :9999, frontend de
 - Python ≥ 3.11
 - Node.js ≥ 20
 - `git`, `npm`
+
+### Environment variables (optional)
+
+All runtime config is driven by env vars. See [`env.example`](env.example) for
+the full list with comments. To use Docker's auto-`.env` loading:
+
+```bash
+cp docs/env.example .env
+vim .env       # uncomment + edit the variables you need
+docker compose up --build
+```
+
+Native dev users typically `export PFLOW_HOME=…` in their shell instead.
 
 ### One-time setup
 

@@ -34,6 +34,14 @@ echo "==> Installing project (editable mode)..."
 
 echo "==> Installing frontend npm dependencies..."
 cd frontend && npm install
+cd ..
+
+# Sprint B2: ensure ./data/ exists (mount target for docker-compose.yml)
+if [ ! -d "data" ]; then
+    echo "==> Creating data/ directory (docker-compose mount target)..."
+    mkdir -p data
+    echo "Place your pre-ingested pflow.duckdb here for Docker deploys." > data/.gitkeep
+fi
 
 echo ""
 echo "Bootstrap complete."

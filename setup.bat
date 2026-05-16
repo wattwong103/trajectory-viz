@@ -29,6 +29,13 @@ if errorlevel 1 (
 )
 cd ..
 
+REM Sprint B2: ensure data\ exists (mount target for docker-compose.yml)
+if not exist "data" (
+    echo =^> Creating data\ directory (docker-compose mount target)...
+    mkdir data
+    echo Place your pre-ingested pflow.duckdb here for Docker deploys. > data\.gitkeep
+)
+
 echo.
 echo Bootstrap complete.
 echo.

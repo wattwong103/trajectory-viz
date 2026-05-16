@@ -130,6 +130,30 @@ def test_stats_filter_options(client):
     assert "truck" in body["vehicle_types"]
     assert "taxi" in body["vehicle_types"]
     assert "tokyo" in body["cities"]
+    # Sprint B5 — per-source F1 metric availability map
+    assert "metrics_available" in body
+    assert "truck" in body["metrics_available"]
+    assert "taxi" in body["metrics_available"]
+    # Each entry has speed/dwell/detour booleans
+    for src in ("truck", "taxi"):
+        assert set(body["metrics_available"][src].keys()) == {"speed", "dwell", "detour"}
+
+
+def test_stats_filter_options_metrics_truck_has_speed(client):
+    """Synthetic truck data includes a 3-waypoint trajectory for trip 1001/1, so
+    speed_avg_kmh is populated for at least one truck row → has_speed is true."""
+    body = client.get("/api/stats/filter-options").json()
+    assert body["metrics_available"]["truck"]["speed"] is True
+    # Truck data spans 2 trips for truck 1001 → dwell populates
+    assert body["metrics_available"]["truck"]["dwell"] is True
+
+
+def test_stats_filter_options_metrics_taxi_no_trajectory(client):
+    """No taxi waypoints in the fixture, so taxi speed_avg_kmh is all NULL."""
+    body = client.get("/api/stats/filter-options").json()
+    assert body["metrics_available"]["taxi"]["speed"] is False
+    # Taxi 47 has 3 trips on sim_day=0 → dwell populates between them
+    assert body["metrics_available"]["taxi"]["dwell"] is True
 
 
 def test_stats_insights_includes_fare_for_taxi(client):

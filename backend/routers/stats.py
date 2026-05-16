@@ -236,10 +236,28 @@ async def filter_options():
         "SELECT DISTINCT goods_type FROM trips WHERE goods_type IS NOT NULL ORDER BY goods_type"
     ).fetchall()]
 
+    # Sprint B5 — per-source F1 metric availability so the frontend can disable
+    # sliders that would silently filter to zero rows. Single grouped query.
+    metrics_rows = conn.execute("""
+        SELECT
+            vehicle_type,
+            COUNT(speed_avg_kmh) > 0 AS has_speed,
+            COUNT(dwell_minutes) > 0 AS has_dwell,
+            COUNT(detour_ratio)  > 0 AS has_detour
+        FROM trips
+        WHERE vehicle_type IS NOT NULL
+        GROUP BY vehicle_type
+    """).fetchall()
+    metrics_available = {
+        r[0]: {"speed": bool(r[1]), "dwell": bool(r[2]), "detour": bool(r[3])}
+        for r in metrics_rows
+    }
+
     return {
         "vehicle_types": vtypes,
         "cities": cities,
         "city_centers": city_centers,
         "simulation_days": days,
         "goods_types": goods_types,
+        "metrics_available": metrics_available,
     }
