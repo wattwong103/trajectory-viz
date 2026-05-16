@@ -15,7 +15,7 @@ router = APIRouter()
 
 @router.get("/analysis/od-flows")
 async def od_flows(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     top_n: int = Query(50, ge=5, le=500),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
@@ -75,7 +75,7 @@ async def od_flows(
 
 @router.get("/analysis/od-flows/zones")
 async def od_flows_by_zone(
-    vehicle_type: str = Query("truck", pattern="^(truck|taxi)$"),
+    vehicle_type: str = Query("truck", pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(50, ge=5, le=200),

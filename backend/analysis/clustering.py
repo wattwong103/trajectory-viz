@@ -67,7 +67,7 @@ async def clustering_status():
 
 @router.post("/analysis/clustering/run")
 async def run_clustering(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     sample_size: int = Query(5000, ge=100, le=50000),
@@ -192,3 +192,151 @@ async def run_clustering(
         "noise_count": noise_count,
         "clusters": sorted(clusters, key=lambda c: -c["size"]),
     }
+
+
+# F3 — Route-similarity clustering (Phase 2 Step 2.6).
+# Differs from /clustering/run in feature space: route_similarity uses the
+# set of DRM link_ids each trajectory traverses, then DBSCAN over pairwise
+# Jaccard distance. Detects "trips that share the same infrastructure".
+@router.post("/analysis/clustering/route-similarity")
+async def route_similarity(
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    sample_size: int = Query(
+        200, ge=20, le=2000,
+        description="Number of trajectories sampled. O(N^2) memory — keep modest.",
+    ),
+    eps: float = Query(
+        0.3, ge=0.01, le=0.95,
+        description="DBSCAN eps in Jaccard distance (0=identical link sets, 1=disjoint).",
+    ),
+    min_samples: int = Query(3, ge=2, le=50),
+):
+    """Cluster trajectories by Jaccard similarity of their link-id sets.
+
+    Implementation:
+      1. Sample N (vehicle_key, trip_id) pairs matching the filter.
+      2. Fetch each trip's set of distinct link_ids from waypoints.
+      3. Compute pairwise Jaccard distance: 1 - |A ∩ B| / |A ∪ B|.
+      4. DBSCAN(metric='precomputed') over the distance matrix.
+
+    Trips with no link_id-bearing waypoints (e.g. no trajectory ingested for
+    that source) are dropped from the sample.
+    """
+    try:
+        from sklearn.cluster import DBSCAN
+        import numpy as np
+    except ImportError:
+        return {"error": "scikit-learn not installed", "algorithm": "none"}
+
+    conn = get_connection()
+    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+
+    # Sample (vehicle_key, trip_id) refs from trips. Sampling here (not waypoints)
+    # avoids over-weighting long trips.
+    sampled = conn.execute(f"""
+        SELECT vehicle_key, trip_id
+        FROM trips
+        {trip_where}
+        USING SAMPLE {int(sample_size)}
+    """).fetchall()
+
+    if not sampled:
+        return {
+            "algorithm": "DBSCAN-Jaccard-on-links",
+            "total_trips": 0,
+            "num_clusters": 0,
+            "noise_count": 0,
+            "clusters": [],
+        }
+
+    # Bulk-fetch link_ids for the sampled trips. Composite IN is DuckDB-native.
+    # vehicle_key is VARCHAR so we quote it; trip_id is BIGINT so it's bare.
+    pairs = ", ".join(
+        f"({_sql_string_literal(vk)}, {int(tid)})" for vk, tid in sampled
+    )
+    wp_rows = conn.execute(f"""
+        SELECT vehicle_key, trip_id, link_id
+        FROM waypoints
+        WHERE (vehicle_key, trip_id) IN ({pairs})
+          AND link_id IS NOT NULL AND link_id != ''
+    """).fetchall()
+
+    # Group: {(vehicle_key, trip_id): set(link_ids)}
+    by_trip: dict[tuple, set[str]] = {}
+    for vk, tid, lk in wp_rows:
+        by_trip.setdefault((vk, tid), set()).add(lk)
+
+    # Drop sampled trips that had zero matching waypoints (no trajectory data).
+    trip_keys = [k for k in sampled if k in by_trip]
+    link_sets = [by_trip[k] for k in trip_keys]
+    n = len(trip_keys)
+
+    if n < 2:
+        return {
+            "algorithm": "DBSCAN-Jaccard-on-links",
+            "total_trips": n,
+            "num_clusters": 0,
+            "noise_count": n,
+            "clusters": [],
+            "note": "Not enough trips with waypoint data to cluster.",
+        }
+
+    # Pairwise Jaccard distance matrix (symmetric).
+    distances = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        ai = link_sets[i]
+        for j in range(i + 1, n):
+            aj = link_sets[j]
+            if not ai or not aj:
+                d = 1.0
+            else:
+                inter = len(ai & aj)
+                union = len(ai | aj)
+                d = 1.0 - (inter / union if union else 0.0)
+            distances[i, j] = d
+            distances[j, i] = d
+
+    db = DBSCAN(eps=eps, min_samples=min_samples, metric="precomputed")
+    labels = db.fit_predict(distances)
+
+    # Group results by cluster label.
+    clusters_out: dict[int, list[tuple]] = {}
+    noise = 0
+    for i, label in enumerate(labels):
+        lbl = int(label)
+        if lbl == -1:
+            noise += 1
+            continue
+        clusters_out.setdefault(lbl, []).append(trip_keys[i])
+
+    return {
+        "algorithm": "DBSCAN-Jaccard-on-links",
+        "total_trips": n,
+        "num_clusters": len(clusters_out),
+        "noise_count": noise,
+        "eps": eps,
+        "min_samples": min_samples,
+        "clusters": [
+            {
+                "cluster_id": cid,
+                "size": len(members),
+                "representative": {
+                    "vehicle_key": members[0][0],
+                    "trip_id": members[0][1],
+                    "link_count": len(by_trip[members[0]]),
+                },
+                "members": [
+                    {"vehicle_key": vk, "trip_id": tid}
+                    for vk, tid in members[:50]
+                ],
+            }
+            for cid, members in sorted(clusters_out.items(), key=lambda kv: -len(kv[1]))
+        ],
+    }
+
+
+def _sql_string_literal(value: str) -> str:
+    """Single-quote a VARCHAR value for inline SQL. Doubles embedded apostrophes."""
+    return "'" + value.replace("'", "''") + "'"

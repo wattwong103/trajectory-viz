@@ -12,6 +12,7 @@ import type {
   TrajectoryResponse,
   FilterState,
   FilterOptions,
+  MetricsDistribution,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -88,6 +89,12 @@ export async function queryTrips(filter: FilterState, limit: number = 2000): Pro
       goods_type: filter.goodsType || null,
       city: filter.city || null,
       simulation_day: filter.simulationDay ?? null,
+      // F1 advanced filters (Phase 2 Step 2.2)
+      min_speed: filter.minSpeed ?? null,
+      max_speed: filter.maxSpeed ?? null,
+      max_dwell_minutes: filter.maxDwellMinutes ?? null,
+      min_detour_ratio: filter.minDetourRatio ?? null,
+      max_detour_ratio: filter.maxDetourRatio ?? null,
       limit,
     }),
   });
@@ -100,11 +107,13 @@ export async function fetchTrajectorySample(
   vehicleType?: string,
   city?: string,
   simulationDay?: number,
+  includeSegments: boolean = false,
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  if (includeSegments) params.set('include_segments', 'true');
   return fetchJson(`/api/trajectories/sample?${params}`);
 }
 
@@ -115,6 +124,7 @@ export async function queryTrajectoriesBBox(
   city?: string,
   simulationDay?: number,
   limit: number = 500,
+  includeSegments: boolean = false,
 ): Promise<TrajectoryResponse> {
   return fetchJson('/api/trajectories/query-bbox', {
     method: 'POST',
@@ -125,6 +135,7 @@ export async function queryTrajectoriesBBox(
       city: city || null,
       simulation_day: simulationDay ?? null,
       limit,
+      include_segments: includeSegments,
     }),
   });
 }
@@ -136,6 +147,7 @@ export async function queryTrajectoriesPoint(
   city?: string,
   simulationDay?: number,
   limit: number = 200,
+  includeSegments: boolean = false,
 ): Promise<TrajectoryResponse> {
   return fetchJson('/api/trajectories/query-point', {
     method: 'POST',
@@ -146,6 +158,7 @@ export async function queryTrajectoriesPoint(
       city: city || null,
       simulation_day: simulationDay ?? null,
       limit,
+      include_segments: includeSegments,
     }),
   });
 }
@@ -431,6 +444,131 @@ export async function fetchRoundTrips(
   if (minHour !== undefined) params.set('min_hour', String(minHour));
   if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   return fetchJson(`/api/analysis/trip-chains/round-trips?${params}`);
+}
+
+// F1 derived-metric distribution (Phase 2 Step 2.2b).
+// `metric` selects which derived column to histogram.
+export async function fetchMetricsDistribution(
+  metric: 'speed_avg_kmh' | 'dwell_minutes' | 'detour_ratio',
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+  bins: number = 20,
+  goodsType?: string,
+  minHour?: number,
+  maxHour?: number,
+): Promise<MetricsDistribution> {
+  const params = new URLSearchParams({ metric, bins: String(bins) });
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  if (goodsType) params.set('goods_type', goodsType);
+  if (minHour !== undefined) params.set('min_hour', String(minHour));
+  if (maxHour !== undefined) params.set('max_hour', String(maxHour));
+  return fetchJson(`/api/analysis/temporal/metrics-distribution?${params}`);
+}
+
+// F3 — Route-similarity clustering (Phase 2 Step 2.6).
+// Clusters trajectories by Jaccard distance on their DRM link_id sets.
+// Differs from /clustering/run (OD+distance features) in that it captures
+// "shared infrastructure" rather than "similar trip shape".
+export interface RouteCluster {
+  cluster_id: number;
+  size: number;
+  representative: {
+    vehicle_key: string;
+    trip_id: number;
+    link_count: number;
+  };
+  members: Array<{ vehicle_key: string; trip_id: number }>;
+}
+
+export interface RouteSimilarityResponse {
+  algorithm: string;
+  total_trips: number;
+  num_clusters: number;
+  noise_count: number;
+  eps?: number;
+  min_samples?: number;
+  clusters: RouteCluster[];
+  note?: string;
+  error?: string;
+}
+
+export async function runRouteSimilarity(
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+  sampleSize: number = 200,
+  eps: number = 0.3,
+  minSamples: number = 3,
+): Promise<RouteSimilarityResponse> {
+  const params = new URLSearchParams({
+    sample_size: String(sampleSize),
+    eps: String(eps),
+    min_samples: String(minSamples),
+  });
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  return fetchJson(`/api/analysis/clustering/route-similarity?${params}`, { method: 'POST' });
+}
+
+// F2 — Trips passing through a bbox (Phase 2 Step 2.3).
+// Returns trips whose trajectories include at least one waypoint in the bbox.
+// Response shape matches /api/trips/query so the dashboard's existing trip
+// rendering can reuse the data without a new mapper.
+export async function fetchTripsThroughZoneBBox(
+  w: number, s: number, e: number, n: number,
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+  limit: number = 500,
+): Promise<TripResponse & { bbox: { w: number; s: number; e: number; n: number } }> {
+  const params = new URLSearchParams({
+    w: String(w), s: String(s), e: String(e), n: String(n),
+    limit: String(limit),
+  });
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  return fetchJson(`/api/analysis/trip-chains/through-zone-bbox?${params}`);
+}
+
+// F2 — Multi-stop chains (Phase 2 Step 2.4).
+// Returns per-vehicle trip sequences for vehicles with >= min_stops trips,
+// sorted by chain length descending.
+export interface MultiStopVehicle {
+  vehicle_key: string;
+  chain_length: number;
+  trips: Array<{
+    trip_id: number;
+    starttime: number;
+    start: [number, number];
+    end: [number, number];
+    distance_km: number | null;
+    goods_type: string | null;
+    seq: number;
+  }>;
+}
+
+export async function fetchMultiStopChains(
+  minStops: number = 3,
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+  goodsType?: string,
+  limit: number = 100,
+): Promise<{ vehicles: MultiStopVehicle[]; count: number }> {
+  const params = new URLSearchParams({
+    min_stops: String(minStops),
+    limit: String(limit),
+  });
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  if (goodsType) params.set('goods_type', goodsType);
+  return fetchJson(`/api/analysis/trip-chains/multi-stop?${params}`);
 }
 
 export async function fetchCommodityPatterns(

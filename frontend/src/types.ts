@@ -6,7 +6,7 @@
 // ─── API Response Types ──────────────────────────────────
 
 export interface TrajectoryMetadata {
-  vehicle_type: 'truck' | 'taxi';
+  vehicle_type: string;          // source_id from sources.yaml (e.g. 'truck', 'taxi')
   vehicle_id: number;
   vehicle_key: string;
   trip_id: number;
@@ -17,11 +17,21 @@ export interface TrajectoryMetadata {
   purpose?: number;
 }
 
+// Per-segment metrics between consecutive waypoints (Phase 2 Step 2.5).
+// Populated only when `include_segments=true` on the trajectory endpoint.
+// A trajectory of N waypoints has N-1 segments.
+export interface TrajectorySegment {
+  link_id: string | null;       // DRM link of the second waypoint in the pair
+  speed_kmh: number | null;     // haversine_km(w1, w2) / dt_hours; null if dt<=0
+  dwell_sec: number | null;     // dt when speed < 1 km/h (idle marker)
+}
+
 export interface Trajectory {
   id: string;
   path: [number, number][];           // [lon, lat][]
   timestamps: number[];                // seconds from midnight
   metadata: TrajectoryMetadata;
+  segments?: TrajectorySegment[] | null;  // F3 — opt-in via include_segments
 }
 
 export interface TrajectoryResponse {
@@ -39,7 +49,7 @@ export interface TripPoint {
   start_lat: number;
   end_lon: number;
   end_lat: number;
-  vehicle_type: 'truck' | 'taxi';
+  vehicle_type: string;          // source_id from sources.yaml (e.g. 'truck', 'taxi')
   distance_km?: number;
   goods_type?: string;
   city?: string;
@@ -119,12 +129,34 @@ export interface FilterOptions {
 // ─── Filter State ────────────────────────────────────────
 
 export interface FilterState {
-  vehicleType: 'truck' | 'taxi' | 'all';
+  vehicleType: string;            // source_id or '' for all
+
   minHour: number;
   maxHour: number;
   goodsType?: string;
   city?: string;
   simulationDay?: number;
+  // F1 advanced filters (Phase 2 Step 2.2) — undefined = filter inactive
+  minSpeed?: number;
+  maxSpeed?: number;
+  maxDwellMinutes?: number;
+  minDetourRatio?: number;
+  maxDetourRatio?: number;
+}
+
+// F1 metric distribution (Phase 2 Step 2.2b)
+export interface MetricsDistribution {
+  metric: 'speed_avg_kmh' | 'dwell_minutes' | 'detour_ratio';
+  unit: string;                         // 'km/h' | 'minutes' | 'ratio'
+  bin_count: number;
+  min: number | null;
+  max: number | null;
+  total_rows: number;
+  histogram: Array<{
+    bin_lower: number;
+    bin_upper: number;
+    count: number;
+  }>;
 }
 
 // ─── Animation State ─────────────────────────────────────

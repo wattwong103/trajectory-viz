@@ -23,7 +23,7 @@ async def stats():
 
 @router.get("/stats/insights")
 async def insights(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
@@ -97,34 +97,36 @@ async def insights(
         FROM hourly ORDER BY cnt ASC LIMIT 1
     """).fetchone()
 
-    # Taxi-specific: fare insights (respects current filter — scoped to city/day/hour if set)
+    # Fare insights — emitted whenever any matching trip carries a fare_yen value.
+    # Source-agnostic: in v0.1 this was hardcoded to vehicle_type='taxi'; the v0.2
+    # filter `fare_yen IS NOT NULL` excludes truck rows (whose fare_yen is NULL) and
+    # any future source that doesn't declare fare_yen in sources.yaml.
     fare_insights = None
-    if vehicle_type != 'truck':
-        fare_extra = []
-        if min_hour is not None:
-            fare_extra.append(f"dep_hour >= {int(min_hour)}")
-        if max_hour is not None:
-            fare_extra.append(f"dep_hour <= {int(max_hour)}")
-        fare_where = build_trip_filter('taxi', city, simulation_day, extra=fare_extra if fare_extra else None)
-        fare_row = conn.execute(f"""
-            SELECT
-                ROUND(AVG(fare_yen), 0)    AS avg_fare,
-                ROUND(MEDIAN(fare_yen), 0) AS median_fare,
-                ROUND(MAX(fare_yen), 0)    AS max_fare,
-                ROUND(AVG(CASE WHEN is_night_trip THEN fare_yen END), 0) AS avg_night_fare,
-                ROUND(AVG(CASE WHEN NOT is_night_trip THEN fare_yen END), 0) AS avg_day_fare,
-                ROUND(SUM(CASE WHEN is_night_trip THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS night_pct
-            FROM trips {fare_where}
-        """).fetchone()
-        if fare_row and fare_row[0]:
-            fare_insights = {
-                "avg_fare_yen": int(fare_row[0]),
-                "median_fare_yen": int(fare_row[1]),
-                "max_fare_yen": int(fare_row[2]),
-                "avg_night_fare_yen": int(fare_row[3]) if fare_row[3] else None,
-                "avg_day_fare_yen": int(fare_row[4]) if fare_row[4] else None,
-                "night_trip_pct": fare_row[5],
-            }
+    fare_extra = ["fare_yen IS NOT NULL"]
+    if min_hour is not None:
+        fare_extra.append(f"dep_hour >= {int(min_hour)}")
+    if max_hour is not None:
+        fare_extra.append(f"dep_hour <= {int(max_hour)}")
+    fare_where = build_trip_filter(vehicle_type, city, simulation_day, extra=fare_extra)
+    fare_row = conn.execute(f"""
+        SELECT
+            ROUND(AVG(fare_yen), 0)    AS avg_fare,
+            ROUND(MEDIAN(fare_yen), 0) AS median_fare,
+            ROUND(MAX(fare_yen), 0)    AS max_fare,
+            ROUND(AVG(CASE WHEN is_night_trip THEN fare_yen END), 0) AS avg_night_fare,
+            ROUND(AVG(CASE WHEN NOT is_night_trip THEN fare_yen END), 0) AS avg_day_fare,
+            ROUND(SUM(CASE WHEN is_night_trip THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS night_pct
+        FROM trips {fare_where}
+    """).fetchone()
+    if fare_row and fare_row[0] is not None:
+        fare_insights = {
+            "avg_fare_yen": int(fare_row[0]),
+            "median_fare_yen": int(fare_row[1]),
+            "max_fare_yen": int(fare_row[2]),
+            "avg_night_fare_yen": int(fare_row[3]) if fare_row[3] else None,
+            "avg_day_fare_yen": int(fare_row[4]) if fare_row[4] else None,
+            "night_trip_pct": fare_row[5],
+        }
 
     # Distance distribution buckets (for sparkline)
     dist_extra = ["distance_km IS NOT NULL", "distance_km > 0"] + extra

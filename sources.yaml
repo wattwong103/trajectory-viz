@@ -43,7 +43,7 @@ sources:
         simulation_day:  { csv: sim_day,        type: int }
         goods_type:      { csv: goods_type,     type: varchar }
         vehicle_size:    { csv: vehicle_size,   type: varchar }
-        cargo_loaded:    { csv: cargo_loaded,   type: bool, transform: "lower(value) = 'true'" }
+        cargo_loaded:    { csv: cargo_loaded,   type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
       waypoints:
         unix_time_ms:    { csv: unix_time_ms,   type: bigint }
         lon:             { csv: lon,            type: double }
@@ -84,8 +84,10 @@ sources:
         dep_hour:        { derived: "CAST(EXTRACT(HOUR FROM CAST(starttime_h AS TIMESTAMP)) AS INTEGER)" }
         simulation_day:  { csv: simulation_day, type: int }
         fare_yen:        { csv: fare_yen,       type: double }
-        is_night_trip:   { csv: is_night_trip,  type: bool, transform: "lower(value) = 'true'" }
-        passenger_in:    { csv: passenger_in,   type: bool, transform: "lower(value) = 'true'" }
+        is_night_trip:   { csv: is_night_trip,  type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
+        passenger_in:    { csv: passenger_in,   type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
+        # taxi_id is vestigial (== vehicle_id for taxis); kept for v0.1 back-compat.
+        taxi_id:         { csv: taxi_id,        type: int }
       waypoints:
         unix_time_ms:    { csv: unix_time_ms,   type: bigint }
         lon:             { csv: lon,            type: double }

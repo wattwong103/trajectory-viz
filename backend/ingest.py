@@ -1,330 +1,360 @@
 """
-Ingestion CLI — loads PFLOW trip and trajectory CSVs into DuckDB.
+Ingestion CLI — loads ABM trip + trajectory CSVs into DuckDB.
 
-Scans the output/ directory for the latest simulation runs and imports them.
-Handles both trips-only mode (no trajectories yet) and full mode.
+Sources are declared in `sources.yaml` at the project root (see
+`backend/sources_schema.py` for the full schema). Each source declares its own
+glob patterns, column mapping, and vehicle_key template; this module reads
+those declarations and builds dynamic INSERT...SELECT statements against
+DuckDB's `read_csv()`.
 
 Usage:
-    python -m backend.ingest [--pflow-home PATH] [--db-path PATH] [--output-root PATH] [--reset]
+    python -m backend.ingest [--pflow-home PATH] [--db-path PATH]
+                              [--output-root PATH] [--sources PATH] [--reset]
 
-CSV column formats parsed (from Java writers):
-    Truck trips:  id,sim_day,starttime,start_lon,start_lat,end_lon,end_lat,
-                  transport_mode,purpose,occupation,cargo_loaded,truck_id,distance_km,
-                  cargo_weight_tons,goods_type,vehicle_size,capacity_tons,status,starttime_h
-    Taxi trips:   id,starttime,start_lon,start_lat,end_lon,end_lat,transport_mode,purpose,
-                  occupation,passenger_in,taxi_id,distance_km,fare_yen,is_night_trip,
-                  starttime_h,simulation_day
-    Truck traj:   truck_id,trip_id,unix_time_ms,datetime,lon,lat,transport_mode,purpose,
-                  goods_type,vehicle_size,link_id
-    Taxi traj:    taxi_id,trip_id,unix_time_ms,datetime,lon,lat,transport_mode,purpose,
-                  passenger_in,fare_yen,is_night_trip,link_id
+Result tables (see backend/db.py for full schema):
+    trips           per-trip row, one source's columns.trips → these columns
+    waypoints       per-waypoint row when trajectories_glob is set
+    validation_runs per-metric row from each run's validation.csv
+    ingest_log      one row per CSV ingested, row_count<0 on failure
 """
+
+from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 import time
-from pathlib import Path
 from glob import glob
+from pathlib import Path
+from typing import Optional
 
 # Allow running as `python -m backend.ingest` from trajectory-viz/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.config import get_pflow_home, get_viz_db_path, get_output_root
 from backend.db import get_connection, reset_db
+from backend.sources_schema import (
+    ColumnSpec,
+    SourceConfig,
+    SourcesFile,
+    default_sources_path,
+    load_sources,
+)
 
 
-def find_latest_run(base_dir: Path) -> Path | None:
-    """Find the most recent run_YYYYMMDD_HHMMSS directory."""
+# Map the YAML `type` field to DuckDB's CAST type names.
+_DUCKDB_TYPE_MAP: dict[str, str] = {
+    "int": "INTEGER",
+    "bigint": "BIGINT",
+    "double": "DOUBLE",
+    "varchar": "VARCHAR",
+    "bool": "BOOLEAN",
+}
+
+# Canonical column order for the `trips` INSERT. Implicit columns (handled
+# directly by the ingester, not by source.columns.trips) are marked below.
+# A source need not declare every column — anything not declared becomes NULL.
+TRIP_COLUMNS: tuple[str, ...] = (
+    "vehicle_id",      # implicit: CAST(columns.vehicle_id_col AS INTEGER)
+    "trip_id",         # implicit: CAST(columns.trip_id_col AS BIGINT)
+    "starttime",       # required (declared)
+    "start_lon",       # required (declared)
+    "start_lat",       # required (declared)
+    "end_lon",         # required (declared)
+    "end_lat",         # required (declared)
+    "transport_mode",
+    "purpose",
+    "vehicle_type",    # implicit: source_id literal (back-compat alias)
+    "distance_km",
+    "dep_hour",
+    "simulation_day",
+    "goods_type",
+    "vehicle_size",
+    "cargo_loaded",
+    "origin_zone",
+    "dest_zone",
+    "fare_yen",
+    "is_night_trip",
+    "passenger_in",
+    "taxi_id",
+    "city",            # implicit: scope_value or NULL
+    "vehicle_key",     # implicit: built from vehicle_key_template
+    "source_id",       # implicit: source_id literal
+)
+
+WAYPOINT_COLUMNS: tuple[str, ...] = (
+    "vehicle_id",      # implicit
+    "trip_id",         # implicit
+    "unix_time_ms",    # required (declared)
+    "lon",             # required (declared)
+    "lat",             # required (declared)
+    "link_id",
+    "vehicle_type",    # implicit
+    "transport_mode",
+    "purpose",
+    "goods_type",
+    "vehicle_size",
+    "passenger_in",
+    "fare_yen",
+    "is_night_trip",
+    "vehicle_key",     # implicit
+    "source_id",       # implicit
+)
+
+
+# --- Path discovery ----------------------------------------------------------
+
+
+def find_latest_run(base_dir: Path) -> Optional[Path]:
+    """Return the most-recent `run_*` subdirectory of `base_dir`, or None."""
     if not base_dir.is_dir():
         return None
-    runs = sorted(base_dir.glob("run_*"), reverse=True)
+    runs = sorted(
+        (d for d in base_dir.iterdir() if d.is_dir() and d.name.startswith("run_")),
+        key=lambda d: d.name,
+        reverse=True,
+    )
     return runs[0] if runs else None
 
 
-def find_trip_files(output_dir: Path) -> list[tuple[Path, str, str | None, Path]]:
-    """Discover trip CSV files. Returns [(csv_path, vehicle_type, city, run_dir)].
+def discover_csvs(
+    glob_pattern: str,
+    output_root: Path,
+    latest_only: bool = True,
+) -> list[Path]:
+    """Resolve `glob_pattern` (relative to `output_root`) to CSV paths.
 
-    The run_dir is threaded so the validation.csv sibling can be located.
+    If `latest_only` is True and the pattern contains `run_*`, the matches are
+    grouped by their tree (the directory above the run_* segment) and only the
+    latest run per group is returned. This mirrors the original `find_latest_run`
+    behavior but works for any source's glob.
     """
-    files: list[tuple[Path, str, str | None, Path]] = []
+    abs_pattern = str((output_root / glob_pattern).as_posix())
+    matches = sorted(Path(p) for p in glob(abs_pattern, recursive=True))
+    if not latest_only or "run_" not in glob_pattern:
+        return matches
 
-    # Truck trips
-    truck_dir = output_dir / "trips" / "truck"
-    latest = find_latest_run(truck_dir)
-    if latest:
-        csv = latest / "trips_pseudo_pflow.csv"
-        if csv.is_file():
-            files.append((csv, "truck", None, latest))
-
-    # Taxi trips (per city)
-    taxi_base = output_dir / "trips" / "taxi"
-    if taxi_base.is_dir():
-        for city_dir in sorted(taxi_base.iterdir()):
-            if city_dir.is_dir() and not city_dir.name.startswith("."):
-                latest = find_latest_run(city_dir)
-                if latest:
-                    csv = latest / "trips_pseudo_pflow.csv"
-                    if csv.is_file():
-                        files.append((csv, "taxi", city_dir.name, latest))
-
-    return files
-
-
-def find_trajectory_files(output_dir: Path) -> list[tuple[Path, str, str | None]]:
-    """Discover trajectory CSV files. Returns [(path, vehicle_type, city_or_none)]."""
-    files = []
-
-    # Truck trajectories
-    truck_traj = output_dir / "trajectory" / "truck"
-    if truck_traj.is_dir():
-        for csv in sorted(truck_traj.glob("trajectory_*.csv")):
-            files.append((csv, "truck", None))
-
-    # Taxi trajectories (per city)
-    taxi_traj = output_dir / "trajectory" / "taxi"
-    if taxi_traj.is_dir():
-        for city_dir in sorted(taxi_traj.iterdir()):
-            if city_dir.is_dir() and not city_dir.name.startswith("."):
-                for csv in sorted(city_dir.glob("trajectory_*.csv")):
-                    files.append((csv, "taxi", city_dir.name))
-
-    return files
-
-
-def ingest_truck_trips(conn, csv_path: Path) -> int:
-    """Load truck trips CSV into the trips table.
-
-    The real truck CSV schema (from TruckTripWriter):
-        id, sim_day, starttime, start_lon, start_lat, end_lon, end_lat,
-        transport_mode, purpose, occupation, cargo_loaded, truck_id,
-        distance_km, cargo_weight_tons, goods_type, vehicle_size,
-        capacity_tons, status, starttime_h
-
-    Columns ignored (not in trips schema): cargo_weight_tons, capacity_tons,
-    status, starttime_h, occupation. origin_zone/dest_zone are NULL — CSV
-    doesn't include them.
-    """
-    before = conn.execute(
-        "SELECT COUNT(*) FROM trips WHERE vehicle_type='truck'"
-    ).fetchone()[0]
-
-    conn.execute(f"""
-        INSERT INTO trips (
-            vehicle_id, trip_id, starttime,
-            start_lon, start_lat, end_lon, end_lat,
-            transport_mode, purpose, vehicle_type,
-            distance_km, dep_hour, simulation_day,
-            goods_type, vehicle_size, cargo_loaded,
-            origin_zone, dest_zone,
-            fare_yen, is_night_trip, passenger_in, taxi_id, city,
-            vehicle_key
+    # Group each match by the parent dir that contains its run_* segment.
+    grouped: dict[Path, list[Path]] = {}
+    for p in matches:
+        parts = p.parts
+        run_idx = next(
+            (i for i, part in enumerate(parts) if part.startswith("run_")),
+            None,
         )
+        if run_idx is None:
+            # Glob says run_* but this match doesn't have it — keep as own group
+            grouped.setdefault(p.parent, []).append(p)
+        else:
+            # Group key = path up to (but not including) the run_* segment
+            key = Path(*parts[:run_idx])
+            grouped.setdefault(key, []).append(p)
+
+    # Within each group, the lexicographic max of the run_YYYYMMDD_HHMMSS
+    # segment is the latest.
+    latest: list[Path] = []
+    for paths in grouped.values():
+        latest.append(max(paths, key=lambda p: str(p)))
+    return sorted(latest)
+
+
+# --- SQL builders ------------------------------------------------------------
+
+
+def _sql_string_literal(value: str) -> str:
+    """Quote a string for inline SQL. Doubles any embedded single quotes."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _vehicle_key_sql(
+    template: str,
+    vehicle_id_col: str,
+    scope_value: Optional[str],
+) -> str:
+    """Convert `vehicle_key_template` into a DuckDB || concat expression.
+
+    Supported placeholders: `{vehicle_id}` (required), `{scope}` (required iff
+    discovery.scope is set in sources.yaml — the schema validator enforces
+    alignment).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(template):
+        if template[i] == "{":
+            end = template.index("}", i)
+            placeholder = template[i + 1 : end]
+            if placeholder == "vehicle_id":
+                out.append(f'CAST("{vehicle_id_col}" AS VARCHAR)')
+            elif placeholder == "scope":
+                if scope_value is None:
+                    # The schema validator should have caught this, but guard anyway.
+                    raise ValueError(
+                        f"vehicle_key_template {template!r} uses {{scope}} but "
+                        f"no scope_value is configured."
+                    )
+                out.append(_sql_string_literal(scope_value))
+            else:
+                raise ValueError(
+                    f"Unsupported placeholder {{{placeholder}}} in vehicle_key_template "
+                    f"{template!r}. Supported: {{vehicle_id}}, {{scope}}."
+                )
+            i = end + 1
+        else:
+            j = template.find("{", i)
+            if j == -1:
+                j = len(template)
+            out.append(_sql_string_literal(template[i:j]))
+            i = j
+    return " || ".join(out)
+
+
+def _column_expr(db_col: str, spec: ColumnSpec) -> str:
+    """Build one SELECT expression for a declared column spec."""
+    if spec.derived is not None:
+        return f"({spec.derived}) AS {db_col}"
+    csv_col = spec.csv
+    assert csv_col is not None  # schema validator guarantees one of {csv, derived}
+    duck_type = _DUCKDB_TYPE_MAP[spec.type]  # type: ignore[index]
+    if spec.transform is not None:
+        # The `value` token is replaced with the CSV column reference; the
+        # transform produces the final value, which is implicitly cast on
+        # INSERT. We do NOT wrap in CAST to avoid double-casting boolean
+        # coercions like `lower(value) = 'true'`.
+        expr = spec.transform.replace("value", f'"{csv_col}"')
+        return f"({expr}) AS {db_col}"
+    return f'CAST("{csv_col}" AS {duck_type}) AS {db_col}'
+
+
+def _select_clause(
+    src: SourceConfig,
+    scope_value: Optional[str],
+    db_columns: tuple[str, ...],
+    declared: dict[str, ColumnSpec],
+) -> str:
+    """Assemble the SELECT clause for one source's INSERT.
+
+    Implicit columns (vehicle_id, trip_id, source_id, vehicle_type, vehicle_key,
+    city) are constructed by this function. All other columns are pulled from
+    `declared` or NULL-filled.
+    """
+    parts: list[str] = []
+    # Trip CSVs carry the trip's primary key in src.columns.trip_id_col (often
+    # named "id"). Waypoint CSVs carry the foreign-key reference to the trip
+    # in a column literally called "trip_id". The two paths are asymmetric in
+    # the v0.1 schema and we preserve that here.
+    is_waypoints = db_columns is WAYPOINT_COLUMNS
+    for col in db_columns:
+        if col == "vehicle_id":
+            parts.append(f'CAST("{src.columns.vehicle_id_col}" AS INTEGER) AS vehicle_id')
+        elif col == "trip_id":
+            trip_csv_col = "trip_id" if is_waypoints else src.columns.trip_id_col
+            parts.append(f'CAST("{trip_csv_col}" AS BIGINT) AS trip_id')
+        elif col == "source_id":
+            parts.append(f"{_sql_string_literal(src.source_id)} AS source_id")
+        elif col == "vehicle_type":
+            # Back-compat alias for v0.1 queries. Same value as source_id.
+            parts.append(f"{_sql_string_literal(src.source_id)} AS vehicle_type")
+        elif col == "vehicle_key":
+            expr = _vehicle_key_sql(
+                src.vehicle_key_template, src.columns.vehicle_id_col, scope_value
+            )
+            parts.append(f"{expr} AS vehicle_key")
+        elif col == "city":
+            # Only present in trips table — handled below
+            if scope_value is not None:
+                parts.append(f"{_sql_string_literal(scope_value)} AS city")
+            else:
+                parts.append("NULL AS city")
+        elif col in declared:
+            parts.append(_column_expr(col, declared[col]))
+        else:
+            parts.append(f"NULL AS {col}")
+    return ",\n            ".join(parts)
+
+
+# --- Per-source ingest --------------------------------------------------------
+
+
+def ingest_source_trips(
+    conn,
+    csv_path: Path,
+    source_key: str,
+    src: SourceConfig,
+) -> int:
+    """Ingest one source's trip CSV. Returns the number of rows inserted."""
+    scope_value = src.discovery.scope.value if src.discovery.scope else None
+    select_clause = _select_clause(src, scope_value, TRIP_COLUMNS, src.columns.trips)
+    columns_list = ", ".join(TRIP_COLUMNS)
+
+    sql = f"""
+        INSERT INTO trips ({columns_list})
         SELECT
-            truck_id                   AS vehicle_id,
-            id                         AS trip_id,
-            starttime,
-            start_lon, start_lat, end_lon, end_lat,
-            transport_mode,
-            purpose,
-            'truck'                    AS vehicle_type,
-            distance_km,
-            starttime // 3600          AS dep_hour,
-            sim_day                    AS simulation_day,
-            goods_type,
-            vehicle_size,
-            CASE WHEN cargo_loaded = 'true' THEN TRUE ELSE FALSE END AS cargo_loaded,
-            NULL                       AS origin_zone,
-            NULL                       AS dest_zone,
-            NULL                       AS fare_yen,
-            NULL                       AS is_night_trip,
-            NULL                       AS passenger_in,
-            NULL                       AS taxi_id,
-            NULL                       AS city,
-            'truck:' || truck_id       AS vehicle_key
+            {select_clause}
         FROM read_csv('{csv_path.as_posix()}', header=true, auto_detect=true)
-    """)
+    """
 
-    after = conn.execute(
-        "SELECT COUNT(*) FROM trips WHERE vehicle_type='truck'"
-    ).fetchone()[0]
+    before = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
+    conn.execute(sql)
+    after = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
     return after - before
 
 
-def ingest_taxi_trips(conn, csv_path: Path, city: str) -> int:
-    """Load taxi trips CSV into the trips table.
+def ingest_source_trajectories(
+    conn,
+    csv_path: Path,
+    source_key: str,
+    src: SourceConfig,
+) -> int:
+    """Ingest one source's trajectory CSV. Returns the number of rows inserted."""
+    if src.columns.waypoints is None:
+        return 0
+    scope_value = src.discovery.scope.value if src.discovery.scope else None
+    select_clause = _select_clause(src, scope_value, WAYPOINT_COLUMNS, src.columns.waypoints)
+    columns_list = ", ".join(WAYPOINT_COLUMNS)
 
-    Note: in taxi CSVs, `id` is the per-file trip sequence and `taxi_id` is
-    the actual taxi agent. We use taxi_id as vehicle_id so fleet-utilization
-    queries (trips-per-vehicle, unique_vehicles) give correct answers.
-    vehicle_key is 'taxi:{city}:{taxi_id}' to disambiguate across cities.
-    """
-    before = conn.execute(
-        "SELECT COUNT(*) FROM trips WHERE vehicle_type='taxi' AND city = ?",
-        [city],
-    ).fetchone()[0]
-
-    conn.execute(f"""
-        INSERT INTO trips (
-            vehicle_id, trip_id, starttime,
-            start_lon, start_lat, end_lon, end_lat,
-            transport_mode, purpose, vehicle_type,
-            distance_km, dep_hour, simulation_day,
-            goods_type, vehicle_size, cargo_loaded,
-            origin_zone, dest_zone,
-            fare_yen, is_night_trip, passenger_in, taxi_id, city,
-            vehicle_key
-        )
+    sql = f"""
+        INSERT INTO waypoints ({columns_list})
         SELECT
-            taxi_id                                            AS vehicle_id,
-            id                                                 AS trip_id,
-            starttime,
-            start_lon, start_lat, end_lon, end_lat,
-            transport_mode,
-            purpose,
-            'taxi'                                             AS vehicle_type,
-            distance_km,
-            CAST(EXTRACT(HOUR FROM starttime_h) AS INTEGER)    AS dep_hour,
-            simulation_day,
-            NULL                                               AS goods_type,
-            NULL                                               AS vehicle_size,
-            NULL                                               AS cargo_loaded,
-            NULL                                               AS origin_zone,
-            NULL                                               AS dest_zone,
-            fare_yen,
-            CASE WHEN is_night_trip = 'true' THEN TRUE ELSE FALSE END AS is_night_trip,
-            CASE WHEN passenger_in  = 'true' THEN TRUE ELSE FALSE END AS passenger_in,
-            taxi_id,
-            '{city}'                                           AS city,
-            'taxi:{city}:' || taxi_id                          AS vehicle_key
+            {select_clause}
         FROM read_csv('{csv_path.as_posix()}', header=true, auto_detect=true)
-    """)
-
-    after = conn.execute(
-        "SELECT COUNT(*) FROM trips WHERE vehicle_type='taxi' AND city = ?",
-        [city],
-    ).fetchone()[0]
-    return after - before
-
-
-def ingest_truck_trajectories(conn, csv_path: Path) -> int:
-    """Load truck trajectory CSV into the waypoints table."""
-    before = conn.execute(
-        "SELECT COUNT(*) FROM waypoints WHERE vehicle_type='truck'"
-    ).fetchone()[0]
-
-    conn.execute(f"""
-        INSERT INTO waypoints (
-            vehicle_id, trip_id, unix_time_ms,
-            lon, lat, link_id,
-            vehicle_type, transport_mode, purpose,
-            goods_type, vehicle_size,
-            passenger_in, fare_yen, is_night_trip,
-            vehicle_key
-        )
-        SELECT
-            truck_id                   AS vehicle_id,
-            trip_id,
-            unix_time_ms,
-            lon,
-            lat,
-            link_id,
-            'truck'                    AS vehicle_type,
-            transport_mode,
-            purpose,
-            goods_type,
-            vehicle_size,
-            NULL                       AS passenger_in,
-            NULL                       AS fare_yen,
-            NULL                       AS is_night_trip,
-            'truck:' || truck_id       AS vehicle_key
-        FROM read_csv(
-            '{csv_path.as_posix()}',
-            header=true, auto_detect=true,
-            types={{'link_id': 'VARCHAR'}}
-        )
-    """)
-
-    after = conn.execute(
-        "SELECT COUNT(*) FROM waypoints WHERE vehicle_type='truck'"
-    ).fetchone()[0]
-    return after - before
-
-
-def ingest_taxi_trajectories(conn, csv_path: Path, city: str) -> int:
-    """Load taxi trajectory CSV into the waypoints table.
-
-    The `city` argument is required so vehicle_key can be unique across
-    Tokyo/Osaka/etc. where taxi_id ranges overlap.
     """
-    before = conn.execute(
-        "SELECT COUNT(*) FROM waypoints WHERE vehicle_type='taxi' AND vehicle_key LIKE ?",
-        [f"taxi:{city}:%"],
-    ).fetchone()[0]
 
-    conn.execute(f"""
-        INSERT INTO waypoints (
-            vehicle_id, trip_id, unix_time_ms,
-            lon, lat, link_id,
-            vehicle_type, transport_mode, purpose,
-            goods_type, vehicle_size,
-            passenger_in, fare_yen, is_night_trip,
-            vehicle_key
-        )
-        SELECT
-            taxi_id                           AS vehicle_id,
-            trip_id,
-            unix_time_ms,
-            lon,
-            lat,
-            link_id,
-            'taxi'                            AS vehicle_type,
-            transport_mode,
-            purpose,
-            NULL                              AS goods_type,
-            NULL                              AS vehicle_size,
-            passenger_in,
-            fare_yen,
-            is_night_trip,
-            'taxi:{city}:' || taxi_id         AS vehicle_key
-        FROM read_csv(
-            '{csv_path.as_posix()}',
-            header=true, auto_detect=true,
-            types={{'link_id': 'VARCHAR'}}
-        )
-    """)
-
-    after = conn.execute(
-        "SELECT COUNT(*) FROM waypoints WHERE vehicle_type='taxi' AND vehicle_key LIKE ?",
-        [f"taxi:{city}:%"],
-    ).fetchone()[0]
+    before = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
+    conn.execute(sql)
+    after = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
     return after - before
 
 
-def ingest_validation(conn, run_dir: Path, vehicle_type: str, city: str | None) -> int:
-    """Load a validation.csv file into the validation_runs table.
+def ingest_validation(
+    conn,
+    run_dir: Path,
+    source_id: str,
+    scope_value: Optional[str],
+    validation_relative: str = "validation.csv",
+) -> int:
+    """Ingest a validation.csv from a `run_*` directory.
 
-    Idempotent — any existing rows for this run_id are cleared before re-loading.
-    Missing validation.csv results in a warning + return 0 (not an error).
+    Already generic — vehicle_type and city are parameters, not hardcoded.
+    Idempotent: deletes existing rows for the constructed run_id before
+    re-inserting.
     """
-    csv = run_dir / "validation.csv"
+    csv = run_dir / validation_relative
     if not csv.is_file():
-        print(f"  [VAL] no validation.csv in {run_dir.name}, skipping")
         return 0
 
-    run_id = f"{vehicle_type}/" + (f"{city}/" if city else "") + run_dir.name
+    scope_part = f"/{scope_value}" if scope_value else ""
+    run_id = f"{source_id}{scope_part}/{run_dir.name}"
 
-    m = re.match(r"run_(\d{8})_(\d{6})", run_dir.name)
-    if m:
-        ts_sql = f"STRPTIME('{m.group(1)} {m.group(2)}', '%Y%m%d %H%M%S')"
+    # Parse run_dir timestamp if it matches `run_YYYYMMDD_HHMMSS`.
+    ts_str = run_dir.name.removeprefix("run_") if run_dir.name.startswith("run_") else ""
+    if len(ts_str) == 15 and ts_str[8] == "_":
+        run_timestamp_sql = f"strptime('{ts_str}', '%Y%m%d_%H%M%S')"
     else:
-        ts_sql = "NULL"
-        print(f"  [VAL] WARN: could not parse timestamp from {run_dir.name}")
+        run_timestamp_sql = "NULL"
 
     conn.execute("DELETE FROM validation_runs WHERE run_id = ?", [run_id])
 
-    city_sql = f"'{city}'" if city else "NULL"
+    city_sql = _sql_string_literal(scope_value) if scope_value else "NULL"
     conn.execute(f"""
         INSERT INTO validation_runs (
             run_id, vehicle_type, city, run_timestamp,
@@ -332,34 +362,170 @@ def ingest_validation(conn, run_dir: Path, vehicle_type: str, city: str | None) 
             ingested_at
         )
         SELECT
-            '{run_id}'        AS run_id,
-            '{vehicle_type}'  AS vehicle_type,
-            {city_sql}        AS city,
-            {ts_sql}          AS run_timestamp,
-            category, metric, actual, target, tolerance_pct, error_pct, status,
+            {_sql_string_literal(run_id)} AS run_id,
+            {_sql_string_literal(source_id)} AS vehicle_type,
+            {city_sql} AS city,
+            {run_timestamp_sql} AS run_timestamp,
+            CAST(category AS VARCHAR),
+            CAST(metric AS VARCHAR),
+            CAST(actual AS DOUBLE),
+            CAST(target AS DOUBLE),
+            CAST(tolerance_pct AS DOUBLE),
+            CAST(error_pct AS DOUBLE),
+            CAST(status AS VARCHAR),
             current_timestamp AS ingested_at
         FROM read_csv('{csv.as_posix()}', header=true, auto_detect=true)
     """)
-
     row = conn.execute(
         "SELECT COUNT(*) FROM validation_runs WHERE run_id = ?", [run_id]
     ).fetchone()
     return row[0] if row else 0
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Ingest PFLOW outputs into DuckDB")
-    parser.add_argument("--pflow-home", type=str, default=None,
-                        help="Override PFLOW project root (monorepo mode)")
-    parser.add_argument("--db-path", type=str, default=None,
-                        help="Override DuckDB output path (sets PFLOW_VIZ_DB)")
-    parser.add_argument("--output-root", type=str, default=None,
-                        help="Override scan root for trips/trajectory subtrees (sets PFLOW_VIZ_OUTPUT_ROOT)")
-    parser.add_argument("--reset", action="store_true",
-                        help="Drop and recreate all tables before ingesting")
+# --- F1 derived metrics (Phase 2) -------------------------------------------
+
+
+# Detour-ratio policy: ratio = distance_km / haversine(start, end).
+# For very short trips (start ≈ end), GPS noise dominates and the ratio
+# explodes (e.g. a 0.5 km trip with 0.05 km straight-line distance gives
+# ratio=10.0, which doesn't reflect a real detour — just noise + circling).
+# Below this haversine threshold in km, we return NULL rather than a noisy
+# value. 0.1 km (100m) is roughly the GPS-noise scale; raise to be stricter
+# or lower to keep more rows.
+DETOUR_MIN_HAVERSINE_KM = 0.1
+
+
+def compute_derived_metrics(conn) -> dict[str, int]:
+    """Populate `trips.speed_avg_kmh`, `trips.dwell_minutes`, `trips.detour_ratio`.
+
+    Runs after all CSVs are ingested. Idempotent — safe to re-run; existing
+    values get overwritten with the new computation.
+
+    Returns a dict of {metric_name: rows_populated} for logging.
+    """
+    counts: dict[str, int] = {}
+
+    # ───── speed_avg_kmh ──────────────────────────────────────
+    # Needs waypoint data: duration = (max - min unix_time_ms) / 1000 / 3600 hr.
+    # NULL for trips without trajectories (no waypoints to derive duration).
+    # DuckDB UPDATE...FROM is the analog of Postgres's UPDATE FROM clause.
+    conn.execute("""
+        CREATE OR REPLACE TEMPORARY TABLE _speed_calc AS
+        SELECT
+            vehicle_key,
+            trip_id,
+            (MAX(unix_time_ms) - MIN(unix_time_ms)) / 1000.0 / 3600.0 AS duration_hr
+        FROM waypoints
+        GROUP BY vehicle_key, trip_id
+        HAVING duration_hr > 0
+    """)
+    conn.execute("""
+        UPDATE trips
+        SET speed_avg_kmh = trips.distance_km / _speed_calc.duration_hr
+        FROM _speed_calc
+        WHERE trips.vehicle_key = _speed_calc.vehicle_key
+          AND trips.trip_id = _speed_calc.trip_id
+          AND trips.distance_km IS NOT NULL
+          AND trips.distance_km > 0
+    """)
+    conn.execute("DROP TABLE _speed_calc")
+    counts["speed_avg_kmh"] = conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE speed_avg_kmh IS NOT NULL"
+    ).fetchone()[0]
+
+    # ───── dwell_minutes ──────────────────────────────────────
+    # LEAD(starttime) over (PARTITION BY vehicle_key ORDER BY starttime) gives
+    # the next trip's start time; subtract current, convert to minutes.
+    # Last trip of each vehicle has no successor → NULL.
+    # `starttime` is seconds-from-midnight in v0.1 schema, so subtraction stays
+    # within a single day. Caveat: if a vehicle's last sim_day-0 trip is at 23h
+    # and its sim_day-1 first trip is at 02h, we'd compute negative dwell. The
+    # PARTITION includes simulation_day for safety.
+    conn.execute("""
+        CREATE OR REPLACE TEMPORARY TABLE _dwell_calc AS
+        SELECT
+            vehicle_key,
+            trip_id,
+            simulation_day,
+            (LEAD(starttime) OVER (
+                PARTITION BY vehicle_key, simulation_day
+                ORDER BY starttime
+            ) - starttime) / 60.0 AS dwell_min
+        FROM trips
+    """)
+    conn.execute("""
+        UPDATE trips
+        SET dwell_minutes = _dwell_calc.dwell_min
+        FROM _dwell_calc
+        WHERE trips.vehicle_key = _dwell_calc.vehicle_key
+          AND trips.trip_id = _dwell_calc.trip_id
+          AND COALESCE(trips.simulation_day, 0) = COALESCE(_dwell_calc.simulation_day, 0)
+    """)
+    conn.execute("DROP TABLE _dwell_calc")
+    counts["dwell_minutes"] = conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE dwell_minutes IS NOT NULL"
+    ).fetchone()[0]
+
+    # ───── detour_ratio ───────────────────────────────────────
+    # Equirectangular approximation of OD distance (matches the formula used
+    # in analysis/trip_chains.py for round-trip detection — keep consistent).
+    # Detour ratio > 1.0 means the route was longer than the straight line.
+    # NULLs are emitted when haversine < DETOUR_MIN_HAVERSINE_KM (see docstring).
+    conn.execute(f"""
+        UPDATE trips
+        SET detour_ratio = CASE
+            WHEN distance_km IS NULL OR distance_km <= 0 THEN NULL
+            WHEN (
+                111.32 * SQRT(
+                    POWER(end_lon - start_lon, 2) * POWER(COS(RADIANS(start_lat)), 2) +
+                    POWER(end_lat - start_lat, 2)
+                )
+            ) < {DETOUR_MIN_HAVERSINE_KM} THEN NULL
+            ELSE distance_km / (
+                111.32 * SQRT(
+                    POWER(end_lon - start_lon, 2) * POWER(COS(RADIANS(start_lat)), 2) +
+                    POWER(end_lat - start_lat, 2)
+                )
+            )
+        END
+    """)
+    counts["detour_ratio"] = conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE detour_ratio IS NOT NULL"
+    ).fetchone()[0]
+
+    return counts
+
+
+# --- Main orchestration ------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Ingest ABM trip and trajectory CSVs into DuckDB"
+    )
+    parser.add_argument(
+        "--pflow-home", type=str, default=None,
+        help="Override PFLOW project root (monorepo mode).",
+    )
+    parser.add_argument(
+        "--db-path", type=str, default=None,
+        help="Override DuckDB output path (sets PFLOW_VIZ_DB).",
+    )
+    parser.add_argument(
+        "--output-root", type=str, default=None,
+        help="Override scan root for trips/trajectory subtrees (sets PFLOW_VIZ_OUTPUT_ROOT).",
+    )
+    parser.add_argument(
+        "--sources", type=str, default=None,
+        help="Path to sources.yaml (default: <project root>/sources.yaml or $PFLOW_VIZ_SOURCES).",
+    )
+    parser.add_argument(
+        "--reset", action="store_true",
+        help="Drop and recreate all tables before ingesting.",
+    )
     args = parser.parse_args()
 
-    # Apply CLI overrides to env before config functions are called
+    # Apply CLI overrides to env before config functions are called.
     if args.pflow_home:
         os.environ["PFLOW_HOME"] = args.pflow_home
     if args.db_path:
@@ -367,14 +533,15 @@ def main():
     if args.output_root:
         os.environ["PFLOW_VIZ_OUTPUT_ROOT"] = args.output_root
 
+    sources_path = Path(args.sources) if args.sources else default_sources_path()
+    sources = load_sources(sources_path)
+
     db_path = get_viz_db_path()
     output_dir = get_output_root()
 
     print("=" * 64)
-    print("  PFLOW VIZ -- Data Ingestion")
+    print("  trajectory-viz — Data Ingestion")
     print("=" * 64)
-    # In standalone mode (PFLOW_VIZ_DB set), PFLOW_HOME is irrelevant.
-    # In monorepo mode, print it as a diagnostic.
     if os.environ.get("PFLOW_VIZ_DB") or args.db_path:
         print(f"  DB path:     {db_path}")
         print(f"  Output root: {output_dir}")
@@ -386,6 +553,7 @@ def main():
             print(f"  (monorepo mode) PFLOW_HOME: NOT FOUND — {e}")
         print(f"  DB path:     {db_path}")
         print(f"  Output root: {output_dir}")
+    print(f"  Sources:     {sources_path} ({len(sources.sources)} entries)")
 
     if not output_dir.is_dir():
         print(f"\n[WARN] Output directory does not exist: {output_dir}")
@@ -402,84 +570,103 @@ def main():
     total_trips = 0
     total_waypoints = 0
     total_validation = 0
-    # (file_path, target_table, error_repr) — anything that errored during ingest.
-    # Captured so the run surfaces failures loudly at the end and a non-zero exit
-    # code can alert CI/scripts. Also persisted to ingest_log with row_count=-1.
     errors: list[tuple[str, str, str]] = []
     start = time.time()
 
-    def _log_failure(csv_path: Path, table: str, exc: BaseException) -> None:
+    def _log_failure(file_path: Path, table: str, exc: BaseException) -> None:
         msg = f"{type(exc).__name__}: {exc}"
-        errors.append((str(csv_path), table, msg))
+        errors.append((str(file_path), table, msg))
         try:
             conn.execute(
                 "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, ?, ?)",
-                [str(csv_path), table, -1],
+                [str(file_path), table, -1],
             )
         except Exception:
-            # Never let log-write failures mask the original error
-            pass
+            pass  # never let log-write failures mask the original error
 
-    # ------- Trips + validation (co-located per run_dir) -------
-    trip_files = find_trip_files(output_dir)
-    if trip_files:
-        print(f"\n[TRIPS] Found {len(trip_files)} trip file(s):")
-        for csv_path, vtype, city, run_dir in trip_files:
-            label = f"{vtype}" + (f"/{city}" if city else "")
-            print(f"  [{label}] {csv_path.name}...", end=" ", flush=True)
+    # ------- Per-source ingest -------
+    for source_key, src in sources.sources.items():
+        scope = src.discovery.scope.value if src.discovery.scope else None
+        label = f"{source_key} (source_id={src.source_id}" + (
+            f", scope={scope})" if scope else ")"
+        )
+        print(f"\n[SOURCE] {label}")
+
+        # Trips + co-located validation
+        trip_csvs = discover_csvs(
+            src.discovery.trips_glob, output_dir,
+            latest_only=src.discovery.latest_only,
+        )
+        if not trip_csvs:
+            print(f"  [TRIPS] no matches for glob: {src.discovery.trips_glob}")
+        for csv_path in trip_csvs:
+            print(f"  [trips] {csv_path}", end=" ... ", flush=True)
             t = time.time()
             try:
-                if vtype == "truck":
-                    n = ingest_truck_trips(conn, csv_path)
-                else:
-                    n = ingest_taxi_trips(conn, csv_path, city)
+                n = ingest_source_trips(conn, csv_path, source_key, src)
                 total_trips += n
-                print(f"{n:,} trips ({time.time()-t:.1f}s)")
-                conn.execute("""
-                    INSERT INTO ingest_log (file_path, table_name, row_count)
-                    VALUES (?, 'trips', ?)
-                """, [str(csv_path), n])
+                print(f"{n:,} rows ({time.time()-t:.1f}s)")
+                conn.execute(
+                    "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'trips', ?)",
+                    [str(csv_path), n],
+                )
             except Exception as e:
                 print(f"ERROR: {type(e).__name__}: {e}")
                 _log_failure(csv_path, "trips", e)
                 continue
 
-            # Validation from the same run_dir
-            try:
-                vn = ingest_validation(conn, run_dir, vtype, city)
-                if vn > 0:
-                    total_validation += vn
-                    print(f"    [val] {vn} metrics")
-            except Exception as e:
-                print(f"    [val] ERROR: {type(e).__name__}: {e}")
-                _log_failure(run_dir / "validation.csv", "validation_runs", e)
-    else:
-        print("\n[TRIPS] No trip files found in output/trips/")
+            # Validation co-located with trips CSV (one validation file per run dir)
+            if src.discovery.validation_relative:
+                try:
+                    vn = ingest_validation(
+                        conn, csv_path.parent, src.source_id, scope,
+                        validation_relative=src.discovery.validation_relative,
+                    )
+                    if vn > 0:
+                        total_validation += vn
+                        print(f"    [val] {vn} metrics")
+                except Exception as e:
+                    print(f"    [val] ERROR: {type(e).__name__}: {e}")
+                    _log_failure(csv_path.parent / src.discovery.validation_relative,
+                                 "validation_runs", e)
 
-    # ------- Trajectories (separate tree) -------
-    traj_files = find_trajectory_files(output_dir)
-    if traj_files:
-        print(f"\n[TRAJ] Found {len(traj_files)} trajectory file(s):")
-        for csv_path, vtype, city in traj_files:
-            label = f"{vtype}" + (f"/{city}" if city else "")
-            print(f"  [{label}] {csv_path.name}...", end=" ", flush=True)
-            t = time.time()
-            try:
-                if vtype == "truck":
-                    n = ingest_truck_trajectories(conn, csv_path)
-                else:
-                    n = ingest_taxi_trajectories(conn, csv_path, city)
-                total_waypoints += n
-                print(f"{n:,} waypoints ({time.time()-t:.1f}s)")
-                conn.execute("""
-                    INSERT INTO ingest_log (file_path, table_name, row_count)
-                    VALUES (?, 'waypoints', ?)
-                """, [str(csv_path), n])
-            except Exception as e:
-                print(f"ERROR: {type(e).__name__}: {e}")
-                _log_failure(csv_path, "waypoints", e)
-    else:
-        print("\n[TRAJ] No trajectory files found in output/trajectory/")
+        # Trajectories
+        if src.discovery.trajectories_glob:
+            traj_csvs = discover_csvs(
+                src.discovery.trajectories_glob, output_dir,
+                latest_only=src.discovery.latest_only,
+            )
+            if not traj_csvs:
+                print(f"  [TRAJ] no matches for glob: {src.discovery.trajectories_glob}")
+            for csv_path in traj_csvs:
+                print(f"  [traj]  {csv_path}", end=" ... ", flush=True)
+                t = time.time()
+                try:
+                    n = ingest_source_trajectories(conn, csv_path, source_key, src)
+                    total_waypoints += n
+                    print(f"{n:,} rows ({time.time()-t:.1f}s)")
+                    conn.execute(
+                        "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'waypoints', ?)",
+                        [str(csv_path), n],
+                    )
+                except Exception as e:
+                    print(f"ERROR: {type(e).__name__}: {e}")
+                    _log_failure(csv_path, "waypoints", e)
+
+    # ------- F1 derived metrics (post-ingest pass) -------
+    derived_counts: dict[str, int] = {}
+    if total_trips > 0:
+        print(f"\n[DERIVED] Computing F1 metrics (speed_avg_kmh, dwell_minutes, detour_ratio)...")
+        t = time.time()
+        try:
+            derived_counts = compute_derived_metrics(conn)
+            print(f"[DERIVED]   speed_avg_kmh: {derived_counts['speed_avg_kmh']:,} rows populated")
+            print(f"[DERIVED]   dwell_minutes: {derived_counts['dwell_minutes']:,} rows populated")
+            print(f"[DERIVED]   detour_ratio:  {derived_counts['detour_ratio']:,} rows populated")
+            print(f"[DERIVED] Done in {time.time()-t:.1f}s")
+        except Exception as e:
+            print(f"[DERIVED] ERROR: {type(e).__name__}: {e}")
+            errors.append(("(compute_derived_metrics)", "trips", f"{type(e).__name__}: {e}"))
 
     elapsed = time.time() - start
     print(f"\n{'=' * 64}")
@@ -488,20 +675,21 @@ def main():
     print(f"  Waypoints:   {total_waypoints:>12,}")
     print(f"  Validation:  {total_validation:>12,}")
     print(f"  Database:    {db_path}")
-    print(f"  Size:        {db_path.stat().st_size / 1024 / 1024:.1f} MB")
+    if db_path.is_file():
+        print(f"  Size:        {db_path.stat().st_size / 1024 / 1024:.1f} MB")
     print(f"{'=' * 64}")
 
     if errors:
-        # Files that errored are recorded in ingest_log with row_count=-1 so a
-        # later `SELECT file_path FROM ingest_log WHERE row_count < 0` will find
-        # them without re-running ingest.
+        # Files that errored are also recorded in ingest_log with row_count=-1
+        # so a later `SELECT file_path FROM ingest_log WHERE row_count < 0`
+        # will find them without re-running ingest.
         print(f"\n[FAILED] {len(errors)} file(s) did not ingest:")
         for file_path, table, msg in errors:
             print(f"  [{table}] {file_path}")
             print(f"    {msg}")
         print(
-            "\nFix the underlying issue then re-run with --reset (or delete the "
-            "failed rows from ingest_log and re-run without --reset)."
+            "\nFix the underlying issue then re-run with --reset (or delete "
+            "the failed rows from ingest_log and re-run without --reset)."
         )
         sys.exit(1)
 

@@ -17,17 +17,23 @@ router = APIRouter()
 
 @router.get("/analysis/trip-chains/length-distribution")
 async def chain_length_distribution(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     min_hour: Optional[int] = Query(None, ge=0, le=23),
     max_hour: Optional[int] = Query(None, ge=0, le=23),
+    min_chain_length: Optional[int] = Query(
+        None, ge=1, le=100,
+        description="Only show vehicles with chain_length >= this (focus the long tail)",
+    ),
 ):
     """Distribution of trips-per-vehicle (chain length).
 
     Returns histogram: [{chain_length: N, vehicle_count: M}, ...]
     A chain_length of 1 means single-trip vehicles; 5+ means busy routes.
+    `min_chain_length` (Phase 2 Step 2.4) trims the head of the distribution
+    so the histogram focuses on multi-stop vehicles.
     """
     conn = get_connection()
 
@@ -40,12 +46,18 @@ async def chain_length_distribution(
         extra.append(f"dep_hour <= {int(max_hour)}")
     where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
 
+    having = (
+        f"HAVING COUNT(*) >= {int(min_chain_length)}"
+        if min_chain_length is not None else ""
+    )
+
     rows = conn.execute(f"""
         WITH vehicle_trips AS (
             SELECT vehicle_key, COUNT(*) AS chain_length
             FROM trips
             {where}
             GROUP BY vehicle_key
+            {having}
         )
         SELECT chain_length, COUNT(*) AS vehicle_count
         FROM vehicle_trips
@@ -61,7 +73,7 @@ async def chain_length_distribution(
 
 @router.get("/analysis/trip-chains/dwell-times")
 async def dwell_time_analysis(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     sample_vehicles: int = Query(1000, ge=10, le=10000),
@@ -138,7 +150,7 @@ async def dwell_time_analysis(
 
 @router.get("/analysis/trip-chains/round-trips")
 async def round_trip_analysis(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     threshold_km: float = Query(2.0, ge=0.5, le=10.0,
@@ -215,7 +227,7 @@ async def round_trip_analysis(
 
 @router.get("/analysis/trip-chains/commodity-patterns")
 async def commodity_chain_patterns(
-    vehicle_type: str = Query("truck", pattern="^(truck|taxi)$"),
+    vehicle_type: str = Query("truck", pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(20, ge=5, le=100),
@@ -266,3 +278,135 @@ async def commodity_chain_patterns(
         }
         for r in rows
     ]
+
+
+# F2 — Trip-chain through-zone (Phase 2 Step 2.3).
+# Spatial filter on waypoints; return the matching trips. The inverse dataflow
+# of /api/trips/query (which filters trips and looks up their waypoints).
+@router.get("/analysis/trip-chains/through-zone-bbox")
+async def trips_through_zone_bbox(
+    w: float = Query(..., description="West (min lon)"),
+    s: float = Query(..., description="South (min lat)"),
+    e: float = Query(..., description="East (max lon)"),
+    n: float = Query(..., description="North (max lat)"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    limit: int = Query(500, ge=1, le=5000),
+):
+    """Return trips whose trajectories pass through an axis-aligned bbox.
+
+    Useful for "show me everything that went through Tokyo Station between 8-9am".
+    Uses idx_waypoints_lonlat for the spatial filter and idx_trips_* for the
+    trip-attribute filter.
+    """
+    conn = get_connection()
+    if w >= e or s >= n:
+        return {"trips": [], "count": 0, "total_matching": None,
+                "error": "Bad bbox: require w<e and s<n"}
+
+    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+    and_or_where = "AND" if trip_where else "WHERE"
+
+    # Composite IN: match trajectories.py:query-bbox pattern.
+    rows = conn.execute(f"""
+        SELECT vehicle_id, trip_id, starttime, start_lon, start_lat,
+               end_lon, end_lat, vehicle_type, distance_km, goods_type, city
+        FROM trips
+        {trip_where}
+        {and_or_where} (vehicle_id, trip_id) IN (
+            SELECT DISTINCT vehicle_id, trip_id
+            FROM waypoints
+            WHERE lon BETWEEN {float(w)} AND {float(e)}
+              AND lat BETWEEN {float(s)} AND {float(n)}
+        )
+        LIMIT {int(limit)}
+    """).fetchall()
+
+    return {
+        "trips": [
+            {
+                "vehicle_id":   r[0], "trip_id":    r[1], "starttime":   r[2],
+                "start_lon":    r[3], "start_lat":  r[4],
+                "end_lon":      r[5], "end_lat":    r[6],
+                "vehicle_type": r[7], "distance_km": r[8],
+                "goods_type":   r[9], "city":       r[10],
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+        "total_matching": None,
+        "bbox": {"w": w, "s": s, "e": e, "n": n},
+    }
+
+
+# F2 — Multi-stop chain detail (Phase 2 Step 2.4).
+# Returns the actual trip sequence for vehicles with >= min_stops trips,
+# so the dashboard can render "show me what truck #1001 actually did all day".
+@router.get("/analysis/trip-chains/multi-stop")
+async def multi_stop_chains(
+    min_stops: int = Query(3, ge=2, le=50,
+                           description="Minimum trips per vehicle to include"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    limit: int = Query(100, ge=1, le=1000,
+                       description="Max vehicles returned (sorted by chain length desc)"),
+):
+    """List vehicles with >= min_stops trips, each with its full ordered trip list."""
+    conn = get_connection()
+    extra = []
+    if goods_type:
+        extra.append(f"goods_type = '{goods_type}'")
+    trip_where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+
+    # Two-stage query:
+    # 1. Find the top-N vehicles by chain length matching the filter.
+    # 2. Pull their ordered trip lists.
+    rows = conn.execute(f"""
+        WITH multi_trip_vehicles AS (
+            SELECT vehicle_key, COUNT(*) AS chain_length
+            FROM trips
+            {trip_where}
+            GROUP BY vehicle_key
+            HAVING chain_length >= {int(min_stops)}
+            ORDER BY chain_length DESC
+            LIMIT {int(limit)}
+        )
+        SELECT
+            t.vehicle_key,
+            t.trip_id,
+            t.starttime,
+            t.start_lon, t.start_lat, t.end_lon, t.end_lat,
+            t.distance_km,
+            t.goods_type,
+            m.chain_length,
+            ROW_NUMBER() OVER (PARTITION BY t.vehicle_key ORDER BY t.starttime) AS seq
+        FROM trips t
+        JOIN multi_trip_vehicles m ON t.vehicle_key = m.vehicle_key
+        {trip_where}
+        ORDER BY m.chain_length DESC, t.vehicle_key, seq
+    """).fetchall()
+
+    by_vehicle: dict[str, dict] = {}
+    for r in rows:
+        key = r[0]
+        if key not in by_vehicle:
+            by_vehicle[key] = {
+                "vehicle_key": key,
+                "chain_length": r[9],
+                "trips": [],
+            }
+        by_vehicle[key]["trips"].append({
+            "trip_id":     r[1],
+            "starttime":   r[2],
+            "start":       [r[3], r[4]],
+            "end":         [r[5], r[6]],
+            "distance_km": r[7],
+            "goods_type":  r[8],
+            "seq":         r[10],
+        })
+
+    # Preserve chain_length-DESC order (dicts are insertion-ordered in Py3.7+).
+    return {"vehicles": list(by_vehicle.values()), "count": len(by_vehicle)}

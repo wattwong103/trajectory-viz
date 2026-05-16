@@ -29,14 +29,17 @@ interface FilterPanelProps {
 }
 
 const LAYER_LABELS: Array<{ key: string; label: string }> = [
-  { key: 'origins',      label: 'Origins' },
-  { key: 'destinations', label: 'Destinations' },
-  { key: 'trajectories', label: 'Trajectories' },
-  { key: 'odFlows',      label: 'OD flows' },
-  { key: 'density',      label: 'Heatmap' },
-  { key: 'linkDensity',  label: 'Link density' },
-  { key: 'clusters',     label: 'Cluster arcs' },
-  { key: 'drill',        label: 'Drill results' },
+  { key: 'origins',       label: 'Origins' },
+  { key: 'destinations',  label: 'Destinations' },
+  { key: 'trajectories',  label: 'Trajectories' },
+  { key: 'odFlows',       label: 'OD flows' },
+  { key: 'density',       label: 'Heatmap' },
+  { key: 'linkDensity',   label: 'Link density' },
+  { key: 'clusters',      label: 'Cluster arcs' },
+  { key: 'drill',         label: 'Drill results' },
+  // F3 overlays (Phase 2 Step 2.7) — segments[] must be populated upstream
+  { key: 'speedSegments', label: 'Speed gradient (F3)' },
+  { key: 'dwellMarkers',  label: 'Dwell markers (F3)' },
 ];
 
 /** Relabel EMPTY goods type for display; sort EMPTY last */
@@ -61,6 +64,38 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onChange, onRefetch, onClearDrill, onLayerToggle, onScreenshot,
 }) => {
   const [layersExpanded, setLayersExpanded] = useState(false);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+
+  // F1 slider bounds (per Phase 2 Step 2.2 design choice: Conservative).
+  // Adjust these constants to widen/narrow the slider input range.
+  const SPEED_BOUND = 80;
+  const DWELL_BOUND = 240;
+  const DETOUR_MIN_BOUND = 1.0;
+  const DETOUR_MAX_BOUND = 3.0;
+
+  // Display-only values; default to bound when filter is undefined (= inactive).
+  const minSpeedVal = filter.minSpeed ?? 0;
+  const maxSpeedVal = filter.maxSpeed ?? SPEED_BOUND;
+  const maxDwellVal = filter.maxDwellMinutes ?? DWELL_BOUND;
+  const minDetourVal = filter.minDetourRatio ?? DETOUR_MIN_BOUND;
+  const maxDetourVal = filter.maxDetourRatio ?? DETOUR_MAX_BOUND;
+
+  const advancedActive = (
+    filter.minSpeed !== undefined ||
+    filter.maxSpeed !== undefined ||
+    filter.maxDwellMinutes !== undefined ||
+    filter.minDetourRatio !== undefined ||
+    filter.maxDetourRatio !== undefined
+  );
+
+  const resetAdvanced = () => onChange({
+    ...filter,
+    minSpeed: undefined,
+    maxSpeed: undefined,
+    maxDwellMinutes: undefined,
+    minDetourRatio: undefined,
+    maxDetourRatio: undefined,
+  });
 
   const totalTrips = stats?.trips?.row_count ?? 0;
   const totalWaypoints = stats?.waypoints?.row_count ?? 0;
@@ -111,13 +146,13 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         )}
       </div>
 
-      {/* Vehicle type toggle */}
+      {/* Vehicle type toggle — populated from /api/stats/filter-options (sources.yaml) */}
       <div style={styles.section}>
         <label style={styles.sectionLabel}>Vehicle Type</label>
         <div style={styles.btnGroup}>
-          {(['all', 'truck', 'taxi'] as const).map(vt => (
+          {['', ...(filterOptions?.vehicle_types ?? [])].map(vt => (
             <button
-              key={vt}
+              key={vt || 'all'}
               style={{
                 ...styles.toggleBtn,
                 ...(filter.vehicleType === vt ? styles.toggleActive : {}),
@@ -125,11 +160,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               onClick={() => onChange({
                 ...filter,
                 vehicleType: vt,
-                // Clear goods type when switching to taxi (taxis have no goods)
-                goodsType: vt === 'taxi' ? undefined : filter.goodsType,
+                // Clear goods type when switching to a non-truck source (only
+                // truck-like sources currently declare goods_type in sources.yaml).
+                goodsType: vt && vt !== 'truck' ? undefined : filter.goodsType,
               })}
             >
-              {vt === 'all' ? 'All' : vt === 'truck' ? 'Truck' : 'Taxi'}
+              {vt === '' ? 'All' : vt.charAt(0).toUpperCase() + vt.slice(1)}
             </button>
           ))}
         </div>
@@ -201,6 +237,75 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             style={styles.rangeInput}
           />
         </div>
+      </div>
+
+      {/* Advanced filters (F1 derived metrics) — Phase 2 Step 2.2 */}
+      <div style={{ marginBottom: 8 }}>
+        <button
+          onClick={() => setAdvancedExpanded(p => !p)}
+          style={styles.layersToggleBtn}
+        >
+          {advancedExpanded ? '▾' : '▸'} Advanced filters
+          {advancedActive && <span style={{ color: '#4fc3f7', marginLeft: 4 }}>•</span>}
+        </button>
+        {advancedExpanded && (
+          <div style={{ marginTop: 6, paddingLeft: 4 }}>
+            <div style={styles.section}>
+              <label style={styles.sectionLabel}>
+                Speed: {minSpeedVal} – {maxSpeedVal} km/h
+              </label>
+              <div style={styles.row}>
+                <input
+                  type="range" min={0} max={SPEED_BOUND}
+                  value={minSpeedVal}
+                  onChange={e => onChange({ ...filter, minSpeed: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                />
+                <input
+                  type="range" min={0} max={SPEED_BOUND}
+                  value={maxSpeedVal}
+                  onChange={e => onChange({ ...filter, maxSpeed: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                />
+              </div>
+            </div>
+            <div style={styles.section}>
+              <label style={styles.sectionLabel}>
+                Max dwell: {maxDwellVal} min
+              </label>
+              <input
+                type="range" min={0} max={DWELL_BOUND}
+                value={maxDwellVal}
+                onChange={e => onChange({ ...filter, maxDwellMinutes: Number(e.target.value) })}
+                style={styles.rangeInput}
+              />
+            </div>
+            <div style={styles.section}>
+              <label style={styles.sectionLabel}>
+                Detour: {minDetourVal.toFixed(2)} – {maxDetourVal.toFixed(2)}
+              </label>
+              <div style={styles.row}>
+                <input
+                  type="range" min={DETOUR_MIN_BOUND} max={DETOUR_MAX_BOUND} step="0.01"
+                  value={minDetourVal}
+                  onChange={e => onChange({ ...filter, minDetourRatio: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                />
+                <input
+                  type="range" min={DETOUR_MIN_BOUND} max={DETOUR_MAX_BOUND} step="0.01"
+                  value={maxDetourVal}
+                  onChange={e => onChange({ ...filter, maxDetourRatio: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                />
+              </div>
+            </div>
+            {advancedActive && (
+              <button onClick={resetAdvanced} style={styles.refreshBtn}>
+                Reset advanced
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Currently loaded / empty state */}

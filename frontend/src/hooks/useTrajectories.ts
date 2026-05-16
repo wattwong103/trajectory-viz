@@ -42,9 +42,12 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
         setTrips(tripRes.trips);
       }
 
-      // Fetch trajectories only if available
+      // Fetch trajectories only if available. include_segments=true populates
+      // per-segment link_id + speed_kmh + dwell_sec on each Trajectory; needed
+      // by the F3 speed-gradient and dwell-marker overlays. Roughly doubles
+      // the JSON payload — acceptable at sample=200; reconsider if we raise n.
       if (s.has_trajectories) {
-        const trajRes = await fetchTrajectorySample(200, vtype, city, simulationDay);
+        const trajRes = await fetchTrajectorySample(200, vtype, city, simulationDay, true);
         setTrajectories(trajRes.trajectories);
       } else {
         setTrajectories([]);

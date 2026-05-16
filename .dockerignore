@@ -1,0 +1,74 @@
+# Files excluded from the Docker build context.
+# Keeps the build context small and prevents secrets / local state from
+# leaking into images.
+
+# ─── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Virtualenvs ────────────────────────────────────────
+.venv-viz/
+.venv-viz-*/
+.venv/
+venv/
+env/
+
+# ─── Frontend ───────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/*.tsbuildinfo
+
+# ─── Database & data (mounted at runtime, not baked into the image) ────
+*.duckdb
+*.duckdb.wal
+output/
+data/
+
+# ─── Tests & CI artifacts ───────────────────────────────
+tests/__pycache__/
+.tox/
+.coverage
+htmlcov/
+
+# ─── Editor / OS ────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# ─── Logs / temp ────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+/tmp/
+
+# ─── Documentation source (kept outside the image) ──────
+docs/
+TESTING.md
+
+# ─── Stray Dropbox-mangled files (see .gitignore for context) ────
+*conflicted copy*
+*edit-log*.txt
+H[:]Dropbox*
+
+# Keep these specific files in the build context (override broader excludes).
+!Dockerfile
+!docker-compose.yml
+!pyproject.toml
+!sources.yaml
+!README.md
+!LICENSE
+!CITATION.cff

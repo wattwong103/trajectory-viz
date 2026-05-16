@@ -36,8 +36,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             start_lat     DOUBLE  NOT NULL,
             end_lon       DOUBLE  NOT NULL,
             end_lat       DOUBLE  NOT NULL,
-            transport_mode INTEGER NOT NULL,
-            purpose       INTEGER NOT NULL,
+            transport_mode INTEGER,
+            purpose       INTEGER,
             vehicle_type  VARCHAR NOT NULL,
             distance_km   DOUBLE,
             dep_hour      INTEGER,
@@ -52,7 +52,12 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             passenger_in  BOOLEAN,
             taxi_id       INTEGER,
             city          VARCHAR,
-            vehicle_key   VARCHAR NOT NULL
+            vehicle_key   VARCHAR NOT NULL,
+            source_id     VARCHAR,
+            -- F1 derived metrics (computed after ingest by ingest.compute_derived_metrics)
+            speed_avg_kmh DOUBLE,
+            dwell_minutes DOUBLE,
+            detour_ratio  DOUBLE
         )
     """)
 
@@ -72,9 +77,32 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             passenger_in   VARCHAR,
             fare_yen       DOUBLE,
             is_night_trip  VARCHAR,
-            vehicle_key    VARCHAR NOT NULL
+            vehicle_key    VARCHAR NOT NULL,
+            source_id      VARCHAR
         )
     """)
+
+    # Idempotent migrations for additive column changes. Each tuple is
+    # (table, column_name, sql_type). New columns can be added here without
+    # requiring --reset (which would force a full re-ingest of the 8GB DB).
+    _additive_columns: list[tuple[str, str, str]] = [
+        # v0.2 (Phase 1): declarative source identity
+        ("trips",     "source_id",     "VARCHAR"),
+        ("waypoints", "source_id",     "VARCHAR"),
+        # v0.2 (Phase 2): F1 derived metrics (populated by ingest)
+        ("trips",     "speed_avg_kmh", "DOUBLE"),
+        ("trips",     "dwell_minutes", "DOUBLE"),
+        ("trips",     "detour_ratio",  "DOUBLE"),
+    ]
+    for table, col, typ in _additive_columns:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typ}")
+        except Exception:
+            # Older DuckDB without IF NOT EXISTS — try plain ADD COLUMN
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            except Exception:
+                pass  # already exists; safe to ignore
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS validation_runs (
@@ -112,8 +140,14 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_trips_city_day     ON trips(city, simulation_day)",
         "CREATE INDEX IF NOT EXISTS idx_trips_dep_hour     ON trips(dep_hour)",
         "CREATE INDEX IF NOT EXISTS idx_trips_distance     ON trips(distance_km)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_source_id    ON trips(source_id)",
+        # F1 derived metric indexes (Phase 2)
+        "CREATE INDEX IF NOT EXISTS idx_trips_speed        ON trips(speed_avg_kmh)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_dwell        ON trips(dwell_minutes)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_detour       ON trips(detour_ratio)",
         # waypoints
         "CREATE INDEX IF NOT EXISTS idx_waypoints_vehicle_key ON waypoints(vehicle_key)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_source_id   ON waypoints(source_id)",
         "CREATE INDEX IF NOT EXISTS idx_waypoints_trip        ON waypoints(vehicle_id, trip_id)",
         "CREATE INDEX IF NOT EXISTS idx_waypoints_link_id     ON waypoints(link_id)",
         "CREATE INDEX IF NOT EXISTS idx_waypoints_lonlat      ON waypoints(lon, lat)",
@@ -181,24 +215,51 @@ def build_trip_filter(
     city: Optional[str] = None,
     simulation_day: Optional[int] = None,
     extra: Optional[list[str]] = None,
+    *,
+    source_id: Optional[str] = None,
+    min_speed: Optional[float] = None,
+    max_speed: Optional[float] = None,
+    max_dwell_minutes: Optional[float] = None,
+    min_detour_ratio: Optional[float] = None,
+    max_detour_ratio: Optional[float] = None,
 ) -> str:
     """Build a SQL WHERE clause from common trip filters.
 
     Returns either an empty string or 'WHERE cond1 AND cond2 AND ...'.
     Values are used in raw SQL — callers MUST constrain inputs via Pydantic
-    (e.g. vehicle_type pattern='^(truck|taxi)$', city pattern='^[a-z_]+$').
+    (e.g. vehicle_type pattern='^[a-z][a-z0-9_]*$', city pattern='^[a-z_]+$').
+
+    `source_id` is the v0.2 canonical filter (preferred for new code); `vehicle_type`
+    is a back-compat alias and resolves to the same DB column. If both are passed,
+    `source_id` wins.
+
+    Phase 2 (Step 2.2) adds five F1-derived-metric filters
+    (min_speed/max_speed/max_dwell_minutes/min_detour_ratio/max_detour_ratio).
+    These are numeric and float-cast on use — safe from SQL injection.
 
     Example:
-        where = build_trip_filter(vehicle_type='taxi', city='tokyo')
+        where = build_trip_filter(vehicle_type='taxi', city='tokyo', min_speed=20)
         conn.execute(f'SELECT COUNT(*) FROM trips {where}')
     """
+    effective_vehicle_type = source_id if source_id is not None else vehicle_type
     conds: list[str] = []
-    if vehicle_type:
-        conds.append(f"vehicle_type = '{vehicle_type}'")
+    if effective_vehicle_type:
+        conds.append(f"vehicle_type = '{effective_vehicle_type}'")
     if city:
         conds.append(f"city = '{city}'")
     if simulation_day is not None:
         conds.append(f"simulation_day = {int(simulation_day)}")
+    # F1 derived metrics — float-cast on the Python side blocks injection.
+    if min_speed is not None:
+        conds.append(f"speed_avg_kmh >= {float(min_speed)}")
+    if max_speed is not None:
+        conds.append(f"speed_avg_kmh <= {float(max_speed)}")
+    if max_dwell_minutes is not None:
+        conds.append(f"dwell_minutes <= {float(max_dwell_minutes)}")
+    if min_detour_ratio is not None:
+        conds.append(f"detour_ratio >= {float(min_detour_ratio)}")
+    if max_detour_ratio is not None:
+        conds.append(f"detour_ratio <= {float(max_detour_ratio)}")
     if extra:
         conds.extend(extra)
     return ("WHERE " + " AND ".join(conds)) if conds else ""

@@ -23,7 +23,7 @@ import type { FilterState, FilterOptions, Trajectory } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
 const DEFAULT_FILTER: FilterState = {
-  vehicleType: 'all',
+  vehicleType: '',                // empty = no source filter (all sources)
   minHour: 0,
   maxHour: 23,
 };
@@ -32,7 +32,7 @@ const DEFAULT_FILTER: FilterState = {
 
 function encodeHash(filter: FilterState): string {
   const parts: string[] = [];
-  if (filter.vehicleType !== 'all') parts.push(`vt=${filter.vehicleType}`);
+  if (filter.vehicleType) parts.push(`vt=${filter.vehicleType}`);
   if (filter.city) parts.push(`city=${encodeURIComponent(filter.city)}`);
   if (filter.simulationDay !== undefined) parts.push(`day=${filter.simulationDay}`);
   if (filter.minHour !== 0) parts.push(`minh=${filter.minHour}`);
@@ -46,8 +46,9 @@ function decodeHash(hash: string): FilterState {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
   const params = new URLSearchParams(raw);
   const vt = params.get('vt');
+  // Accept any v0.2 source_id (server validates via Pydantic pattern); '' = all.
   return {
-    vehicleType: (vt === 'truck' || vt === 'taxi') ? vt : 'all',
+    vehicleType: (vt && /^[a-z][a-z0-9_]*$/.test(vt)) ? vt : '',
     city: params.get('city') ? decodeURIComponent(params.get('city')!) : undefined,
     simulationDay: params.get('day') !== null ? Number(params.get('day')) : undefined,
     minHour: params.get('minh') !== null ? Number(params.get('minh')) : 0,
@@ -69,6 +70,9 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   linkDensity: true,
   clusters: true,
   drill: true,
+  // Phase 2 Step 2.7 F3 layers — default off (overlap with the main trail).
+  speedSegments: false,
+  dwellMarkers: false,
 };
 
 export default function App() {

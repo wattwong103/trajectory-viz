@@ -17,7 +17,7 @@ router = APIRouter()
 
 @router.get("/analysis/spatial/density-grid")
 async def density_grid(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     resolution: float = Query(0.01, ge=0.001, le=0.1,
@@ -88,7 +88,7 @@ async def density_grid(
 
 @router.get("/analysis/spatial/waypoint-density")
 async def waypoint_density(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     resolution: float = Query(0.005, ge=0.001, le=0.05,
@@ -133,7 +133,7 @@ async def waypoint_density(
 
 @router.get("/analysis/spatial/link-density")
 async def link_density(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(500, ge=10, le=5000),
@@ -210,7 +210,7 @@ async def link_density(
 
 @router.get("/analysis/spatial/hotspots")
 async def hotspots(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     point_type: str = Query("origin", pattern="^(origin|destination)$"),

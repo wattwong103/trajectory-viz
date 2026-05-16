@@ -28,7 +28,7 @@ def _row_to_trip(r) -> dict:
 @router.get("/trips/sample", response_model=TripResponse)
 async def sample(
     n: int = Query(1000, ge=1, le=50000),
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
 ):
@@ -61,7 +61,14 @@ async def query(q: TripQuery):
     if q.dest_zone:
         extra.append(f"dest_zone = '{q.dest_zone}'")
 
-    where = build_trip_filter(q.vehicle_type, q.city, q.simulation_day, extra=extra)
+    where = build_trip_filter(
+        q.vehicle_type, q.city, q.simulation_day, extra=extra,
+        min_speed=q.min_speed,
+        max_speed=q.max_speed,
+        max_dwell_minutes=q.max_dwell_minutes,
+        min_detour_ratio=q.min_detour_ratio,
+        max_detour_ratio=q.max_detour_ratio,
+    )
 
     rows = conn.execute(f"""
         SELECT vehicle_id, trip_id, starttime, start_lon, start_lat,

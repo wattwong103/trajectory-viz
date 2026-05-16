@@ -15,7 +15,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import DeckGL from '@deck.gl/react';
 import { FlyToInterpolator } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
-import { ScatterplotLayer, ArcLayer } from '@deck.gl/layers';
+import { ScatterplotLayer, ArcLayer, PathLayer } from '@deck.gl/layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { Map } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -46,6 +46,40 @@ const COLORS = {
   arcTarget:  [23, 184, 190] as [number, number, number],
   drillTrail: [255, 230, 100] as [number, number, number],
 };
+
+// Per-source trail colors. Built-in entries for truck/taxi keep v0.1 colors;
+// any other source_id from sources.yaml gets a deterministic palette pick.
+const VEHICLE_TYPE_COLORS: Record<string, [number, number, number]> = {
+  truck: COLORS.truckTrail,
+  taxi:  COLORS.taxiTrail,
+};
+const FALLBACK_PALETTE: [number, number, number][] = [
+  [212, 160, 23], [43, 200, 80], [155, 89, 182], [231, 76, 60],
+  [52, 152, 219], [26, 188, 156], [243, 156, 18], [233, 30, 99],
+];
+// F3 speed gradient (Phase 2 Step 2.7) — maps per-segment speed_kmh to a color.
+// Buckets: idle/slow/medium/fast/highway. Bucket edges chosen to make the
+// gradient visible at typical PFLOW urban speeds (most segments fall 0-60).
+function speedToColor(kmh: number | null | undefined): [number, number, number, number] {
+  if (kmh === null || kmh === undefined) return [128, 128, 128, 180];  // gray for unknown
+  if (kmh < 5)  return [231, 76,  60,  220];   // red — idle/jam
+  if (kmh < 20) return [243, 156, 18,  200];   // orange — slow city
+  if (kmh < 50) return [241, 196, 15,  200];   // yellow — typical
+  if (kmh < 80) return [43,  200, 80,  200];   // green — fast city
+  return            [52,  152, 219, 200];      // blue — highway
+}
+
+function getTrailColor(vehicleType: string): [number, number, number] {
+  const known = VEHICLE_TYPE_COLORS[vehicleType];
+  if (known) return known;
+  // Deterministic hash → palette index, so the same source always picks the
+  // same fallback color across reloads.
+  let h = 0;
+  for (let i = 0; i < vehicleType.length; i++) {
+    h = (h * 31 + vehicleType.charCodeAt(i)) | 0;
+  }
+  return FALLBACK_PALETTE[Math.abs(h) % FALLBACK_PALETTE.length];
+}
 
 const CLUSTER_COLORS: [number, number, number][] = [
   [253, 128, 93], [23, 184, 190], [43, 200, 80], [212, 160, 23],
@@ -137,6 +171,75 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
+    // Layer 3a: F3 — Speed-gradient PathLayer (Phase 2 Step 2.7).
+    // Each trajectory becomes len(path)-1 short two-point paths, each coloured
+    // by its segment's speed_kmh. Renders below the animated trajectories.
+    if (layerVisibility.speedSegments && trajectories.length > 0) {
+      type SegPath = { path: [number, number][]; color: [number, number, number, number] };
+      const segData: SegPath[] = [];
+      for (const t of trajectories) {
+        if (!t.segments) continue;
+        for (let i = 0; i < t.segments.length; i++) {
+          segData.push({
+            path: [t.path[i], t.path[i + 1]] as [number, number][],
+            color: speedToColor(t.segments[i].speed_kmh),
+          });
+        }
+      }
+      if (segData.length > 0) {
+        result.push(
+          new PathLayer<SegPath>({
+            id: 'speed-segments',
+            data: segData,
+            getPath: (d) => d.path,
+            getColor: (d) => d.color,
+            getWidth: 1,
+            widthMinPixels: 2,
+            opacity: 0.6,
+            jointRounded: true,
+            capRounded: true,
+          }),
+        );
+      }
+    }
+
+    // Layer 3b: F3 — Dwell markers (idle segments where speed < 1 km/h).
+    // Renders ScatterplotLayer at the second waypoint of each idle segment;
+    // marker radius scales with dwell duration.
+    if (layerVisibility.dwellMarkers && trajectories.length > 0) {
+      type Dwell = { position: [number, number]; dwell: number };
+      const dwellPts: Dwell[] = [];
+      for (const t of trajectories) {
+        if (!t.segments) continue;
+        for (let i = 0; i < t.segments.length; i++) {
+          const d = t.segments[i].dwell_sec;
+          if (d !== null && d !== undefined && d > 60) {  // > 1 minute idle
+            dwellPts.push({
+              position: t.path[i + 1] as [number, number],
+              dwell: d,
+            });
+          }
+        }
+      }
+      if (dwellPts.length > 0) {
+        result.push(
+          new ScatterplotLayer<Dwell>({
+            id: 'dwell-markers',
+            data: dwellPts,
+            getPosition: (d) => d.position,
+            getFillColor: [255, 60, 60, 180],
+            getRadius: (d) => 20 + 10 * Math.log2(1 + d.dwell / 60),  // grow with minutes
+            radiusMinPixels: 3,
+            radiusMaxPixels: 20,
+            stroked: true,
+            getLineColor: [255, 230, 100, 220],
+            lineWidthMinPixels: 1,
+            pickable: true,
+          }),
+        );
+      }
+    }
+
     // Layer 3: Animated trajectories
     if (layerVisibility.trajectories && trajectories.length > 0) {
       result.push(
@@ -145,8 +248,7 @@ export const MapView: React.FC<MapViewProps> = ({
           data: trajectories,
           getPath: (d: Trajectory) => d.path,
           getTimestamps: (d: Trajectory) => d.timestamps,
-          getColor: (d: Trajectory) =>
-            d.metadata.vehicle_type === 'truck' ? COLORS.truckTrail : COLORS.taxiTrail,
+          getColor: (d: Trajectory) => getTrailColor(d.metadata.vehicle_type),
           currentTime,
           trailLength,
           widthMinPixels: 2,

@@ -9,6 +9,8 @@ The unix_time_ms from the trajectory CSV is converted back to seconds-from-midni
 for the 24h animation loop (matching traj-mining's 86400-second cycle).
 """
 
+import math
+
 from fastapi import APIRouter, Query
 from typing import Optional
 
@@ -16,6 +18,7 @@ from ..db import get_connection, build_trip_filter
 from ..models import (
     BBoxQuery, PointQuery,
     Trajectory, TrajectoryMetadata, TrajectoryResponse,
+    TrajectorySegment,
 )
 
 router = APIRouter()
@@ -24,13 +27,61 @@ router = APIRouter()
 # = 1601478000 seconds since epoch (UTC+9)
 BASE_EPOCH_SEC = 1601478000
 
+# Idle-speed threshold for F3 dwell markers. Same scale as DETOUR_MIN_HAVERSINE_KM
+# in ingest.py — < 1 km/h means the vehicle moved less than the GPS-noise floor
+# per second, treated as "stopped".
+_F3_IDLE_KMH = 1.0
 
-def _rows_to_trajectories(rows: list, vehicle_type_hint: str | None = None) -> list[Trajectory]:
+
+def _haversine_km(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Equirectangular approximation in km, matching the SQL formula in
+    ingest.compute_derived_metrics and analysis/trip_chains.round_trip_analysis."""
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    mean_lat_rad = math.radians((lat1 + lat2) / 2)
+    return 111.32 * math.sqrt((dlon * math.cos(mean_lat_rad)) ** 2 + dlat ** 2)
+
+
+def _compute_segments(waypoints: list) -> list[TrajectorySegment]:
+    """Per-segment metrics (Phase 2 Step 2.5).
+
+    Each waypoint row is indexed as in _WAYPOINT_COLS:
+        [2]=unix_time_ms, [3]=lon, [4]=lat, [13]=link_id.
+    """
+    segments: list[TrajectorySegment] = []
+    for i in range(len(waypoints) - 1):
+        w1, w2 = waypoints[i], waypoints[i + 1]
+        dt_sec = (w2[2] - w1[2]) / 1000.0
+        dist_km = _haversine_km(w1[3], w1[4], w2[3], w2[4])
+        if dt_sec > 0:
+            speed_kmh: Optional[float] = dist_km / (dt_sec / 3600.0)
+        else:
+            speed_kmh = None
+        dwell_sec: Optional[float] = None
+        if speed_kmh is not None and speed_kmh < _F3_IDLE_KMH:
+            dwell_sec = dt_sec
+        segments.append(TrajectorySegment(
+            link_id=w2[13],
+            speed_kmh=speed_kmh,
+            dwell_sec=dwell_sec,
+        ))
+    return segments
+
+
+def _rows_to_trajectories(
+    rows: list,
+    vehicle_type_hint: str | None = None,
+    include_segments: bool = False,
+) -> list[Trajectory]:
     """Group waypoint rows by (vehicle_id, trip_id) into Trajectory objects.
 
     Each row: (vehicle_id, trip_id, unix_time_ms, lon, lat, vehicle_type,
                transport_mode, purpose, goods_type, vehicle_size,
-               passenger_in, fare_yen, vehicle_key)
+               passenger_in, fare_yen, vehicle_key, link_id)
+
+    When `include_segments=True` (Phase 2 Step 2.5), each Trajectory carries a
+    `segments` list of length len(path)-1 with per-segment speed + dwell. Off
+    by default — segments roughly double the JSON payload size.
     """
     # Group by (vehicle_id, trip_id)
     trips: dict[tuple, list] = {}
@@ -61,21 +112,24 @@ def _rows_to_trajectories(rows: list, vehicle_type_hint: str | None = None) -> l
             fare_yen=waypoints[0][11],
             purpose=waypoints[0][7],
         )
+        segments = _compute_segments(waypoints) if include_segments else None
         result.append(Trajectory(
             id=f"{vtype}_{vid}_{tid}",
             path=path,
             timestamps=timestamps,
             metadata=meta,
+            segments=segments,
         ))
 
     return result
 
 
-# Column list used in all waypoint queries
+# Column list used in all waypoint queries.
+# link_id (last) added in Phase 2 Step 2.5 for per-segment annotation.
 _WAYPOINT_COLS = """
     vehicle_id, trip_id, unix_time_ms, lon, lat,
     vehicle_type, transport_mode, purpose,
-    goods_type, vehicle_size, passenger_in, fare_yen, vehicle_key
+    goods_type, vehicle_size, passenger_in, fare_yen, vehicle_key, link_id
 """
 
 
@@ -104,9 +158,11 @@ def _build_trip_vehicle_keys_subquery(
 @router.get("/trajectories/sample")
 async def sample_trajectories(
     n: int = Query(100, ge=1, le=5000),
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
+    include_segments: bool = Query(False,
+        description="Opt into per-segment link/speed/dwell (Phase 2 F3)"),
 ):
     """Return n random trajectories (sampled by vehicle_id+trip_id).
 
@@ -145,7 +201,7 @@ async def sample_trajectories(
         ORDER BY vehicle_id, trip_id, unix_time_ms
     """).fetchall()
 
-    trajectories = _rows_to_trajectories(rows, vehicle_type)
+    trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -188,7 +244,7 @@ async def query_trajectories_bbox(q: BBoxQuery):
         ORDER BY vehicle_id, trip_id, unix_time_ms
     """).fetchall()
 
-    trajectories = _rows_to_trajectories(rows, q.vehicle_type)
+    trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -234,7 +290,7 @@ async def query_trajectories_point(q: PointQuery):
         ORDER BY vehicle_id, trip_id, unix_time_ms
     """).fetchall()
 
-    trajectories = _rows_to_trajectories(rows, q.vehicle_type)
+    trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 

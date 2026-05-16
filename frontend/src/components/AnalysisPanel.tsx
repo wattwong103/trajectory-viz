@@ -15,7 +15,7 @@ import {
   BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
-import type { InsightsResponse } from '../types';
+import type { InsightsResponse, MetricsDistribution } from '../types';
 import {
   fetchHourlyDepartures, fetchODFlows, fetchSpatialDensity,
   runClustering, fetchChainLengths,
@@ -23,15 +23,17 @@ import {
   fetchSpatialHotspots, fetchWaypointDensity,
   fetchDwellTimes, fetchRoundTrips, fetchCommodityPatterns,
   fetchLinkDensity,
+  fetchMetricsDistribution,
   type HourlyData, type ODFlow, type DensityPoint, type ClusterResult,
   type LinkDensityItem,
 } from '../api';
 
-type Tab = 'summary' | 'temporal' | 'od' | 'density' | 'clusters' | 'chains' | 'links';
+type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links';
 
 const TAB_LABELS: Record<Tab, string> = {
   summary: '\u03A3',
   temporal: '\u23F0',
+  metrics: '\u0192',     // \u0192 for F1 derived metrics
   od: '\u2197',
   density: '\u2588',
   clusters: '\u25CE',
@@ -60,6 +62,52 @@ interface AnalysisPanelProps {
   onClusters: (result: ClusterResult | null) => void;
   onLinkDensity: (links: LinkDensityItem[]) => void;
 }
+
+/** Recharts BarChart of one F1 metric's histogram. Used in the Metrics tab. */
+const MetricHistogram: React.FC<{
+  title: string;
+  dist: MetricsDistribution | null;
+  precision: number;
+}> = ({ title, dist, precision }) => {
+  if (!dist || dist.histogram.length === 0 || dist.total_rows === 0) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: '#bbb', marginBottom: 2 }}>{title}</div>
+        <div style={{ fontSize: 11, color: '#666', padding: '8px 0' }}>
+          No data — the metric is NULL for all matching trips.
+          {title.startsWith('Speed') && ' (Speed needs trajectory data.)'}
+        </div>
+      </div>
+    );
+  }
+  // Use bin_lower as the x-axis label, rounded for display
+  const data = dist.histogram.map(b => ({
+    bin: b.bin_lower.toFixed(precision),
+    count: b.count,
+  }));
+  const range = `${dist.min!.toFixed(precision)} – ${dist.max!.toFixed(precision)} ${dist.unit}`;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: '#bbb', marginBottom: 2 }}>
+        {title}
+        <span style={{ color: '#666', float: 'right', fontSize: 10 }}>
+          {dist.total_rows.toLocaleString()} trips, {range}
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={70}>
+        <BarChart data={data} margin={{ top: 2, right: 6, bottom: 2, left: 0 }}>
+          <XAxis dataKey="bin" tick={{ fontSize: 9, fill: '#888' }} interval="preserveStartEnd" />
+          <YAxis hide />
+          <Tooltip
+            contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid #444', fontSize: 11 }}
+            labelStyle={{ color: '#aaa' }}
+          />
+          <Bar dataKey="count" fill="#4fc3f7" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
 
 /** Three-line skeleton shown while a tab's content is loading */
 const SkeletonLines: React.FC = () => (
@@ -121,6 +169,12 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   const [linkData, setLinkData] = useState<{ links: LinkDensityItem[]; count: number; total_links: number } | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
 
+  // Metrics tab (Phase 2 Step 2.2e) — three F1 distributions
+  const [metricsSpeed,  setMetricsSpeed]  = useState<MetricsDistribution | null>(null);
+  const [metricsDwell,  setMetricsDwell]  = useState<MetricsDistribution | null>(null);
+  const [metricsDetour, setMetricsDetour] = useState<MetricsDistribution | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+
   // Auto-load temporal data when panel opens
   useEffect(() => {
     if (hasData && tab === 'temporal') {
@@ -128,6 +182,26 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       fetchTemporalPeaks(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setPeaksData).catch(console.error);
       fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour).then(setDurationData).catch(console.error);
     }
+  }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
+
+  // Auto-load F1 metric distributions when the Metrics tab is opened.
+  // Three histograms fire in parallel (each is one DuckDB query).
+  useEffect(() => {
+    if (!hasData || tab !== 'metrics') return;
+    setMetricsLoading(true);
+    const args = [vehicleType, city, simulationDay, 20, goodsType, minHour, maxHour] as const;
+    Promise.all([
+      fetchMetricsDistribution('speed_avg_kmh', ...args),
+      fetchMetricsDistribution('dwell_minutes', ...args),
+      fetchMetricsDistribution('detour_ratio',  ...args),
+    ])
+      .then(([s, d, dr]) => {
+        setMetricsSpeed(s);
+        setMetricsDwell(d);
+        setMetricsDetour(dr);
+      })
+      .catch(console.error)
+      .finally(() => setMetricsLoading(false));
   }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
 
   const loadODFlows = useCallback(async () => {
@@ -391,6 +465,25 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Metrics Tab (F1 derived: speed / dwell / detour) ── */}
+        {tab === 'metrics' && (
+          <div>
+            <div style={styles.subtitle}>F1 Derived Metrics</div>
+            <p style={styles.desc}>
+              Per-trip metrics computed at ingest: average speed (needs trajectory data),
+              dwell time before next trip, and route detour vs straight-line.
+            </p>
+            {metricsLoading && <SkeletonLines />}
+            {!metricsLoading && (
+              <>
+                <MetricHistogram title="Speed (km/h)"      dist={metricsSpeed}  precision={0} />
+                <MetricHistogram title="Dwell (min)"        dist={metricsDwell}  precision={0} />
+                <MetricHistogram title="Detour ratio"       dist={metricsDetour} precision={2} />
               </>
             )}
           </div>
