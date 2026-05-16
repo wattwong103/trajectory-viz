@@ -30,6 +30,13 @@ const DEFAULT_FILTER: FilterState = {
   maxHour: 23,
 };
 
+function numParam(params: URLSearchParams, key: string): number | undefined {
+  const v = params.get(key);
+  if (v === null) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function encodeHash(filter: FilterState): string {
   const parts: string[] = [];
   if (filter.vehicleType) parts.push(`vt=${filter.vehicleType}`);
@@ -38,6 +45,11 @@ function encodeHash(filter: FilterState): string {
   if (filter.minHour !== 0) parts.push(`minh=${filter.minHour}`);
   if (filter.maxHour !== 23) parts.push(`maxh=${filter.maxHour}`);
   if (filter.goodsType) parts.push(`gt=${encodeURIComponent(filter.goodsType)}`);
+  if (filter.minSpeed !== undefined) parts.push(`ms=${filter.minSpeed}`);
+  if (filter.maxSpeed !== undefined) parts.push(`xs=${filter.maxSpeed}`);
+  if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
+  if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
+  if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
   return parts.join('&');
 }
 
@@ -49,10 +61,15 @@ function decodeHash(hash: string): FilterState {
   return {
     vehicleType: (vt && /^[a-z][a-z0-9_]*$/.test(vt)) ? vt : '',
     city: params.get('city') ? decodeURIComponent(params.get('city')!) : undefined,
-    simulationDay: params.get('day') !== null ? Number(params.get('day')) : undefined,
-    minHour: params.get('minh') !== null ? Number(params.get('minh')) : 0,
-    maxHour: params.get('maxh') !== null ? Number(params.get('maxh')) : 23,
+    simulationDay: numParam(params, 'day'),
+    minHour: numParam(params, 'minh') ?? 0,
+    maxHour: numParam(params, 'maxh') ?? 23,
     goodsType: params.get('gt') ? decodeURIComponent(params.get('gt')!) : undefined,
+    minSpeed: numParam(params, 'ms'),
+    maxSpeed: numParam(params, 'xs'),
+    maxDwellMinutes: numParam(params, 'xd'),
+    minDetourRatio: numParam(params, 'mr'),
+    maxDetourRatio: numParam(params, 'xr'),
   };
 }
 
@@ -94,5 +111,49 @@ describe('filter hash encoding', () => {
     };
     const out = decodeHash(encodeHash(original));
     expect(out).toMatchObject(original);
+  });
+
+  // ── F1 advanced filters (Sprint A5) ────────────────────────────────────
+
+  it('encodes only the F1 fields that are set', () => {
+    expect(encodeHash({ ...DEFAULT_FILTER, minSpeed: 20 })).toBe('ms=20');
+    expect(encodeHash({ ...DEFAULT_FILTER, maxSpeed: 60 })).toBe('xs=60');
+    expect(encodeHash({ ...DEFAULT_FILTER, maxDwellMinutes: 30 })).toBe('xd=30');
+    expect(encodeHash({ ...DEFAULT_FILTER, minDetourRatio: 1.2 })).toBe('mr=1.2');
+    expect(encodeHash({ ...DEFAULT_FILTER, maxDetourRatio: 3 })).toBe('xr=3');
+  });
+
+  it('round-trips all F1 fields together', () => {
+    const original: FilterState = {
+      vehicleType: 'taxi',
+      minHour: 0,
+      maxHour: 23,
+      minSpeed: 20,
+      maxSpeed: 60,
+      maxDwellMinutes: 45,
+      minDetourRatio: 1.2,
+      maxDetourRatio: 2.5,
+    };
+    const out = decodeHash(encodeHash(original));
+    expect(out).toMatchObject(original);
+  });
+
+  it('F1 fields decode as undefined when absent', () => {
+    const out = decodeHash('#vt=truck');
+    expect(out.minSpeed).toBeUndefined();
+    expect(out.maxSpeed).toBeUndefined();
+    expect(out.maxDwellMinutes).toBeUndefined();
+    expect(out.minDetourRatio).toBeUndefined();
+    expect(out.maxDetourRatio).toBeUndefined();
+  });
+
+  it('decodes garbage F1 values as undefined (e.g. NaN)', () => {
+    expect(decodeHash('#ms=abc').minSpeed).toBeUndefined();
+    expect(decodeHash('#xr=not_a_number').maxDetourRatio).toBeUndefined();
+  });
+
+  it('encodes nothing when all filters are at default', () => {
+    // simulationDay=undefined is the default; encode skips it.
+    expect(encodeHash(DEFAULT_FILTER)).toBe('');
   });
 });

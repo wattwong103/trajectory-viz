@@ -19,7 +19,7 @@ import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
 import { fetchFilterOptions, queryTrajectoriesPoint } from './api';
-import type { FilterState, FilterOptions, Trajectory } from './types';
+import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
 const DEFAULT_FILTER: FilterState = {
@@ -30,6 +30,14 @@ const DEFAULT_FILTER: FilterState = {
 
 // ─── URL hash encoding/decoding ──────────────────────────
 
+// Parse a finite-number query param; returns undefined if absent or NaN.
+function numParam(params: URLSearchParams, key: string): number | undefined {
+  const v = params.get(key);
+  if (v === null) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function encodeHash(filter: FilterState): string {
   const parts: string[] = [];
   if (filter.vehicleType) parts.push(`vt=${filter.vehicleType}`);
@@ -38,6 +46,13 @@ function encodeHash(filter: FilterState): string {
   if (filter.minHour !== 0) parts.push(`minh=${filter.minHour}`);
   if (filter.maxHour !== 23) parts.push(`maxh=${filter.maxHour}`);
   if (filter.goodsType) parts.push(`gt=${encodeURIComponent(filter.goodsType)}`);
+  // F1 advanced filters (Sprint A5): short keys keep the hash compact.
+  // Defaults are "undefined", so any defined value gets encoded.
+  if (filter.minSpeed !== undefined) parts.push(`ms=${filter.minSpeed}`);
+  if (filter.maxSpeed !== undefined) parts.push(`xs=${filter.maxSpeed}`);
+  if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
+  if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
+  if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
   return parts.join('&');
 }
 
@@ -50,10 +65,16 @@ function decodeHash(hash: string): FilterState {
   return {
     vehicleType: (vt && /^[a-z][a-z0-9_]*$/.test(vt)) ? vt : '',
     city: params.get('city') ? decodeURIComponent(params.get('city')!) : undefined,
-    simulationDay: params.get('day') !== null ? Number(params.get('day')) : undefined,
-    minHour: params.get('minh') !== null ? Number(params.get('minh')) : 0,
-    maxHour: params.get('maxh') !== null ? Number(params.get('maxh')) : 23,
+    simulationDay: numParam(params, 'day'),
+    minHour: numParam(params, 'minh') ?? 0,
+    maxHour: numParam(params, 'maxh') ?? 23,
     goodsType: params.get('gt') ? decodeURIComponent(params.get('gt')!) : undefined,
+    // F1 advanced filters (Sprint A5)
+    minSpeed: numParam(params, 'ms'),
+    maxSpeed: numParam(params, 'xs'),
+    maxDwellMinutes: numParam(params, 'xd'),
+    minDetourRatio: numParam(params, 'mr'),
+    maxDetourRatio: numParam(params, 'xr'),
   };
 }
 
@@ -85,6 +106,16 @@ export default function App() {
   const [drillTrajectories, setDrillTrajectories] = useState<Trajectory[]>([]);
   const [drillPoint, setDrillPoint] = useState<[number, number] | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+
+  // Selected-trajectory state (click a trajectory on the map → Detail tab).
+  // Sprint A1a: surfaces the segments[] data F3 already attaches.
+  const [selectedTrajectory, setSelectedTrajectory] = useState<Trajectory | null>(null);
+
+  // Through-zone bbox state (Sprint A1b — F2 endpoint UI).
+  // Once a query fires, App holds the bbox (rendered as yellow PolygonLayer
+  // on the map) and the returned trip list (displayed in the Zone tab).
+  const [zoneBBox, setZoneBBox] = useState<{ w: number; s: number; e: number; n: number } | null>(null);
+  const [zoneTrips, setZoneTrips] = useState<TripPoint[]>([]);
 
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(console.error);
@@ -132,6 +163,9 @@ export default function App() {
     setLinkDensity([]);
     setDrillTrajectories([]);
     setDrillPoint(null);
+    // Sprint A1b: also clear zone results — they were filter-scoped
+    setZoneBBox(null);
+    setZoneTrips([]);
   }, [filter.vehicleType, filter.city, filter.simulationDay, filter.goodsType]);
 
   // Map click handler — fires radius query on empty-map clicks
@@ -157,6 +191,27 @@ export default function App() {
   const clearDrill = useCallback(() => {
     setDrillTrajectories([]);
     setDrillPoint(null);
+  }, []);
+
+  const handleTrajectoryClick = useCallback((traj: Trajectory) => {
+    setSelectedTrajectory(traj);
+  }, []);
+
+  const clearSelectedTrajectory = useCallback(() => {
+    setSelectedTrajectory(null);
+  }, []);
+
+  const handleZoneResult = useCallback(
+    (bbox: { w: number; s: number; e: number; n: number }, trips: TripPoint[]) => {
+      setZoneBBox(bbox);
+      setZoneTrips(trips);
+    },
+    [],
+  );
+
+  const clearZone = useCallback(() => {
+    setZoneBBox(null);
+    setZoneTrips([]);
   }, []);
 
   // Screenshot handler
@@ -189,8 +244,10 @@ export default function App() {
         linkDensityPoints={linkDensity}
         drillTrajectories={drillTrajectories}
         drillPoint={drillPoint}
+        zoneBBox={zoneBBox}
         layerVisibility={layerVisibility}
         onMapClick={handleMapClick}
+        onTrajectoryClick={handleTrajectoryClick}
       />
 
       <FilterPanel
@@ -226,6 +283,12 @@ export default function App() {
         onDensity={handleDensity}
         onClusters={handleClusters}
         onLinkDensity={handleLinkDensity}
+        selectedTrajectory={selectedTrajectory}
+        onClearSelectedTrajectory={clearSelectedTrajectory}
+        zoneBBox={zoneBBox}
+        zoneTrips={zoneTrips}
+        onZoneResult={handleZoneResult}
+        onClearZone={clearZone}
       />
 
       <TimeSlider

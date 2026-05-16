@@ -15,7 +15,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import DeckGL from '@deck.gl/react';
 import { FlyToInterpolator } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
-import { ScatterplotLayer, ArcLayer, PathLayer } from '@deck.gl/layers';
+import { ScatterplotLayer, ArcLayer, PathLayer, PolygonLayer } from '@deck.gl/layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { Map } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -99,8 +99,12 @@ interface MapViewProps {
   linkDensityPoints?: LinkDensityItem[];
   drillTrajectories: Trajectory[];
   drillPoint: [number, number] | null;
+  // Sprint A1b: through-zone bbox rendered as a translucent yellow PolygonLayer
+  zoneBBox?: { w: number; s: number; e: number; n: number } | null;
   layerVisibility: LayerVisibility;
   onMapClick: (lon: number, lat: number) => void;
+  // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
+  onTrajectoryClick?: (trajectory: Trajectory) => void;
 }
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -108,8 +112,10 @@ export const MapView: React.FC<MapViewProps> = ({
   odFlows, densityPoints, clusterResult, cityCenter,
   linkDensityPoints,
   drillTrajectories, drillPoint,
+  zoneBBox,
   layerVisibility,
   onMapClick,
+  onTrajectoryClick,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
 
@@ -255,6 +261,13 @@ export const MapView: React.FC<MapViewProps> = ({
           opacity: 0.8,
           jointRounded: true,
           capRounded: true,
+          // Sprint A1a — clickable trail; lifts the trajectory to App state.
+          pickable: !!onTrajectoryClick,
+          onClick: (info: any) => {
+            if (info && info.object && onTrajectoryClick) {
+              onTrajectoryClick(info.object as Trajectory);
+            }
+          },
         }),
       );
     }
@@ -375,11 +388,36 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
+    // Layer 8: Through-zone bbox (Sprint A1b — F2 UI).
+    // Translucent yellow rectangle showing the user's query bounds.
+    if (zoneBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [zoneBBox.w, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'zone-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [255, 230, 100, 40],   // translucent yellow fill
+          getLineColor: [255, 230, 100, 220],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+
     return result;
   }, [
     trajectories, trips, currentTime, trailLength,
     odFlows, densityPoints, clusterResult, linkDensityPoints,
-    drillTrajectories, drillPoint,
+    drillTrajectories, drillPoint, zoneBBox,
     layerVisibility,
   ]);
 
@@ -425,6 +463,17 @@ export const MapView: React.FC<MapViewProps> = ({
         if ('clusterId' in object) {
           return {
             text: `Cluster ${object.clusterId}: ${object.size} trips`,
+          };
+        }
+        // Trajectory hover (Sprint A1a) — distinct shape: path + metadata
+        if ('metadata' in object && 'path' in object && 'timestamps' in object) {
+          const t = object as Trajectory;
+          const segCount = t.segments?.length ?? 0;
+          return {
+            text:
+              `${t.metadata.vehicle_type} ${t.metadata.vehicle_key}\n` +
+              `trip ${t.metadata.trip_id} · ${t.path.length} waypoints${segCount ? ` · ${segCount} segments` : ''}\n` +
+              `(click for details)`,
           };
         }
         return null;

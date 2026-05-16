@@ -4,8 +4,30 @@
 set -e
 cd "$(dirname "$0")"
 
+# Probe for a usable Python ≥3.11. We try specific minor versions first (more
+# predictable on systems with multiple Pythons), then the generic `python3`,
+# then plain `python`. The first one found that reports ≥3.11 wins.
+PYTHON_BIN=""
+for candidate in python3.11 python3.12 python3.13 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        # Confirm it's ≥3.11. `python -c` returns 0 if so, 1 otherwise.
+        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "[ERROR] No Python ≥3.11 found on PATH."
+    echo "        Tried: python3.11, python3.12, python3.13, python3, python."
+    echo "        Install Python 3.11+ from python.org or your package manager."
+    exit 1
+fi
+
+echo "==> Using Python: $(command -v "$PYTHON_BIN") ($("$PYTHON_BIN" --version))"
 echo "==> Creating Python virtual environment (.venv-viz)..."
-python3.11 -m venv .venv-viz
+"$PYTHON_BIN" -m venv .venv-viz
 
 echo "==> Installing project (editable mode)..."
 ./.venv-viz/bin/pip install -e .

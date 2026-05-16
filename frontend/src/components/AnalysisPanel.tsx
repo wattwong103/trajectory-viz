@@ -15,7 +15,7 @@ import {
   BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
-import type { InsightsResponse, MetricsDistribution } from '../types';
+import type { InsightsResponse, MetricsDistribution, Trajectory, TripPoint } from '../types';
 import {
   fetchHourlyDepartures, fetchODFlows, fetchSpatialDensity,
   runClustering, fetchChainLengths,
@@ -24,11 +24,15 @@ import {
   fetchDwellTimes, fetchRoundTrips, fetchCommodityPatterns,
   fetchLinkDensity,
   fetchMetricsDistribution,
+  fetchTripsThroughZoneBBox,
+  fetchMultiStopChains,
+  runRouteSimilarity,
   type HourlyData, type ODFlow, type DensityPoint, type ClusterResult,
-  type LinkDensityItem,
+  type LinkDensityItem, type MultiStopVehicle,
+  type RouteSimilarityResponse,
 } from '../api';
 
-type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links';
+type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone';
 
 const TAB_LABELS: Record<Tab, string> = {
   summary: '\u03A3',
@@ -39,6 +43,8 @@ const TAB_LABELS: Record<Tab, string> = {
   clusters: '\u25CE',
   chains: '\u26D3',
   links: '\u22A5',
+  detail: '\uD83D\uDCCD',     // Sprint A1a \u2014 Trajectory Details (visible only when one selected)
+  zone: '\u25AD',        // Sprint A1b \u2014 Through-zone bbox query
 };
 
 function formatCompact(n: number): string {
@@ -61,7 +67,168 @@ interface AnalysisPanelProps {
   onDensity: (points: DensityPoint[]) => void;
   onClusters: (result: ClusterResult | null) => void;
   onLinkDensity: (links: LinkDensityItem[]) => void;
+  // Sprint A1a — Trajectory Details
+  selectedTrajectory?: Trajectory | null;
+  onClearSelectedTrajectory?: () => void;
+  // Sprint A1b — Through-zone bbox
+  zoneBBox?: { w: number; s: number; e: number; n: number } | null;
+  zoneTrips?: TripPoint[];
+  onZoneResult?: (bbox: { w: number; s: number; e: number; n: number }, trips: TripPoint[]) => void;
+  onClearZone?: () => void;
 }
+
+// Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
+// Bins the trajectory's segment.speed_kmh into a small histogram and lists
+// the longest dwells + most-used links. Uses the segments[] data that
+// useTrajectories already fetches via include_segments=true.
+const TrajectoryDetail: React.FC<{
+  trajectory: Trajectory;
+  onClear?: () => void;
+}> = ({ trajectory, onClear }) => {
+  const segments = trajectory.segments ?? [];
+
+  // Speed histogram (10 bins from 0 to max of segments)
+  const speeds = segments
+    .map(s => s.speed_kmh)
+    .filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+  const speedHist: Array<{ bin: string; count: number }> = (() => {
+    if (speeds.length === 0) return [];
+    const maxKmh = Math.max(...speeds, 10);
+    const top = Math.ceil(maxKmh / 10) * 10;       // round up to nearest 10
+    const bins = 10;
+    const width = top / bins;
+    const counts = new Array(bins).fill(0);
+    for (const s of speeds) {
+      const idx = Math.min(Math.floor(s / width), bins - 1);
+      counts[idx]++;
+    }
+    return counts.map((c, i) => ({
+      bin: `${(i * width).toFixed(0)}`,
+      count: c,
+    }));
+  })();
+
+  // Dwell stats
+  const dwells = segments
+    .map(s => s.dwell_sec)
+    .filter((v): v is number => v !== null && v !== undefined && v > 0);
+  const totalDwellMin = dwells.reduce((sum, d) => sum + d, 0) / 60;
+  const longestDwellSec = dwells.length > 0 ? Math.max(...dwells) : 0;
+  const longestDwellIdx = segments.findIndex(s => s.dwell_sec === longestDwellSec);
+
+  // Speed extremes
+  const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+  const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+
+  // Link usage (top 5 most-frequent)
+  const linkCounts: Record<string, number> = {};
+  for (const seg of segments) {
+    if (seg.link_id) {
+      linkCounts[seg.link_id] = (linkCounts[seg.link_id] || 0) + 1;
+    }
+  }
+  const uniqueLinks = Object.keys(linkCounts).length;
+  const topLinks = Object.entries(linkCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  const meta = trajectory.metadata;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#4fc3f7' }}>
+          {meta.vehicle_type} · {meta.vehicle_key}
+        </div>
+        {onClear && (
+          <button
+            onClick={onClear}
+            style={{
+              background: 'none', border: 'none', color: '#888',
+              cursor: 'pointer', fontSize: 14, padding: 2,
+            }}
+            title="Clear selection"
+          >
+            ×
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
+        trip {meta.trip_id} · {trajectory.path.length} waypoints · {segments.length} segments
+        {meta.goods_type && <> · {meta.goods_type}</>}
+        {meta.fare_yen !== null && meta.fare_yen !== undefined && <> · ¥{meta.fare_yen}</>}
+      </div>
+
+      {segments.length === 0 ? (
+        <div style={{ fontSize: 11, color: '#666', padding: '12px 0' }}>
+          No segment data. Set <code>include_segments=true</code> on the trajectory fetch (already on by default in useTrajectories).
+        </div>
+      ) : (
+        <>
+          {/* Stats cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: 6, borderRadius: 4 }}>
+              <div style={{ fontSize: 10, color: '#888' }}>Avg speed</div>
+              <div style={{ fontSize: 14 }}>{avgSpeed.toFixed(1)} km/h</div>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: 6, borderRadius: 4 }}>
+              <div style={{ fontSize: 10, color: '#888' }}>Max speed</div>
+              <div style={{ fontSize: 14 }}>{maxSpeed.toFixed(1)} km/h</div>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: 6, borderRadius: 4 }}>
+              <div style={{ fontSize: 10, color: '#888' }}>Total dwell</div>
+              <div style={{ fontSize: 14 }}>{totalDwellMin.toFixed(1)} min</div>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.05)', padding: 6, borderRadius: 4 }}>
+              <div style={{ fontSize: 10, color: '#888' }}>Longest stop</div>
+              <div style={{ fontSize: 14 }}>
+                {(longestDwellSec / 60).toFixed(1)} min
+                {longestDwellIdx >= 0 && <span style={{ fontSize: 10, color: '#888' }}> @ seg {longestDwellIdx}</span>}
+              </div>
+            </div>
+          </div>
+
+          {/* Speed histogram */}
+          {speedHist.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: '#bbb', marginBottom: 2 }}>
+                Speed distribution (km/h)
+              </div>
+              <ResponsiveContainer width="100%" height={70}>
+                <BarChart data={speedHist} margin={{ top: 2, right: 6, bottom: 2, left: 0 }}>
+                  <XAxis dataKey="bin" tick={{ fontSize: 9, fill: '#888' }} interval="preserveStartEnd" />
+                  <YAxis hide />
+                  <Tooltip
+                    contentStyle={{ background: 'rgba(20,20,30,0.95)', border: '1px solid #444', fontSize: 11 }}
+                    labelStyle={{ color: '#aaa' }}
+                  />
+                  <Bar dataKey="count" fill="#4fc3f7" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Link usage */}
+          {topLinks.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, color: '#bbb', marginBottom: 4 }}>
+                Top links ({uniqueLinks} unique)
+              </div>
+              <div style={{ fontSize: 10, fontFamily: 'monospace' }}>
+                {topLinks.map(([linkId, count]) => (
+                  <div key={linkId} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0' }}>
+                    <span>{linkId}</span>
+                    <span style={{ color: '#888' }}>{count}×</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
 
 /** Recharts BarChart of one F1 metric's histogram. Used in the Metrics tab. */
 const MetricHistogram: React.FC<{
@@ -140,6 +307,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   vehicleType, city, simulationDay, goodsType, minHour, maxHour,
   hasData, insights, insightsLoading,
   onODFlows, onDensity, onClusters, onLinkDensity,
+  selectedTrajectory, onClearSelectedTrajectory,
+  zoneBBox, zoneTrips, onZoneResult, onClearZone,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -175,6 +344,30 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   const [metricsDetour, setMetricsDetour] = useState<MetricsDistribution | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
 
+  // Multi-stop sub-section (Sprint A1c) — within Chains tab
+  const [multiStopMinStops, setMultiStopMinStops] = useState(3);
+  const [multiStopVehicles, setMultiStopVehicles] = useState<MultiStopVehicle[]>([]);
+  const [multiStopLoading, setMultiStopLoading] = useState(false);
+  const [multiStopExpanded, setMultiStopExpanded] = useState<string | null>(null);
+
+  // Route-similarity (Sprint A1d) — alternative algorithm in Clusters tab
+  type ClusterAlgo = 'od_distance' | 'route_similarity';
+  const [clusterAlgo, setClusterAlgo] = useState<ClusterAlgo>('od_distance');
+  const [routeSimEps, setRouteSimEps] = useState(0.3);
+  const [routeSimMinSamples, setRouteSimMinSamples] = useState(3);
+  const [routeSimSampleSize, setRouteSimSampleSize] = useState(200);
+  const [routeSimResult, setRouteSimResult] = useState<RouteSimilarityResponse | null>(null);
+  const [routeSimLoading, setRouteSimLoading] = useState(false);
+
+  // Zone tab — Sprint A1b — through-zone bbox form state.
+  // Default to a Tokyo Station bbox (~1.5 km). User edits then hits Search.
+  const [zoneFormW, setZoneFormW] = useState('139.760');
+  const [zoneFormS, setZoneFormS] = useState('35.675');
+  const [zoneFormE, setZoneFormE] = useState('139.780');
+  const [zoneFormN, setZoneFormN] = useState('35.690');
+  const [zoneLoading, setZoneLoading] = useState(false);
+  const [zoneError, setZoneError] = useState<string | null>(null);
+
   // Auto-load temporal data when panel opens
   useEffect(() => {
     if (hasData && tab === 'temporal') {
@@ -183,6 +376,11 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour).then(setDurationData).catch(console.error);
     }
   }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
+
+  // Auto-switch to Detail tab when a trajectory is clicked on the map.
+  useEffect(() => {
+    if (selectedTrajectory) setTab('detail');
+  }, [selectedTrajectory]);
 
   // Auto-load F1 metric distributions when the Metrics tab is opened.
   // Three histograms fire in parallel (each is one DuckDB query).
@@ -263,6 +461,68 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     setCommodityLoading(false);
   }, [city, simulationDay, goodsType, minHour, maxHour]);
 
+  // Sprint A1d — fire the route-similarity clustering query
+  const loadRouteSimilarity = useCallback(async () => {
+    setRouteSimLoading(true);
+    try {
+      const res = await runRouteSimilarity(
+        vehicleType, city, simulationDay,
+        routeSimSampleSize, routeSimEps, routeSimMinSamples,
+      );
+      setRouteSimResult(res);
+    } catch (e) {
+      console.error('[route-similarity]', e);
+      setRouteSimResult(null);
+    } finally {
+      setRouteSimLoading(false);
+    }
+  }, [vehicleType, city, simulationDay, routeSimEps, routeSimMinSamples, routeSimSampleSize]);
+
+  // Sprint A1c — fire the multi-stop chains query
+  const loadMultiStop = useCallback(async () => {
+    setMultiStopLoading(true);
+    try {
+      const res = await fetchMultiStopChains(
+        multiStopMinStops, vehicleType, city, simulationDay, goodsType, 50,
+      );
+      setMultiStopVehicles(res.vehicles);
+    } catch (e) {
+      console.error('[multi-stop]', e);
+      setMultiStopVehicles([]);
+    } finally {
+      setMultiStopLoading(false);
+    }
+  }, [multiStopMinStops, vehicleType, city, simulationDay, goodsType]);
+
+  // Sprint A1b — fire the through-zone-bbox query
+  const runZoneQuery = useCallback(async () => {
+    setZoneError(null);
+    const w = Number(zoneFormW);
+    const s = Number(zoneFormS);
+    const e = Number(zoneFormE);
+    const n = Number(zoneFormN);
+    if (![w, s, e, n].every(Number.isFinite)) {
+      setZoneError('All four coordinates must be numbers.');
+      return;
+    }
+    if (w >= e || s >= n) {
+      setZoneError('Require w < e and s < n (W/S min, E/N max).');
+      return;
+    }
+    setZoneLoading(true);
+    try {
+      const res = await fetchTripsThroughZoneBBox(
+        w, s, e, n, vehicleType, city, simulationDay, 500,
+      );
+      onZoneResult?.({ w, s, e, n }, res.trips as TripPoint[]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Query failed';
+      setZoneError(msg);
+    } finally {
+      setZoneLoading(false);
+    }
+  }, [zoneFormW, zoneFormS, zoneFormE, zoneFormN, vehicleType, city, simulationDay, onZoneResult]);
+
   const loadLinkDensity = useCallback(async () => {
     setLinkLoading(true);
     try {
@@ -311,7 +571,10 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
       {/* Tabs */}
       <div style={styles.tabs}>
-        {(Object.keys(TAB_LABELS) as Tab[]).map(t => (
+        {(Object.keys(TAB_LABELS) as Tab[])
+          // 'detail' tab only shown when a trajectory is selected (Sprint A1a)
+          .filter(t => t !== 'detail' || selectedTrajectory)
+          .map(t => (
           <button
             key={t}
             style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}
@@ -565,23 +828,116 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         {tab === 'clusters' && (
           <div>
             <div style={styles.subtitle}>Trip Clustering</div>
-            <p style={styles.desc}>Groups similar trips by OD pattern, distance, and time.</p>
-            <button onClick={loadClusters} style={styles.actionBtn} disabled={loading}>
-              {loading ? 'Clustering...' : 'Run Clustering'}
-            </button>
-            {clusterResult && (
-              <div style={styles.results}>
-                <div>{clusterResult.algorithm}: {clusterResult.num_clusters} clusters</div>
-                <div>{clusterResult.total_trips} trips, {clusterResult.noise_count} noise</div>
-                <div style={{ marginTop: 6 }}>
-                  {clusterResult.clusters.slice(0, 8).map(c => (
-                    <div key={c.cluster_id} style={styles.clusterRow}>
-                      <span style={{ ...styles.clusterDot, background: CLUSTER_COLORS[c.cluster_id % CLUSTER_COLORS.length] }} />
-                      C{c.cluster_id}: {c.size} trips, ~{c.centroid.avg_distance_km}km, {Math.round(c.centroid.avg_dep_hour)}h
+            {/* Algorithm toggle (Sprint A1d) */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 6, fontSize: 11 }}>
+              <label style={{ flex: 1, padding: 4, background: clusterAlgo === 'od_distance' ? 'rgba(79,195,247,0.2)' : 'transparent', border: '1px solid #333', borderRadius: 3, cursor: 'pointer' }}>
+                <input
+                  type="radio" name="cluster-algo" value="od_distance"
+                  checked={clusterAlgo === 'od_distance'}
+                  onChange={() => setClusterAlgo('od_distance')}
+                  style={{ marginRight: 4 }}
+                />
+                OD + distance
+              </label>
+              <label style={{ flex: 1, padding: 4, background: clusterAlgo === 'route_similarity' ? 'rgba(79,195,247,0.2)' : 'transparent', border: '1px solid #333', borderRadius: 3, cursor: 'pointer' }}>
+                <input
+                  type="radio" name="cluster-algo" value="route_similarity"
+                  checked={clusterAlgo === 'route_similarity'}
+                  onChange={() => setClusterAlgo('route_similarity')}
+                  style={{ marginRight: 4 }}
+                />
+                Route similarity (F3)
+              </label>
+            </div>
+
+            {clusterAlgo === 'od_distance' && (
+              <>
+                <p style={styles.desc}>Groups similar trips by OD pattern, distance, and time.</p>
+                <button onClick={loadClusters} style={styles.actionBtn} disabled={loading}>
+                  {loading ? 'Clustering...' : 'Run Clustering'}
+                </button>
+                {clusterResult && (
+                  <div style={styles.results}>
+                    <div>{clusterResult.algorithm}: {clusterResult.num_clusters} clusters</div>
+                    <div>{clusterResult.total_trips} trips, {clusterResult.noise_count} noise</div>
+                    <div style={{ marginTop: 6 }}>
+                      {clusterResult.clusters.slice(0, 8).map(c => (
+                        <div key={c.cluster_id} style={styles.clusterRow}>
+                          <span style={{ ...styles.clusterDot, background: CLUSTER_COLORS[c.cluster_id % CLUSTER_COLORS.length] }} />
+                          C{c.cluster_id}: {c.size} trips, ~{c.centroid.avg_distance_km}km, {Math.round(c.centroid.avg_dep_hour)}h
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {clusterAlgo === 'route_similarity' && (
+              <>
+                <p style={styles.desc}>
+                  Jaccard distance over each trajectory's DRM link_id set. Groups trips
+                  that share infrastructure. Requires trajectory data (waypoints).
+                </p>
+                <div style={{ marginBottom: 4 }}>
+                  <label style={{ fontSize: 10, color: '#aaa' }}>
+                    Sample size: {routeSimSampleSize}
+                  </label>
+                  <input
+                    type="range" min={20} max={2000} step={20}
+                    value={routeSimSampleSize}
+                    onChange={e => setRouteSimSampleSize(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: '#4fc3f7' }}
+                  />
                 </div>
-              </div>
+                <div style={{ marginBottom: 4 }}>
+                  <label style={{ fontSize: 10, color: '#aaa' }}>
+                    eps (Jaccard dist): {routeSimEps.toFixed(2)}
+                  </label>
+                  <input
+                    type="range" min={0.01} max={0.95} step={0.01}
+                    value={routeSimEps}
+                    onChange={e => setRouteSimEps(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: '#4fc3f7' }}
+                  />
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <label style={{ fontSize: 10, color: '#aaa' }}>
+                    min_samples: {routeSimMinSamples}
+                  </label>
+                  <input
+                    type="range" min={2} max={50} value={routeSimMinSamples}
+                    onChange={e => setRouteSimMinSamples(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: '#4fc3f7' }}
+                  />
+                </div>
+                <button onClick={loadRouteSimilarity} style={styles.actionBtn} disabled={routeSimLoading}>
+                  {routeSimLoading ? 'Clustering…' : 'Run Route Similarity'}
+                </button>
+                {routeSimResult && (
+                  <div style={styles.results}>
+                    {routeSimResult.error ? (
+                      <div style={{ color: '#ff7676' }}>Error: {routeSimResult.error}</div>
+                    ) : (
+                      <>
+                        <div>{routeSimResult.algorithm}: {routeSimResult.num_clusters} clusters</div>
+                        <div>{routeSimResult.total_trips} trips, {routeSimResult.noise_count} noise</div>
+                        {routeSimResult.note && (
+                          <div style={{ color: '#aaa', fontSize: 10, marginTop: 4 }}>{routeSimResult.note}</div>
+                        )}
+                        <div style={{ marginTop: 6 }}>
+                          {routeSimResult.clusters.slice(0, 8).map(c => (
+                            <div key={c.cluster_id} style={styles.clusterRow}>
+                              <span style={{ ...styles.clusterDot, background: CLUSTER_COLORS[c.cluster_id % CLUSTER_COLORS.length] }} />
+                              C{c.cluster_id}: {c.size} trips · {c.representative.link_count} links
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -611,6 +967,79 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                 </BarChart>
               </ResponsiveContainer>
             )}
+
+            {/* Multi-stop chains (Sprint A1c — F2 endpoint UI) */}
+            <div style={{ marginTop: 10 }}>
+              <div style={styles.subtitle}>Multi-stop Chains</div>
+              <p style={styles.desc}>
+                Vehicles with ≥ {multiStopMinStops} trips, sorted by chain length.
+                Click a card to expand its trip sequence.
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <label style={{ fontSize: 10, color: '#aaa' }}>
+                  min_stops: {multiStopMinStops}
+                </label>
+                <input
+                  type="range" min={2} max={20} value={multiStopMinStops}
+                  onChange={e => setMultiStopMinStops(Number(e.target.value))}
+                  style={{ flex: 1, accentColor: '#4fc3f7' }}
+                />
+              </div>
+              <button onClick={loadMultiStop} style={styles.actionBtn} disabled={multiStopLoading}>
+                {multiStopLoading ? 'Loading…' : 'Load Multi-stop'}
+              </button>
+              {multiStopVehicles.length > 0 && (
+                <div style={{ fontSize: 10, color: '#888', marginTop: 4 }}>
+                  {multiStopVehicles.length} vehicle(s) returned
+                </div>
+              )}
+              <div style={{ marginTop: 4, maxHeight: 220, overflowY: 'auto' }}>
+                {multiStopVehicles.slice(0, 10).map(v => {
+                  const isOpen = multiStopExpanded === v.vehicle_key;
+                  return (
+                    <div key={v.vehicle_key}
+                         style={{
+                           background: 'rgba(255,255,255,0.04)',
+                           borderRadius: 4,
+                           padding: 5,
+                           marginBottom: 4,
+                           cursor: 'pointer',
+                           fontSize: 11,
+                         }}
+                         onClick={() => setMultiStopExpanded(isOpen ? null : v.vehicle_key)}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ fontFamily: 'monospace' }}>{v.vehicle_key}</span>
+                        <span style={{ color: '#888' }}>{v.chain_length} trips {isOpen ? '▾' : '▸'}</span>
+                      </div>
+                      {isOpen && (
+                        <div style={{ marginTop: 4, fontSize: 10, fontFamily: 'monospace' }}>
+                          {v.trips.map(t => {
+                            const hh = Math.floor(t.starttime / 3600).toString().padStart(2, '0');
+                            const mm = Math.floor((t.starttime % 3600) / 60).toString().padStart(2, '0');
+                            return (
+                              <div key={t.trip_id} style={{ padding: '1px 0', borderBottom: '1px solid #222' }}>
+                                #{t.seq} · {hh}:{mm} · trip {t.trip_id}
+                                {t.distance_km !== null && (
+                                  <span style={{ color: '#888' }}> · {t.distance_km.toFixed(1)} km</span>
+                                )}
+                                {t.goods_type && (
+                                  <span style={{ color: '#888' }}> · {t.goods_type}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {multiStopVehicles.length > 10 && (
+                  <div style={{ color: '#666', padding: '2px 0', fontSize: 10 }}>
+                    … {multiStopVehicles.length - 10} more (showing top 10)
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Dwell times */}
             <div style={{ marginTop: 10 }}>
@@ -751,6 +1180,102 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                 {linkData.links.length > 20 && (
                   <div style={{ color: '#555', fontSize: 10, marginTop: 4, paddingLeft: 14 }}>
                     + {linkData.links.length - 20} more
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Detail Tab (Trajectory Details — Sprint A1a) ── */}
+        {tab === 'detail' && selectedTrajectory && (
+          <TrajectoryDetail
+            trajectory={selectedTrajectory}
+            onClear={onClearSelectedTrajectory}
+          />
+        )}
+
+        {/* ── Zone Tab (Through-zone bbox — Sprint A1b) ── */}
+        {tab === 'zone' && (
+          <div>
+            <div style={styles.subtitle}>Trips Through Zone</div>
+            <p style={styles.desc}>
+              Find trips whose trajectories pass through an axis-aligned
+              bounding box. Backend: <code>/api/analysis/trip-chains/through-zone-bbox</code>.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginBottom: 6 }}>
+              <label style={{ fontSize: 10, color: '#aaa' }}>
+                W (lon min)
+                <input
+                  type="number" step="0.001" value={zoneFormW}
+                  onChange={e => setZoneFormW(e.target.value)}
+                  style={{ width: '100%', background: '#222', color: '#ddd', border: '1px solid #444', padding: 3, fontSize: 11 }}
+                />
+              </label>
+              <label style={{ fontSize: 10, color: '#aaa' }}>
+                S (lat min)
+                <input
+                  type="number" step="0.001" value={zoneFormS}
+                  onChange={e => setZoneFormS(e.target.value)}
+                  style={{ width: '100%', background: '#222', color: '#ddd', border: '1px solid #444', padding: 3, fontSize: 11 }}
+                />
+              </label>
+              <label style={{ fontSize: 10, color: '#aaa' }}>
+                E (lon max)
+                <input
+                  type="number" step="0.001" value={zoneFormE}
+                  onChange={e => setZoneFormE(e.target.value)}
+                  style={{ width: '100%', background: '#222', color: '#ddd', border: '1px solid #444', padding: 3, fontSize: 11 }}
+                />
+              </label>
+              <label style={{ fontSize: 10, color: '#aaa' }}>
+                N (lat max)
+                <input
+                  type="number" step="0.001" value={zoneFormN}
+                  onChange={e => setZoneFormN(e.target.value)}
+                  style={{ width: '100%', background: '#222', color: '#ddd', border: '1px solid #444', padding: 3, fontSize: 11 }}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <button
+                onClick={runZoneQuery}
+                disabled={zoneLoading}
+                style={styles.actionBtn}
+              >
+                {zoneLoading ? 'Searching…' : 'Search'}
+              </button>
+              {(zoneBBox || zoneTrips?.length) && (
+                <button onClick={onClearZone} style={styles.clearBtn}>
+                  Clear
+                </button>
+              )}
+            </div>
+            {zoneError && (
+              <div style={{ fontSize: 11, color: '#ff7676', marginBottom: 6 }}>
+                {zoneError}
+              </div>
+            )}
+            {zoneTrips && zoneTrips.length > 0 && (
+              <div style={{ fontSize: 11, color: '#bbb', marginBottom: 4 }}>
+                {zoneTrips.length} trip(s) found in bbox
+                {zoneTrips.length === 500 && ' (capped at limit=500)'}
+              </div>
+            )}
+            {zoneTrips && zoneTrips.length > 0 && (
+              <div style={{ fontSize: 10, fontFamily: 'monospace', maxHeight: 200, overflowY: 'auto' }}>
+                {zoneTrips.slice(0, 50).map((t, i) => (
+                  <div key={`${t.vehicle_id}-${t.trip_id}-${i}`}
+                       style={{ padding: '1px 0', borderBottom: '1px solid #222' }}>
+                    {t.vehicle_type} #{t.vehicle_id} trip {t.trip_id}
+                    {t.distance_km !== undefined && t.distance_km !== null && (
+                      <span style={{ color: '#888' }}> · {t.distance_km.toFixed(1)} km</span>
+                    )}
+                  </div>
+                ))}
+                {zoneTrips.length > 50 && (
+                  <div style={{ color: '#666', padding: '2px 0' }}>
+                    … {zoneTrips.length - 50} more (showing first 50)
                   </div>
                 )}
               </div>
