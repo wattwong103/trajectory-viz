@@ -144,10 +144,14 @@ def unpack(data: bytes) -> BuildingSet:
     scale = header["scale"]
     olon, olat = header["origin_lon"], header["origin_lat"]
 
-    ring_counts = list(data[off:off + nb]); off += nb
-    vertex_counts = list(struct.unpack_from(f"<{nr}H", data, off)); off += nr * 2
-    heights_dm = list(struct.unpack_from(f"<{nb}H", data, off)); off += nb * 2
-    ring_starts = list(struct.unpack_from(f"<{nr * 2}i", data, off)); off += nr * 8
+    ring_counts = list(data[off:off + nb])
+    off += nb
+    vertex_counts = list(struct.unpack_from(f"<{nr}H", data, off))
+    off += nr * 2
+    heights_dm = list(struct.unpack_from(f"<{nb}H", data, off))
+    off += nb * 2
+    ring_starts = list(struct.unpack_from(f"<{nr * 2}i", data, off))
+    off += nr * 8
     n_deltas = (nv - nr) * 2
     deltas = list(struct.unpack_from(f"<{n_deltas}h", data, off))
 
@@ -164,7 +168,8 @@ def unpack(data: bytes) -> BuildingSet:
             x, y = ring_starts[ring_i * 2], ring_starts[ring_i * 2 + 1]
             ring = [(olon + x * scale, olat + y * scale)]
             for _ in range(nvtx - 1):
-                x += deltas[delta_i]; y += deltas[delta_i + 1]
+                x += deltas[delta_i]
+                y += deltas[delta_i + 1]
                 delta_i += 2
                 ring.append((olon + x * scale, olat + y * scale))
             rings.append(ring)

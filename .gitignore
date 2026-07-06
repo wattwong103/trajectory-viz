@@ -48,6 +48,14 @@ desktop.ini
 *.bak
 /tmp/
 
+# ── Phase 2C/2D generated artifacts ─────────────────────
+# deck.gl vendor bundle (fetch via scripts/fetch_vendor.py; CI caches it)
+scripts/vendor/
+# baked building binaries (regenerate via scripts/build_buildings.py)
+output/viz/buildings/
+# generated single-HTML exports
+exports/
+
 # ── Dropbox conflict files ──────────────────────────────
 *conflicted copy*
 
@@ -58,3 +66,4 @@ desktop.ini
 *edit-log*.txt
 *%date%*
 H[:]Dropbox*
+.e2e_db

@@ -140,16 +140,35 @@ Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-
 **Trips** — `/api/trips/sample`, `POST /api/trips/query` (with F1 dims)
 
 **Trajectories** (DeckGL TripsLayer-ready path + timestamps; F3 segments opt-in via `?include_segments=true`):
-`/api/trajectories/sample`, `POST /api/trajectories/query-bbox`, `POST /api/trajectories/query-point`
+`/api/trajectories/sample`, `POST /api/trajectories/query-bbox`, `POST /api/trajectories/query-point`, **`/api/trajectories/by-vehicle`** (agent playback)
+
+**Agents / sources** — **`/api/trips/vehicles`** (agent search), `sources[]` in `/api/stats/filter-options`
 
 **Analysis**:
 - Temporal: `/departures`, `/peaks`, `/duration`, **`/metrics-distribution`** (F1 histogram)
-- Spatial: `/density-grid`, `/waypoint-density`, `/hotspots`, `/link-density`
+- Spatial: `/density-grid`, `/waypoint-density`, `/hotspots`, `/link-density`, **`/density-hourly`** (pulse heatmap)
 - Trip chains: `/length-distribution`, `/dwell-times`, `/round-trips`, `/commodity-patterns`, **`/through-zone-bbox`** (F2), **`/multi-stop`** (F2)
 - OD: `/od-flows`, `/od-flows/zones`
 - Clustering: `/clustering/status`, `POST /clustering/run`, **`POST /clustering/route-similarity`** (F3)
 
-Bold = v0.2 additions. Full OpenAPI spec served at `/docs` when the backend is running.
+**Buildings** (Phase 2C) — **`/api/buildings`**, **`/api/buildings/{city}`** (baked PBLD binaries)
+
+Bold = v0.2/Phase-2 additions. Full OpenAPI spec served at `/docs` when the backend is running.
+
+---
+
+## Cinematic HTML export (Phase 2D)
+
+Package a scene into **one self-contained, offline HTML file** — animated
+trails, pulse heatmap, 3D buildings, followed agents — to mail to collaborators
+or drop into a deck (no server, zero runtime network):
+
+```bash
+python scripts/fetch_vendor.py --update   # once; pin the deck.gl bundle hash
+viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
+```
+
+See [`docs/EXPORT.md`](docs/EXPORT.md) for the preset schema and size budget.
 
 ---
 

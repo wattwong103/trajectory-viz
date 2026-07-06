@@ -49,6 +49,32 @@ jobs:
           # required, but set it so config.get_pflow_home() never warns.
           PFLOW_HOME: /tmp/fake-pflow-home
 
+      - name: Export CLI smoke (stub vendor, no network)
+        # Builds a synthetic on-disk DB, stubs the deck.gl bundle, runs the
+        # real `viz-export` CLI, and asserts the output has zero external URLs.
+        # The packing/template logic is unit-tested in test_export.py; this
+        # step covers the CLI wiring + preset path end-to-end.
+        run: |
+          mkdir -p scripts/vendor exports
+          printf 'window.deck=window.deck||{};/* ci stub */' > scripts/vendor/deck.gl.min.js
+          python - <<'PY'
+          import duckdb, tempfile
+          from pathlib import Path
+          from tests.test_endpoints import _populate_db
+          tmp = Path(tempfile.mkdtemp()); db = tmp / "ci.duckdb"
+          c = duckdb.connect(str(db)); _populate_db(c, tmp); c.close()
+          Path("exports/.ci_db").write_text(str(db))
+          PY
+          python -m backend.export --db "$(cat exports/.ci_db)" \
+            --vehicle-type truck --n 10 --no-pulse --out exports/ci.html
+          test -s exports/ci.html
+          if grep -Eq 'https?://' exports/ci.html; then
+            echo "ERROR: export contains external URLs" >&2; exit 1
+          fi
+          echo "Export smoke OK ($(wc -c < exports/ci.html) bytes)"
+        env:
+          PFLOW_HOME: /tmp/fake-pflow-home
+
   # ──────────────────────────────────────────────────────────────────────
   # frontend: TypeScript build + (when available) vitest
   # The `npm run build` step is the load-bearing TS gate.

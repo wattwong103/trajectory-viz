@@ -52,6 +52,7 @@ dev = [
 [project.scripts]
 trajectory-viz-ingest = "backend.ingest:main"
 trajectory-viz-serve = "backend.app:serve"
+viz-export = "backend.export:main"
 
 [project.urls]
 Repository = "https://github.com/wattwong103/trajectory-viz"

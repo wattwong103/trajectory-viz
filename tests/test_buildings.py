@@ -62,12 +62,12 @@ def test_pack_unpack_round_trip(sample_set):
     assert len(out.buildings) == 3
     assert out.city == "tokyo"
     assert out.heights_synthesized is False
-    for orig, dec in zip(sample_set.buildings, out.buildings):
+    for orig, dec in zip(sample_set.buildings, out.buildings, strict=True):
         assert len(dec.rings) == len(orig.rings)
         assert dec.height_m == pytest.approx(orig.height_m, abs=0.05)  # dm rounding
-        for r_orig, r_dec in zip(orig.rings, dec.rings):
+        for r_orig, r_dec in zip(orig.rings, dec.rings, strict=True):
             assert len(r_dec) == len(r_orig)
-            for (lon1, lat1), (lon2, lat2) in zip(r_orig, r_dec):
+            for (lon1, lat1), (lon2, lat2) in zip(r_orig, r_dec, strict=True):
                 assert abs(lon1 - lon2) < MAX_ERR_DEG
                 assert abs(lat1 - lat2) < MAX_ERR_DEG
 

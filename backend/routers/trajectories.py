@@ -16,7 +16,13 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
 from ..config import BASE_EPOCH_SEC
-from ..db import get_connection, build_trip_filter
+from ..db import get_connection
+from ..trajectory_queries import (
+    WAYPOINT_COLS as _WAYPOINT_COLS,
+    build_trip_vehicle_keys_subquery as _build_trip_vehicle_keys_subquery,
+    sample_waypoint_rows,
+    waypoint_rows_for_vehicles,
+)
 from ..models import (
     BBoxQuery, PointQuery,
     Trajectory, TrajectoryMetadata, TrajectoryResponse,
@@ -125,35 +131,8 @@ def _rows_to_trajectories(
     return result
 
 
-# Column list used in all waypoint queries.
-# link_id (last) added in Phase 2 Step 2.5 for per-segment annotation.
-_WAYPOINT_COLS = """
-    vehicle_id, trip_id, unix_time_ms, lon, lat,
-    vehicle_type, transport_mode, purpose,
-    goods_type, vehicle_size, passenger_in, fare_yen, vehicle_key, link_id
-"""
-
-
-def _build_trip_vehicle_keys_subquery(
-    vehicle_type: Optional[str],
-    city: Optional[str],
-    simulation_day: Optional[int],
-) -> Optional[str]:
-    """Return a SQL subquery string for vehicle_keys from trips, or None if no filter needed.
-
-    city and simulation_day live on the trips table only (not waypoints).
-    Returns something like:
-        (SELECT DISTINCT vehicle_key FROM trips WHERE city = 'tokyo' AND ...)
-    or None if neither city nor simulation_day is set.
-
-    Uses vehicle_key (not vehicle_id) because vehicle_id collides across taxi
-    cities — Tokyo taxi_id=0 and Osaka taxi_id=0 map to distinct real fleets,
-    whereas vehicle_key 'taxi:tokyo:0' vs 'taxi:osaka:0' are globally unique.
-    """
-    if not city and simulation_day is None:
-        return None
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
-    return f"(SELECT DISTINCT vehicle_key FROM trips {trip_where})"
+# _WAYPOINT_COLS and _build_trip_vehicle_keys_subquery moved to
+# backend/trajectory_queries.py (Phase 2D) — shared with the HTML exporter.
 
 
 @router.get("/trajectories/sample")
@@ -174,34 +153,9 @@ async def sample_trajectories(
     since those columns live on trips (not waypoints).
     """
     conn = get_connection()
-
-    vtype_filter = f"AND vehicle_type = '{vehicle_type}'" if vehicle_type else ""
-    key_subq = _build_trip_vehicle_keys_subquery(vehicle_type, city, simulation_day)
-    city_filter = f"AND vehicle_key IN {key_subq}" if key_subq else ""
-
-    # Step 1: Sample distinct (vehicle_id, trip_id) pairs — filter then sample
-    sampled = conn.execute(f"""
-        SELECT vehicle_id, trip_id
-        FROM (
-            SELECT DISTINCT vehicle_id, trip_id
-            FROM waypoints
-            WHERE 1=1 {vtype_filter} {city_filter}
-        )
-        USING SAMPLE {n}
-    """).fetchall()
-
-    if not sampled:
+    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day)
+    if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
-
-    # Step 2: Fetch all waypoints for sampled trips
-    pairs = ", ".join(f"({s[0]}, {s[1]})" for s in sampled)
-    rows = conn.execute(f"""
-        SELECT {_WAYPOINT_COLS}
-        FROM waypoints
-        WHERE (vehicle_id, trip_id) IN ({pairs})
-        ORDER BY vehicle_id, trip_id, unix_time_ms
-    """).fetchall()
-
     trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
@@ -248,25 +202,7 @@ async def trajectories_by_vehicle(
             )
 
     conn = get_connection()
-
-    placeholders = ", ".join("?" for _ in keys)
-    params: list = list(keys)
-    day_filter = ""
-    if simulation_day is not None:
-        # simulation_day lives on trips, not waypoints — intersect via trip keys.
-        day_filter = """
-          AND vehicle_key IN (
-              SELECT DISTINCT vehicle_key FROM trips WHERE simulation_day = ?
-          )"""
-        params.append(int(simulation_day))
-
-    rows = conn.execute(f"""
-        SELECT {_WAYPOINT_COLS}
-        FROM waypoints
-        WHERE vehicle_key IN ({placeholders}) {day_filter}
-        ORDER BY vehicle_key, trip_id, unix_time_ms
-    """, params).fetchall()
-
+    rows = waypoint_rows_for_vehicles(conn, keys, simulation_day)
     trajectories = _rows_to_trajectories(rows, include_segments=include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 

@@ -1,0 +1,36 @@
+# Cinematic export preset (Phase 2D) — Tokyo taxis over one simulated night.
+#
+#   python scripts/fetch_vendor.py                 # once per machine
+#   viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
+#
+# The export may exceed the app's ≤500-trajectory interactive cap: this is a
+# static file with no per-frame fetch, so ~2000 trails is the cinematic sweet
+# spot. See docs/EXPORT.md.
+
+title: "Tokyo Taxi — One Night"
+
+filters:
+  vehicle_type: taxi
+  city: tokyo
+  simulation_day: 0
+
+sample_n: 2000
+
+# Followed agents render as bright highlight trails + moving markers.
+agents:
+  - "taxi:tokyo:47"
+
+include:
+  buildings: tokyo      # embeds output/viz/buildings/tokyo.bin if present
+  pulse: true           # embeds density_hourly if the aggregate is built
+
+camera:
+  longitude: 139.76
+  latitude: 35.68
+  zoom: 11.5
+  pitch: 55
+  bearing: -15
+
+loop:
+  speed: 120            # sim-seconds per wall-second at default play speed
+  trail_seconds: 1500   # visible trail length
