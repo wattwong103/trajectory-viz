@@ -69,6 +69,10 @@ def _populate_db(conn: duckdb.DuckDBPyConnection, tmp_path: Path) -> None:
         "1001,1,1715817600000,2026-05-16T00:00:00,139.60,35.60,1,1,kibutsu,small,L100\n"
         "1001,1,1715817630000,2026-05-16T00:00:30,139.625,35.61,1,1,kibutsu,small,L101\n"
         "1001,1,1715817660000,2026-05-16T00:01:00,139.65,35.62,1,1,kibutsu,small,L102\n"
+        # Second trip for 1001 (Phase 2A) — /trajectories/by-vehicle must return
+        # the full-day chain (2 trajectories), not just one trip.
+        "1001,2,1715824800000,2026-05-16T02:00:00,139.65,35.62,1,1,kibutsu,small,L103\n"
+        "1001,2,1715824860000,2026-05-16T02:01:00,139.70,35.64,1,1,kibutsu,small,L104\n"
     )
     ingest_source_trajectories(
         conn, truck_wp_csv, "pflow-truck", sources.sources["pflow-truck"]
@@ -242,6 +246,111 @@ def test_trajectories_query_point(client):
     })
     assert r.status_code == 200
     assert "trajectories" in r.json()
+
+
+# --- Trajectories: by-vehicle (Phase 2A agent playback) ----------------------
+
+
+def test_by_vehicle_returns_full_day_chain(client):
+    """truck:1001 has 2 waypoint trips in the fixture — both must come back."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "truck:1001",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 2
+    trip_ids = sorted(t["metadata"]["trip_id"] for t in body["trajectories"])
+    assert trip_ids == [1, 2]
+    for t in body["trajectories"]:
+        assert t["metadata"]["vehicle_key"] == "truck:1001"
+        # include_segments defaults to True on this endpoint
+        assert t["segments"] is not None
+
+
+def test_by_vehicle_multiple_keys(client):
+    """Multiple keys — taxi has no waypoints in fixture, so only truck returns."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "truck:1001,taxi:tokyo:47",
+    })
+    assert r.status_code == 200
+    keys = {t["metadata"]["vehicle_key"] for t in r.json()["trajectories"]}
+    assert keys == {"truck:1001"}
+
+
+def test_by_vehicle_simulation_day_filter(client):
+    """truck:1001's trips are on sim_day=0 — day=1 must return nothing."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "truck:1001", "simulation_day": 1,
+    })
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+
+def test_by_vehicle_rejects_too_many_keys(client):
+    keys = ",".join(f"truck:{i}" for i in range(21))
+    r = client.get("/api/trajectories/by-vehicle", params={"vehicle_keys": keys})
+    assert r.status_code == 422
+
+
+def test_by_vehicle_rejects_malformed_key(client):
+    """Quote-bearing keys must be rejected by the format check, and even if the
+    regex were loosened the query is parameterized — never string-interpolated."""
+    for bad in ("truck:1001'; DROP TABLE trips;--", "UPPER:1", "truck", ""):
+        r = client.get("/api/trajectories/by-vehicle", params={"vehicle_keys": bad})
+        assert r.status_code == 422, f"expected 422 for {bad!r}"
+
+
+# --- Trips: vehicle search (Phase 2A agent search) ---------------------------
+
+
+def test_vehicles_search_prefix(client):
+    r = client.get("/api/trips/vehicles", params={"q": "truck:100"})
+    assert r.status_code == 200
+    body = r.json()
+    keys = {v["vehicle_key"] for v in body["vehicles"]}
+    assert {"truck:1001", "truck:1002", "truck:1003"} <= keys
+    by_key = {v["vehicle_key"]: v for v in body["vehicles"]}
+    assert by_key["truck:1001"]["trip_count"] == 2
+    assert by_key["truck:1001"]["source_id"] == "truck"
+    assert by_key["truck:1001"]["total_km"] == 10.5  # 5.0 + 5.5
+
+
+def test_vehicles_search_respects_filters(client):
+    r = client.get("/api/trips/vehicles", params={"vehicle_type": "taxi"})
+    assert r.status_code == 200
+    for v in r.json()["vehicles"]:
+        assert v["vehicle_key"].startswith("taxi:")
+
+
+def test_vehicles_search_quote_input_is_safe(client):
+    """Free-text q is SQL-parameterized — a quote must not 500 or match."""
+    r = client.get("/api/trips/vehicles", params={"q": "tru'ck"})
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+
+def test_vehicles_search_wildcard_is_literal(client):
+    """LIKE wildcards in q are escaped — '%' must not match everything."""
+    r = client.get("/api/trips/vehicles", params={"q": "%"})
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+
+# --- Stats: filter-options sources (Phase 2A) --------------------------------
+
+
+def test_filter_options_sources(client):
+    """sources[] lists only ingested sources, with render mode/color hints."""
+    body = client.get("/api/stats/filter-options").json()
+    assert "sources" in body
+    by_id = {s["source_id"]: s for s in body["sources"]}
+    # person is declared in sources.yaml but not ingested in the fixture
+    assert set(by_id.keys()) == {"truck", "taxi"}
+    assert by_id["truck"]["mode"] == "trails"
+    assert by_id["truck"]["color"] == [253, 128, 93]
+    assert by_id["truck"]["has_waypoints"] is True
+    assert by_id["taxi"]["has_waypoints"] is False
+    assert by_id["taxi"]["label"] == "Tokyo Taxi"
 
 
 # --- Analysis: temporal -----------------------------------------------------

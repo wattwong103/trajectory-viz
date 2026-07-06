@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 from typing import Optional
 from ..db import get_table_stats, get_connection, build_trip_filter
 from ..models import StatsResponse
+from ..sources_schema import default_sources_path, load_sources
 
 router = APIRouter()
 
@@ -260,4 +261,40 @@ async def filter_options():
         "simulation_days": days,
         "goods_types": goods_types,
         "metrics_available": metrics_available,
+        "sources": _source_styles(conn),
     }
+
+
+def _source_styles(conn) -> list[dict]:
+    """Rendering hints per source (Phase 2A) — powers SourceLegend and the
+    per-source layer split (trails/points/arcs) in MapView.
+
+    Only sources that actually have ingested rows are listed. Degrades to []
+    when sources.yaml is absent (Docker standalone mode ships only the DB).
+    """
+    try:
+        sources_file = load_sources(default_sources_path())
+    except Exception:
+        return []
+
+    ingested = {r[0] for r in conn.execute(
+        "SELECT DISTINCT source_id FROM trips WHERE source_id IS NOT NULL"
+    ).fetchall()}
+    with_waypoints = {r[0] for r in conn.execute(
+        "SELECT DISTINCT source_id FROM waypoints WHERE source_id IS NOT NULL"
+    ).fetchall()}
+
+    styles = []
+    for key, src in sources_file.sources.items():
+        if src.source_id not in ingested:
+            continue
+        render = src.render
+        styles.append({
+            "source_key": key,
+            "source_id": src.source_id,
+            "label": src.label,
+            "mode": render.mode if render else "trails",
+            "color": list(render.color) if render and render.color else None,
+            "has_waypoints": src.source_id in with_waypoints,
+        })
+    return styles

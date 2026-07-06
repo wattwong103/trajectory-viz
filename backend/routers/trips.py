@@ -45,6 +45,62 @@ async def sample(
     return {"trips": trips, "count": len(trips), "total_matching": None}
 
 
+@router.get("/trips/vehicles")
+async def search_vehicles(
+    q: Optional[str] = Query(
+        None, min_length=1, max_length=80,
+        description="vehicle_key prefix, e.g. 'taxi:tokyo:4'. Omit to list top vehicles.",
+    ),
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Agent search (Phase 2A) — vehicles matching a vehicle_key prefix.
+
+    Powers the Agents tab search box. `q` is free user typing, so it is bound
+    as a SQL parameter (prefix LIKE), unlike the regex-guarded filters that go
+    through build_trip_filter.
+    """
+    conn = get_connection()
+    where = build_trip_filter(vehicle_type, city, simulation_day)
+    params: list = []
+    if q:
+        # Escape LIKE wildcards so 'truck:1%' matches literally, then append
+        # the prefix wildcard ourselves.
+        escaped = q.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        prefix_cond = r"vehicle_key LIKE ? || '%' ESCAPE '\'"
+        where = f"{where} AND {prefix_cond}" if where else f"WHERE {prefix_cond}"
+        params.append(escaped)
+    params.append(int(limit))
+
+    rows = conn.execute(f"""
+        SELECT vehicle_key,
+               ANY_VALUE(source_id)         AS source_id,
+               COUNT(*)                     AS trip_count,
+               MIN(starttime)               AS first_start,
+               MAX(starttime)               AS last_end,
+               ROUND(SUM(distance_km), 1)   AS total_km
+        FROM trips {where}
+        GROUP BY vehicle_key
+        ORDER BY trip_count DESC, vehicle_key
+        LIMIT ?
+    """, params).fetchall()
+
+    vehicles = [
+        {
+            "vehicle_key": r[0],
+            "source_id":   r[1],
+            "trip_count":  r[2],
+            "first_start": r[3],
+            "last_end":    r[4],
+            "total_km":    r[5],
+        }
+        for r in rows
+    ]
+    return {"vehicles": vehicles, "count": len(vehicles)}
+
+
 @router.post("/trips/query", response_model=TripResponse)
 async def query(q: TripQuery):
     """Filtered trip query with optional hour/goods_type narrowing."""

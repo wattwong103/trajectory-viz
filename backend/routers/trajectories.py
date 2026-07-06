@@ -10,8 +10,9 @@ for the 24h animation loop (matching traj-mining's 86400-second cycle).
 """
 
 import math
+import re
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
 from ..db import get_connection, build_trip_filter
@@ -202,6 +203,71 @@ async def sample_trajectories(
     """).fetchall()
 
     trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
+    return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
+
+
+# Phase 2A — agent selection. vehicle_key format: '<source>:<rest>' where rest
+# may itself contain ':' (scoped keys like 'taxi:tokyo:47').
+_VEHICLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$")
+_MAX_VEHICLE_KEYS = 20
+
+
+@router.get("/trajectories/by-vehicle")
+async def trajectories_by_vehicle(
+    vehicle_keys: str = Query(
+        ...,
+        description=(
+            "Comma-separated vehicle_key list (1-20 keys), e.g. "
+            "'truck:1001,taxi:tokyo:47'. Returns every trip of each vehicle "
+            "(the full-day chain) for agent-playback."
+        ),
+    ),
+    simulation_day: Optional[int] = Query(None, ge=0),
+    include_segments: bool = Query(True,
+        description="Include per-segment link/speed/dwell (F3)"),
+):
+    """Return all trajectories for the requested vehicles (Phase 2A agent playback).
+
+    Unlike sample/bbox queries this returns the *complete* daily trip chain per
+    vehicle, so the frontend can animate one agent across its whole day.
+
+    vehicle_key values are user-typed (agent search box) — this endpoint uses
+    parameterized SQL, not the regex-guarded f-string pattern used elsewhere.
+    """
+    keys = [k.strip() for k in vehicle_keys.split(",") if k.strip()]
+    if not keys or len(keys) > _MAX_VEHICLE_KEYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"vehicle_keys must contain 1-{_MAX_VEHICLE_KEYS} keys, got {len(keys)}.",
+        )
+    for k in keys:
+        if not _VEHICLE_KEY_RE.match(k):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Malformed vehicle_key: {k!r} (expected '<source>:<id>').",
+            )
+
+    conn = get_connection()
+
+    placeholders = ", ".join("?" for _ in keys)
+    params: list = list(keys)
+    day_filter = ""
+    if simulation_day is not None:
+        # simulation_day lives on trips, not waypoints — intersect via trip keys.
+        day_filter = """
+          AND vehicle_key IN (
+              SELECT DISTINCT vehicle_key FROM trips WHERE simulation_day = ?
+          )"""
+        params.append(int(simulation_day))
+
+    rows = conn.execute(f"""
+        SELECT {_WAYPOINT_COLS}
+        FROM waypoints
+        WHERE vehicle_key IN ({placeholders}) {day_filter}
+        ORDER BY vehicle_key, trip_id, unix_time_ms
+    """, params).fetchall()
+
+    trajectories = _rows_to_trajectories(rows, include_segments=include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 

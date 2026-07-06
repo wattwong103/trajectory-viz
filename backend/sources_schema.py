@@ -94,6 +94,39 @@ class ColumnSpec(BaseModel):
         return self
 
 
+class RenderConfig(BaseModel):
+    """Optional per-source rendering hints for the frontend (Phase 2A).
+
+    `mode` picks the visual treatment:
+      - trails: animated TripsLayer paths (default; trucks/taxis)
+      - points: moving dots at the interpolated position (people)
+      - arcs:   time-windowed OD arcs (trip-only sources with no waypoints)
+    `color` is an RGB triple; when omitted the frontend falls back to its
+    deterministic hash palette.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["trails", "points", "arcs"] = Field(
+        default="trails",
+        description="Visual treatment: trails | points | arcs.",
+    )
+    color: Optional[tuple[int, int, int]] = Field(
+        default=None,
+        description="RGB color triple (0-255 each). Omit for palette fallback.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_color_range(self) -> "RenderConfig":
+        if self.color is not None:
+            for c in self.color:
+                if not (0 <= c <= 255):
+                    raise ValueError(
+                        f"render.color components must be 0-255, got {self.color}."
+                    )
+        return self
+
+
 class ScopeConfig(BaseModel):
     """Optional scope qualifier for sources whose vehicle IDs only make sense
     within a sub-population (e.g. per-city taxi fleets)."""
@@ -182,6 +215,10 @@ class SourceConfig(BaseModel):
         )
     )
     columns: ColumnsConfig
+    render: Optional[RenderConfig] = Field(
+        default=None,
+        description="Optional frontend rendering hints (mode + color).",
+    )
 
     @model_validator(mode="after")
     def _validate_template(self) -> "SourceConfig":
