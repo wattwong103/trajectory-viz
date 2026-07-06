@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routers import stats, trips, trajectories
+from .routers import stats, trips, trajectories, buildings
 from .analysis import temporal, od_flows, spatial, clustering, trip_chains
 
 app = FastAPI(
@@ -37,6 +37,8 @@ app.add_middleware(
 app.include_router(stats.router, prefix="/api", tags=["stats"])
 app.include_router(trips.router, prefix="/api", tags=["trips"])
 app.include_router(trajectories.router, prefix="/api", tags=["trajectories"])
+# Phase 2C: baked 3D buildings
+app.include_router(buildings.router, prefix="/api", tags=["buildings"])
 
 # Phase 2: Analysis
 app.include_router(temporal.router, prefix="/api", tags=["analysis"])

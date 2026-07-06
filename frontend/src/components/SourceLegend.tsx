@@ -30,14 +30,18 @@ function fallbackColor(sourceId: string): [number, number, number] {
 
 interface SourceLegendProps {
   sources: SourceStyle[];
+  // Phase 2C — data-license line (e.g. PLATEAU CC-BY) shown while the
+  // buildings layer is on. Attribution is a license requirement, so the
+  // legend renders whenever it is set, even with < 2 sources.
+  attribution?: string;
 }
 
-export const SourceLegend: React.FC<SourceLegendProps> = ({ sources }) => {
-  if (sources.length < 2) return null;
+export const SourceLegend: React.FC<SourceLegendProps> = ({ sources, attribution }) => {
+  if (sources.length < 2 && !attribution) return null;
 
   return (
     <div style={styles.container}>
-      {sources.map(s => {
+      {sources.length >= 2 && sources.map(s => {
         const c = s.color ?? fallbackColor(s.source_id);
         return (
           <div key={s.source_key} style={styles.row} title={`${s.label} (${s.mode})`}>
@@ -47,6 +51,11 @@ export const SourceLegend: React.FC<SourceLegendProps> = ({ sources }) => {
           </div>
         );
       })}
+      {attribution && (
+        <div style={{ fontSize: 9, color: '#8a94a5', marginTop: 4, maxWidth: 220 }}>
+          {attribution}
+        </div>
+      )}
     </div>
   );
 };

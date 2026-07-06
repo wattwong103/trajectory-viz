@@ -13,8 +13,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import DeckGL from '@deck.gl/react';
-import { FlyToInterpolator } from '@deck.gl/core';
-import { TripsLayer } from '@deck.gl/geo-layers';
+import {
+  FlyToInterpolator, AmbientLight, DirectionalLight, LightingEffect,
+} from '@deck.gl/core';
+import { TripsLayer, MVTLayer } from '@deck.gl/geo-layers';
 import { ScatterplotLayer, ArcLayer, PathLayer, PolygonLayer } from '@deck.gl/layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { Map } from 'react-map-gl/maplibre';
@@ -26,6 +28,21 @@ import type { Trajectory, TripPoint, SourceStyle } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
+import {
+  BUILDING_SOURCES, heightRamp, decodePBLD, type DecodedBuilding,
+} from '../buildings';
+
+// Night-scene lighting (Phase 2C): dim ambient + one directional from NW so
+// extruded walls shade instead of rendering flat. Module-level — shared by
+// every render, never rebuilt.
+const NIGHT_LIGHTING = new LightingEffect({
+  ambient: new AmbientLight({ color: [255, 255, 255], intensity: 0.35 }),
+  directional: new DirectionalLight({
+    color: [255, 255, 255],
+    intensity: 0.9,
+    direction: [-0.55, 0.75, -1],
+  }),
+});
 
 // Night palette for the pulse heatmap (Phase 2B): deep blue → cyan → amber.
 const PULSE_COLOR_RANGE: [number, number, number][] = [
@@ -129,6 +146,8 @@ interface MapViewProps {
   sourceStyles?: SourceStyle[];
   // Phase 2B — pulse heatmap (24 pre-fetched hour buckets)
   pulseData?: HourlyDensity | null;
+  // Phase 2C — which city's building source to use when buildings are on
+  buildingsCity?: string;
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -145,10 +164,64 @@ export const MapView: React.FC<MapViewProps> = ({
   selectedAgents = [],
   sourceStyles = [],
   pulseData = null,
+  buildingsCity = 'tokyo',
   onMapClick,
   onTrajectoryClick,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
+
+  // ── Phase 2C: 3D buildings ────────────────────────────────────────────
+  // The buildings layer lives in its OWN memo, prepended below — an MVTLayer
+  // owns a tile cache, and rebuilding it inside the animated layers memo
+  // (which re-runs every RAF frame via currentTime) would thrash that cache.
+  // Everything else stays in the main memo to preserve layer order exactly.
+  const buildingsOn = !!layerVisibility.buildings;
+  const buildingSource = BUILDING_SOURCES[buildingsCity] ?? null;
+  const [bakedBuildings, setBakedBuildings] = useState<DecodedBuilding[] | null>(null);
+
+  useEffect(() => {
+    if (!buildingsOn || !buildingSource || buildingSource.kind !== 'baked') return;
+    let cancelled = false;
+    fetch(buildingSource.url)
+      .then(r => {
+        if (!r.ok) throw new Error(`buildings fetch: ${r.status}`);
+        return r.arrayBuffer();
+      })
+      .then(buf => { if (!cancelled) setBakedBuildings(decodePBLD(buf).buildings); })
+      .catch(e => console.error('Baked buildings load failed:', e));
+    return () => { cancelled = true; };
+  }, [buildingsOn, buildingSource]);
+
+  const buildingsLayer = useMemo(() => {
+    if (!buildingsOn || !buildingSource) return null;
+    if (buildingSource.kind === 'mvt') {
+      return new MVTLayer({
+        id: 'buildings-3d',
+        data: buildingSource.url,
+        minZoom: buildingSource.minZoom,
+        maxZoom: buildingSource.maxZoom,
+        extruded: true,
+        getElevation: (f: any) => f.properties?.[buildingSource.heightAttr] ?? 12,
+        getFillColor: (f: any) => heightRamp(f.properties?.[buildingSource.heightAttr] ?? 12),
+        opacity: 0.95,
+        pickable: false,
+        material: { ambient: 0.6, diffuse: 0.4, shininess: 40, specularColor: [30, 40, 60] },
+      } as any);
+    }
+    if (!bakedBuildings) return null;
+    return new PolygonLayer<DecodedBuilding>({
+      id: 'buildings-3d',
+      data: bakedBuildings,
+      getPolygon: (d) => d.polygon,
+      extruded: true,
+      getElevation: (d) => d.height,
+      getFillColor: (d) => heightRamp(d.height),
+      opacity: 0.95,
+      stroked: false,
+      pickable: false,
+      material: { ambient: 0.6, diffuse: 0.4, shininess: 40, specularColor: [30, 40, 60] },
+    });
+  }, [buildingsOn, buildingSource, bakedBuildings]);
 
   // Per-source rendering hints keyed by source_id (Phase 2A).
   const styleBySource = useMemo(() => {
@@ -350,6 +423,9 @@ export const MapView: React.FC<MapViewProps> = ({
           opacity: 0.8,
           jointRounded: true,
           capRounded: true,
+          // Phase 2C — trails glow through the extruded city instead of
+          // being occluded (the night-grid look).
+          parameters: buildingsOn ? { depthCompare: 'always' } : {},
           // Sprint A1a — clickable trail; lifts the trajectory to App state.
           pickable: !!onTrajectoryClick,
           onClick: (info: any) => {
@@ -381,6 +457,7 @@ export const MapView: React.FC<MapViewProps> = ({
           opacity: 0.3,
           jointRounded: true,
           capRounded: true,
+          parameters: buildingsOn ? { depthCompare: 'always' } : {},
         }),
       );
       type Dot = { position: [number, number]; vehicle_key: string; source: string };
@@ -538,6 +615,7 @@ export const MapView: React.FC<MapViewProps> = ({
           opacity: 1.0,
           jointRounded: true,
           capRounded: true,
+          parameters: buildingsOn ? { depthCompare: 'always' } : {},
         }),
       );
     }
@@ -564,6 +642,7 @@ export const MapView: React.FC<MapViewProps> = ({
           opacity: 1.0,
           jointRounded: true,
           capRounded: true,
+          parameters: buildingsOn ? { depthCompare: 'always' } : {},
         }),
       );
       // Moving marker at each agent's interpolated position.
@@ -656,7 +735,10 @@ export const MapView: React.FC<MapViewProps> = ({
       viewState={viewState}
       onViewStateChange={(e: any) => setViewState(e.viewState)}
       controller={true}
-      layers={layers}
+      // buildingsLayer is memoized separately (tile cache) and sits at the
+      // very bottom of the stack; deck.gl skips null entries.
+      layers={[buildingsLayer, ...layers]}
+      effects={buildingsOn ? [NIGHT_LIGHTING] : []}
       style={{ width: '100%', height: '100%' }}
       onClick={({ coordinate, object }: any) => {
         // If user clicked an existing object (tooltip shows), don't fire drill

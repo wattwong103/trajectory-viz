@@ -16,6 +16,7 @@ import { FilterPanel } from './components/FilterPanel';
 import { TimeSlider } from './components/TimeSlider';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { SourceLegend } from './components/SourceLegend';
+import { PLATEAU_ATTRIBUTION } from './buildings';
 import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
@@ -127,6 +128,8 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   sourceArcs: true,
   // Phase 2B — animated pulse heatmap (opt-in; needs the density_hourly aggregate)
   pulse: false,
+  // Phase 2C — 3D buildings night scene (opt-in; keeps first paint fast)
+  buildings: false,
 };
 
 export default function App() {
@@ -327,11 +330,15 @@ export default function App() {
         selectedAgents={selectedAgents}
         sourceStyles={filterOptions?.sources ?? []}
         pulseData={pulse.data}
+        buildingsCity={filter.city || 'tokyo'}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
       />
 
-      <SourceLegend sources={filterOptions?.sources ?? []} />
+      <SourceLegend
+        sources={filterOptions?.sources ?? []}
+        attribution={layerVisibility.buildings ? PLATEAU_ATTRIBUTION : undefined}
+      />
 
       {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
       {layerVisibility.pulse && pulse.error && (

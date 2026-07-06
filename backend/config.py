@@ -103,3 +103,17 @@ def get_output_dir() -> Path:
 # ingest.build_density_hourly (pulse-heatmap hour buckets) — the two MUST agree
 # or the pulse would be offset from the trails.
 BASE_EPOCH_SEC = 1601478000
+
+
+def get_buildings_dir() -> Path:
+    """Directory of baked per-city building binaries (Phase 2C).
+
+    Priority:
+      1. PFLOW_VIZ_BUILDINGS_DIR env var
+      2. <viz db dir>/buildings — sits next to pflow.duckdb, so Docker's
+         /data volume mount picks both up together.
+    """
+    env = os.environ.get("PFLOW_VIZ_BUILDINGS_DIR")
+    if env:
+        return Path(env)
+    return get_viz_db_path().parent / "buildings"
