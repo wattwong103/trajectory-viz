@@ -15,6 +15,7 @@ import re
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
+from ..config import BASE_EPOCH_SEC
 from ..db import get_connection, build_trip_filter
 from ..models import (
     BBoxQuery, PointQuery,
@@ -24,9 +25,8 @@ from ..models import (
 
 router = APIRouter()
 
-# Base date anchor used in VehicleTrajectoryGenerator.java: 2020-10-01 00:00:00 JST
-# = 1601478000 seconds since epoch (UTC+9)
-BASE_EPOCH_SEC = 1601478000
+# BASE_EPOCH_SEC (timestamp anchor) now lives in backend/config.py — shared
+# with ingest.build_density_hourly so trails and pulse use identical hour math.
 
 # Idle-speed threshold for F3 dwell markers. Same scale as DETOUR_MIN_HAVERSINE_KM
 # in ingest.py — < 1 km/h means the vehicle moved less than the GPS-noise floor

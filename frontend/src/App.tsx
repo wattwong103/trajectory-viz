@@ -19,6 +19,7 @@ import { SourceLegend } from './components/SourceLegend';
 import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
+import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
@@ -124,6 +125,8 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   // Phase 2A — agent highlight trails + time-windowed arcs for arc-mode sources
   agents: true,
   sourceArcs: true,
+  // Phase 2B — animated pulse heatmap (opt-in; needs the density_hourly aggregate)
+  pulse: false,
 };
 
 export default function App() {
@@ -199,6 +202,11 @@ export default function App() {
 
   const cityCenter: [number, number] | null =
     (filter.city && filterOptions?.city_centers[filter.city]) || null;
+
+  // Phase 2B — pulse heatmap data (fetched once per filter change while on)
+  const pulse = useHourlyDensity(
+    !!layerVisibility.pulse, filter.vehicleType, filter.city,
+  );
 
   // Phase 2/3 overlay state
   const [odFlows, setODFlows] = useState<ODFlow[]>([]);
@@ -318,11 +326,24 @@ export default function App() {
         agentTrajectories={agentTrajectories}
         selectedAgents={selectedAgents}
         sourceStyles={filterOptions?.sources ?? []}
+        pulseData={pulse.data}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
       />
 
       <SourceLegend sources={filterOptions?.sources ?? []} />
+
+      {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
+      {layerVisibility.pulse && pulse.error && (
+        <div style={{
+          position: 'absolute', bottom: 96, right: 12, maxWidth: 320,
+          background: 'rgba(60,20,20,0.9)', border: '1px solid #a55',
+          borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f0c0c0',
+          zIndex: 5,
+        }}>
+          Pulse layer unavailable: {pulse.error}
+        </div>
+      )}
 
       <FilterPanel
         filter={filter}

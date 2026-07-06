@@ -24,7 +24,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
   });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    // Include FastAPI's `detail` when present — e.g. the 409 from
+    // density-hourly tells the user exactly which command to run.
+    let detail = '';
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = ` — ${body.detail}`;
+    } catch { /* non-JSON error body */ }
+    throw new Error(`API error: ${res.status} ${res.statusText}${detail}`);
   }
   return res.json();
 }
@@ -303,6 +310,38 @@ export async function fetchSpatialDensity(
   if (minHour !== undefined) params.set('min_hour', String(minHour));
   if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   return fetchJson(`/api/analysis/spatial/density-grid?${params}`);
+}
+
+// ─── Pulse heatmap (Phase 2B) ─────────────────────────
+
+export interface HourlyDensityBucket {
+  hour: number;
+  points: DensityPoint[];
+}
+
+export interface HourlyDensity {
+  resolution_deg: number;
+  global_max_weight: number;
+  hours: HourlyDensityBucket[];   // exactly 24, indexed by hour
+  total_cells: number;
+  truncated: boolean;
+}
+
+// All 24 hour buckets in one call; the frontend crossfades locally.
+// 409 = density_hourly aggregate not built (run ingest --aggregates-only).
+export async function fetchHourlyDensity(
+  vehicleType?: string,
+  city?: string,
+  resolution: number = 0.005,
+  maxCellsPerHour: number = 15000,
+): Promise<HourlyDensity> {
+  const params = new URLSearchParams({
+    resolution: String(resolution),
+    max_cells_per_hour: String(maxCellsPerHour),
+  });
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  return fetchJson(`/api/analysis/spatial/density-hourly?${params}`);
 }
 
 // ─── Mining (Phase 3) ─────────────────────────────────

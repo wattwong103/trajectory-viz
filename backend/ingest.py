@@ -31,7 +31,7 @@ from typing import Optional
 # Allow running as `python -m backend.ingest` from trajectory-viz/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.config import get_pflow_home, get_viz_db_path, get_output_root
+from backend.config import BASE_EPOCH_SEC, get_pflow_home, get_viz_db_path, get_output_root
 from backend.db import get_connection, reset_db
 from backend.sources_schema import (
     ColumnSpec,
@@ -496,6 +496,55 @@ def compute_derived_metrics(conn) -> dict[str, int]:
     return counts
 
 
+# --- Pulse-heatmap aggregate (Phase 2B) ---------------------------------------
+
+
+# Default grid resolution in degrees for density_hourly (~500m at 35°N).
+# Matches the frontend's default fetch; other resolutions can coexist in the
+# table (the endpoint filters by resolution).
+DENSITY_HOURLY_RESOLUTION = 0.005
+
+
+def build_density_hourly(conn, resolution: float = DENSITY_HOURLY_RESOLUTION) -> int:
+    """Build the hour × grid-cell waypoint-density aggregate (Phase 2B).
+
+    One GROUP BY over the full waypoints table — an ingest-time cost by
+    design (minutes on 233M rows), so /api/analysis/spatial/density-hourly
+    never touches raw waypoints at request time.
+
+    The hour bucket uses the same BASE_EPOCH_SEC mod-86400 math as the
+    trajectory endpoints, so the pulse breathes in sync with the trails.
+    city comes from trips (waypoints don't carry it) via a DISTINCT join on
+    vehicle_key.
+
+    Idempotent per resolution: existing rows at this resolution are replaced.
+    Returns the number of aggregate rows built.
+    """
+    r = float(resolution)
+    conn.execute("DELETE FROM density_hourly WHERE resolution = ?", [r])
+    conn.execute(f"""
+        INSERT INTO density_hourly
+            (source_id, city, hour, grid_lon, grid_lat, weight, resolution)
+        SELECT
+            w.source_id,
+            t.city,
+            CAST(((w.unix_time_ms // 1000 - {int(BASE_EPOCH_SEC)}) % 86400) // 3600 AS INTEGER) AS hour,
+            ROUND(w.lon / {r}) * {r} AS grid_lon,
+            ROUND(w.lat / {r}) * {r} AS grid_lat,
+            COUNT(*) AS weight,
+            {r} AS resolution
+        FROM waypoints w
+        LEFT JOIN (
+            SELECT DISTINCT vehicle_key, city FROM trips
+        ) t USING (vehicle_key)
+        GROUP BY 1, 2, 3, 4, 5
+    """)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM density_hourly WHERE resolution = ?", [r]
+    ).fetchone()
+    return row[0] if row else 0
+
+
 # --- Main orchestration ------------------------------------------------------
 
 
@@ -523,6 +572,14 @@ def main() -> None:
         "--reset", action="store_true",
         help="Drop and recreate all tables before ingesting.",
     )
+    parser.add_argument(
+        "--aggregates-only", action="store_true",
+        help=(
+            "Skip CSV discovery/ingest entirely; (re)build derived aggregates "
+            "(density_hourly for the pulse heatmap) from the existing DB. "
+            "Use after upgrading to Phase 2B without a full re-ingest."
+        ),
+    )
     args = parser.parse_args()
 
     # Apply CLI overrides to env before config functions are called.
@@ -532,6 +589,17 @@ def main() -> None:
         os.environ["PFLOW_VIZ_DB"] = args.db_path
     if args.output_root:
         os.environ["PFLOW_VIZ_OUTPUT_ROOT"] = args.output_root
+
+    # --aggregates-only: rebuild density_hourly from the existing DB and exit.
+    # No sources.yaml or output tree needed — works in standalone-DB mode too.
+    if args.aggregates_only:
+        conn = get_connection()
+        n_waypoints = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
+        print(f"[AGGREGATES] Building density_hourly from {n_waypoints:,} waypoints...")
+        t = time.time()
+        n = build_density_hourly(conn)
+        print(f"[AGGREGATES] density_hourly: {n:,} rows in {time.time()-t:.1f}s")
+        return
 
     sources_path = Path(args.sources) if args.sources else default_sources_path()
     sources = load_sources(sources_path)
@@ -667,6 +735,17 @@ def main() -> None:
         except Exception as e:
             print(f"[DERIVED] ERROR: {type(e).__name__}: {e}")
             errors.append(("(compute_derived_metrics)", "trips", f"{type(e).__name__}: {e}"))
+
+    # ------- Pulse-heatmap aggregate (Phase 2B) -------
+    if total_waypoints > 0:
+        print(f"\n[AGGREGATES] Building density_hourly (pulse heatmap)...")
+        t = time.time()
+        try:
+            n = build_density_hourly(conn)
+            print(f"[AGGREGATES] density_hourly: {n:,} rows in {time.time()-t:.1f}s")
+        except Exception as e:
+            print(f"[AGGREGATES] ERROR: {type(e).__name__}: {e}")
+            errors.append(("(build_density_hourly)", "density_hourly", f"{type(e).__name__}: {e}"))
 
     elapsed = time.time() - start
     print(f"\n{'=' * 64}")

@@ -23,9 +23,15 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { DataFilterExtension } from '@deck.gl/extensions';
 
 import type { Trajectory, TripPoint, SourceStyle } from '../types';
-import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from '../api';
+import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
 import type { LayerVisibility } from '../App';
-import { positionAtTime } from '../utils/interpolate';
+import { positionAtTime, hourPhase } from '../utils/interpolate';
+
+// Night palette for the pulse heatmap (Phase 2B): deep blue → cyan → amber.
+const PULSE_COLOR_RANGE: [number, number, number][] = [
+  [14, 18, 38], [22, 62, 110], [24, 130, 170],
+  [60, 220, 255], [255, 190, 80], [255, 240, 180],
+];
 
 // Tokyo center — primary PFLOW data region
 const INITIAL_VIEW = {
@@ -121,6 +127,8 @@ interface MapViewProps {
   agentTrajectories?: Trajectory[];
   selectedAgents?: string[];
   sourceStyles?: SourceStyle[];
+  // Phase 2B — pulse heatmap (24 pre-fetched hour buckets)
+  pulseData?: HourlyDensity | null;
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -136,6 +144,7 @@ export const MapView: React.FC<MapViewProps> = ({
   agentTrajectories = [],
   selectedAgents = [],
   sourceStyles = [],
+  pulseData = null,
   onMapClick,
   onTrajectoryClick,
 }) => {
@@ -166,6 +175,39 @@ export const MapView: React.FC<MapViewProps> = ({
 
   const layers = useMemo(() => {
     const result: any[] = [];
+
+    // Layer 0 (Phase 2B): pulse heatmap — two HeatmapLayers crossfading
+    // between adjacent hour buckets. Between hour boundaries only the two
+    // opacity values change per frame (GPU uniforms); the point arrays are
+    // stable references from the single pre-fetched response, so the layers
+    // re-aggregate just 24× per animation loop, not per frame.
+    if (layerVisibility.pulse && pulseData && pulseData.global_max_weight > 0) {
+      const { hour, nextHour, f } = hourPhase(currentTime);
+      const norm = pulseData.global_max_weight;
+      const common = {
+        getPosition: (d: DensityPoint) => [d.lon, d.lat] as [number, number],
+        getWeight: (d: DensityPoint) => d.weight / norm,
+        radiusPixels: 40,
+        colorRange: PULSE_COLOR_RANGE,
+        intensity: 1.2,
+        threshold: 0.02,
+        aggregation: 'SUM' as const,
+      };
+      result.push(
+        new HeatmapLayer({
+          id: 'pulse-a',
+          data: pulseData.hours[hour].points,
+          opacity: 0.75 * (1 - f),
+          ...common,
+        }),
+        new HeatmapLayer({
+          id: 'pulse-b',
+          data: pulseData.hours[nextHour].points,
+          opacity: 0.75 * f,
+          ...common,
+        }),
+      );
+    }
 
     // Layer 1: Spatial density heatmap (below everything else)
     if (layerVisibility.density && densityPoints.length > 0) {
@@ -606,6 +648,7 @@ export const MapView: React.FC<MapViewProps> = ({
     drillTrajectories, drillPoint, zoneBBox,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
+    pulseData,
   ]);
 
   return (

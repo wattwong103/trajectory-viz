@@ -40,6 +40,10 @@ const LAYER_LABELS: Array<{ key: string; label: string }> = [
   // F3 overlays (Phase 2 Step 2.7) — segments[] must be populated upstream
   { key: 'speedSegments', label: 'Speed gradient (F3)' },
   { key: 'dwellMarkers',  label: 'Dwell markers (F3)' },
+  // Phase 2A/2B overlays
+  { key: 'agents',        label: 'Agent highlights' },
+  { key: 'sourceArcs',    label: 'O-D arcs (trip-only sources)' },
+  { key: 'pulse',         label: '◉ Pulse (hourly density)' },
 ];
 
 /** Relabel EMPTY goods type for display; sort EMPTY last */

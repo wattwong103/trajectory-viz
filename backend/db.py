@@ -104,6 +104,21 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             except Exception:
                 pass  # already exists; safe to ignore
 
+    # Phase 2B — pulse heatmap aggregate. Built at ingest time (or via
+    # `python -m backend.ingest --aggregates-only`) from the 233M-row
+    # waypoints table; request-time queries read ONLY this table.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS density_hourly (
+            source_id  VARCHAR,
+            city       VARCHAR,
+            hour       INTEGER NOT NULL,
+            grid_lon   DOUBLE  NOT NULL,
+            grid_lat   DOUBLE  NOT NULL,
+            weight     BIGINT  NOT NULL,
+            resolution DOUBLE  NOT NULL
+        )
+    """)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS validation_runs (
             run_id         VARCHAR NOT NULL,
@@ -153,6 +168,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_waypoints_lonlat      ON waypoints(lon, lat)",
         # validation
         "CREATE INDEX IF NOT EXISTS idx_validation_run_id ON validation_runs(run_id)",
+        # pulse heatmap aggregate (Phase 2B)
+        "CREATE INDEX IF NOT EXISTS idx_density_hourly ON density_hourly(source_id, city, hour)",
     ]
     for stmt in _index_statements:
         conn.execute(stmt)
@@ -165,6 +182,7 @@ def reset_db() -> None:
     conn.execute("DROP TABLE IF EXISTS trips")
     conn.execute("DROP TABLE IF EXISTS validation_runs")
     conn.execute("DROP TABLE IF EXISTS ingest_log")
+    conn.execute("DROP TABLE IF EXISTS density_hourly")
     _init_schema(conn)
 
 

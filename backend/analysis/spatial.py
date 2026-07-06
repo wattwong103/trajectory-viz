@@ -8,11 +8,98 @@ finer resolution.
 Results feed DeckGL HeatmapLayer and HexagonLayer.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from ..db import get_connection, build_trip_filter
 
 router = APIRouter()
+
+
+@router.get("/analysis/spatial/density-hourly")
+async def density_hourly(
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    resolution: float = Query(0.005, ge=0.001, le=0.1,
+                              description="Grid resolution in degrees (must match a built aggregate)"),
+    max_cells_per_hour: int = Query(15000, ge=100, le=50000),
+):
+    """Hour-binned waypoint density for the animated pulse heatmap (Phase 2B).
+
+    Returns all 24 hour buckets in one response — the frontend holds them and
+    crossfades between adjacent hours as the time slider runs, never
+    refetching during animation.
+
+    Reads ONLY the precomputed density_hourly aggregate (built at ingest or
+    via `python -m backend.ingest --aggregates-only`). It never falls back to
+    GROUP-BYing the 233M-row waypoints table at request time — that would
+    blow the 1s analysis budget — so an empty aggregate is a 409 with the fix.
+    """
+    conn = get_connection()
+
+    built = conn.execute(
+        "SELECT COUNT(*) FROM density_hourly WHERE resolution = ?", [float(resolution)]
+    ).fetchone()[0]
+    if built == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"density_hourly not built at resolution {resolution} — run: "
+                f"python -m backend.ingest --aggregates-only"
+            ),
+        )
+
+    conds = ["resolution = ?"]
+    params: list = [float(resolution)]
+    if vehicle_type:
+        conds.append("source_id = ?")
+        params.append(vehicle_type)
+    if city:
+        conds.append("city = ?")
+        params.append(city)
+    where = " AND ".join(conds)
+
+    # Cells can repeat across (source_id, city) when no filter is set —
+    # re-aggregate, then keep the top-N per hour by weight.
+    rows = conn.execute(f"""
+        WITH filtered AS (
+            SELECT hour, grid_lon, grid_lat, SUM(weight) AS weight
+            FROM density_hourly
+            WHERE {where}
+            GROUP BY hour, grid_lon, grid_lat
+        ),
+        ranked AS (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY hour ORDER BY weight DESC
+            ) AS rn
+            FROM filtered
+        )
+        SELECT hour, grid_lon, grid_lat, weight
+        FROM ranked
+        WHERE rn <= ?
+        ORDER BY hour, weight DESC
+    """, params + [int(max_cells_per_hour)]).fetchall()
+
+    total = conn.execute(f"""
+        SELECT COUNT(*) FROM (
+            SELECT 1 FROM density_hourly WHERE {where}
+            GROUP BY hour, grid_lon, grid_lat
+        )
+    """, params).fetchone()[0]
+
+    hours: list[dict] = [{"hour": h, "points": []} for h in range(24)]
+    global_max = 0
+    for hour, lon, lat, weight in rows:
+        hours[int(hour)]["points"].append({"lon": lon, "lat": lat, "weight": weight})
+        if weight > global_max:
+            global_max = weight
+
+    return {
+        "resolution_deg": resolution,
+        "global_max_weight": global_max,
+        "hours": hours,
+        "total_cells": total,
+        "truncated": len(rows) < total,
+    }
 
 
 @router.get("/analysis/spatial/density-grid")

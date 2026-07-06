@@ -27,6 +27,7 @@ import backend.db  # noqa: E402  — we need to monkey-patch its singleton
 from backend.app import app  # noqa: E402
 from backend.db import _init_schema  # noqa: E402
 from backend.ingest import (  # noqa: E402
+    build_density_hourly,
     compute_derived_metrics,
     ingest_source_trajectories,
     ingest_source_trips,
@@ -93,6 +94,9 @@ def _populate_db(conn: duckdb.DuckDBPyConnection, tmp_path: Path) -> None:
 
     # Compute F1 derived columns
     compute_derived_metrics(conn)
+
+    # Phase 2B — pulse-heatmap aggregate (default 0.005° resolution)
+    build_density_hourly(conn)
 
 
 @pytest.fixture(scope="session")
@@ -416,6 +420,62 @@ def test_spatial_link_density(client):
     r = client.get("/api/analysis/spatial/link-density", params={"min_waypoints": 1})
     assert r.status_code == 200
     assert "links" in r.json()
+
+
+# --- Analysis: density-hourly (Phase 2B pulse heatmap) ------------------------
+
+
+def test_density_hourly_returns_24_buckets(client):
+    r = client.get("/api/analysis/spatial/density-hourly")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["hours"]) == 24
+    assert [h["hour"] for h in body["hours"]] == list(range(24))
+    assert body["resolution_deg"] == 0.005
+    assert body["global_max_weight"] >= 1
+
+
+def test_density_hourly_matches_trajectory_hour_math(client):
+    """The pulse must breathe in sync with the trails: a waypoint's density
+    hour bucket == floor(trajectory timestamp / 3600) for the same waypoint."""
+    traj = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "truck:1001",
+    }).json()["trajectories"]
+    expected_hours = {ts // 3600 for t in traj for ts in t["timestamps"]}
+
+    body = client.get("/api/analysis/spatial/density-hourly", params={
+        "vehicle_type": "truck",
+    }).json()
+    density_hours = {h["hour"] for h in body["hours"] if h["points"]}
+    assert expected_hours == density_hours
+
+
+def test_density_hourly_weights_sum_to_waypoint_count(client):
+    """5 truck waypoints in the fixture → total weight 5."""
+    body = client.get("/api/analysis/spatial/density-hourly", params={
+        "vehicle_type": "truck",
+    }).json()
+    total_weight = sum(p["weight"] for h in body["hours"] for p in h["points"])
+    assert total_weight == 5
+
+
+def test_density_hourly_409_when_not_built(client):
+    """A resolution with no aggregate rows must 409 with the fix command —
+    never fall back to GROUP-BYing raw waypoints at request time."""
+    r = client.get("/api/analysis/spatial/density-hourly", params={
+        "resolution": 0.05,
+    })
+    assert r.status_code == 409
+    assert "--aggregates-only" in r.json()["detail"]
+
+
+def test_density_hourly_source_filter(client):
+    """Taxi has no waypoints in the fixture → empty buckets, zero max."""
+    body = client.get("/api/analysis/spatial/density-hourly", params={
+        "vehicle_type": "taxi",
+    }).json()
+    assert all(len(h["points"]) == 0 for h in body["hours"])
+    assert body["global_max_weight"] == 0
 
 
 # --- Analysis: OD flows -----------------------------------------------------

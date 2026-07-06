@@ -94,3 +94,12 @@ def get_output_root() -> Path:
 def get_output_dir() -> Path:
     """Alias for get_output_root() — retained for back-compat."""
     return get_output_root()
+
+
+# Base date anchor used in VehicleTrajectoryGenerator.java: 2020-10-01 00:00:00
+# JST = 1601478000 seconds since epoch (UTC+9). Waypoint unix_time_ms values
+# convert to seconds-from-midnight via (unix_time_ms/1000 - BASE_EPOCH_SEC) % 86400.
+# Shared by routers/trajectories.py (animation timestamps) and
+# ingest.build_density_hourly (pulse-heatmap hour buckets) — the two MUST agree
+# or the pulse would be offset from the trails.
+BASE_EPOCH_SEC = 1601478000
