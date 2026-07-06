@@ -20,9 +20,12 @@ import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { Map } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import type { Trajectory, TripPoint } from '../types';
+import { DataFilterExtension } from '@deck.gl/extensions';
+
+import type { Trajectory, TripPoint, SourceStyle } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from '../api';
 import type { LayerVisibility } from '../App';
+import { positionAtTime } from '../utils/interpolate';
 
 // Tokyo center — primary PFLOW data region
 const INITIAL_VIEW = {
@@ -87,6 +90,18 @@ const CLUSTER_COLORS: [number, number, number][] = [
   [243, 156, 18], [233, 30, 99],
 ];
 
+// Phase 2A — highlight palette for followed agents, indexed by the agent's
+// position in selectedAgents. Bright, high-contrast against dimmed trails.
+const AGENT_COLORS: [number, number, number][] = [
+  [255, 230, 100], [0, 255, 200], [255, 105, 180], [130, 200, 255],
+  [255, 160, 40], [190, 130, 255], [120, 255, 120], [255, 90, 90],
+];
+
+// Time window (seconds each side of the clock) for arc-mode sources — trips
+// departing within ±30 min of currentTime show as arcs.
+const ARC_WINDOW_SEC = 1800;
+const arcTimeFilter = new DataFilterExtension({ filterSize: 1 });
+
 interface MapViewProps {
   trajectories: Trajectory[];
   trips: TripPoint[];
@@ -102,6 +117,10 @@ interface MapViewProps {
   // Sprint A1b: through-zone bbox rendered as a translucent yellow PolygonLayer
   zoneBBox?: { w: number; s: number; e: number; n: number } | null;
   layerVisibility: LayerVisibility;
+  // Phase 2A — agent selection & per-source rendering
+  agentTrajectories?: Trajectory[];
+  selectedAgents?: string[];
+  sourceStyles?: SourceStyle[];
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -114,10 +133,23 @@ export const MapView: React.FC<MapViewProps> = ({
   drillTrajectories, drillPoint,
   zoneBBox,
   layerVisibility,
+  agentTrajectories = [],
+  selectedAgents = [],
+  sourceStyles = [],
   onMapClick,
   onTrajectoryClick,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
+
+  // Per-source rendering hints keyed by source_id (Phase 2A).
+  const styleBySource = useMemo(() => {
+    const m: Record<string, SourceStyle> = {};
+    for (const s of sourceStyles) m[s.source_id] = s;
+    return m;
+  }, [sourceStyles]);
+
+  const colorFor = (vehicleType: string): [number, number, number] =>
+    styleBySource[vehicleType]?.color ?? getTrailColor(vehicleType);
 
   useEffect(() => {
     if (cityCenter) {
@@ -246,15 +278,30 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 3: Animated trajectories
-    if (layerVisibility.trajectories && trajectories.length > 0) {
+    // Layer 3: Animated trajectories.
+    // Phase 2A splits by render mode: 'points' sources (people) become moving
+    // dots + a faint short trail; everything else stays a full TripsLayer
+    // trail. When agents are followed, background layers dim to alpha 40.
+    const dimmed = selectedAgents.length > 0;
+    const trailTrajs = trajectories.filter(
+      t => styleBySource[t.metadata.vehicle_type]?.mode !== 'points',
+    );
+    const pointTrajs = trajectories.filter(
+      t => styleBySource[t.metadata.vehicle_type]?.mode === 'points',
+    );
+
+    if (layerVisibility.trajectories && trailTrajs.length > 0) {
       result.push(
         new TripsLayer<Trajectory>({
           id: 'trajectories',
-          data: trajectories,
+          data: trailTrajs,
           getPath: (d: Trajectory) => d.path,
           getTimestamps: (d: Trajectory) => d.timestamps,
-          getColor: (d: Trajectory) => getTrailColor(d.metadata.vehicle_type),
+          getColor: (d: Trajectory) => {
+            const c = colorFor(d.metadata.vehicle_type);
+            return dimmed ? [c[0], c[1], c[2], 40] : c;
+          },
+          updateTriggers: { getColor: [dimmed, sourceStyles] },
           currentTime,
           trailLength,
           widthMinPixels: 2,
@@ -270,6 +317,53 @@ export const MapView: React.FC<MapViewProps> = ({
           },
         }),
       );
+    }
+
+    // Layer 3a-2 (Phase 2A): 'points' sources — faint short trail + moving dot
+    // at the interpolated position (people read as walkers, not streaks).
+    if (layerVisibility.trajectories && pointTrajs.length > 0) {
+      result.push(
+        new TripsLayer<Trajectory>({
+          id: 'population-trails',
+          data: pointTrajs,
+          getPath: (d: Trajectory) => d.path,
+          getTimestamps: (d: Trajectory) => d.timestamps,
+          getColor: (d: Trajectory) => {
+            const c = colorFor(d.metadata.vehicle_type);
+            return [c[0], c[1], c[2], dimmed ? 20 : 80];
+          },
+          updateTriggers: { getColor: [dimmed, sourceStyles] },
+          currentTime,
+          trailLength: Math.min(trailLength, 300),
+          widthMinPixels: 1,
+          opacity: 0.3,
+          jointRounded: true,
+          capRounded: true,
+        }),
+      );
+      type Dot = { position: [number, number]; vehicle_key: string; source: string };
+      const dots: Dot[] = [];
+      for (const t of pointTrajs) {
+        const p = positionAtTime(t, currentTime);
+        if (p) dots.push({ position: p, vehicle_key: t.metadata.vehicle_key, source: t.metadata.vehicle_type });
+      }
+      if (dots.length > 0) {
+        result.push(
+          new ScatterplotLayer<Dot>({
+            id: 'population-dots',
+            data: dots,
+            getPosition: (d) => d.position,
+            getFillColor: (d) => {
+              const c = colorFor(d.source);
+              return [c[0], c[1], c[2], dimmed ? 60 : 230];
+            },
+            getRadius: 25,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 6,
+            pickable: true,
+          }),
+        );
+      }
     }
 
     // Layer 3b: Trip origins
@@ -304,6 +398,43 @@ export const MapView: React.FC<MapViewProps> = ({
           pickable: true,
         }),
       );
+    }
+
+    // Layer 3d (Phase 2A): time-windowed arcs for 'arcs' render-mode sources
+    // (trip-only populations with no waypoints). DataFilterExtension applies
+    // the ±30 min window as a GPU uniform — no per-frame data re-upload.
+    if (layerVisibility.sourceArcs !== false) {
+      const arcTrips = trips.filter(
+        d => styleBySource[d.vehicle_type]?.mode === 'arcs',
+      );
+      if (arcTrips.length > 0) {
+        result.push(
+          new ArcLayer<TripPoint>({
+            id: 'source-arcs',
+            data: arcTrips,
+            getSourcePosition: (d: TripPoint) => [d.start_lon, d.start_lat],
+            getTargetPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
+            getSourceColor: (d: TripPoint) => {
+              const c = colorFor(d.vehicle_type);
+              return [c[0], c[1], c[2], dimmed ? 40 : 200];
+            },
+            getTargetColor: (d: TripPoint) => {
+              const c = colorFor(d.vehicle_type);
+              return [c[0], c[1], c[2], dimmed ? 20 : 90];
+            },
+            updateTriggers: { getSourceColor: [dimmed, sourceStyles], getTargetColor: [dimmed, sourceStyles] },
+            getWidth: 2,
+            widthMinPixels: 1,
+            widthMaxPixels: 5,
+            opacity: 0.7,
+            // GPU time filter: uniform update per frame, zero re-upload.
+            getFilterValue: (d: TripPoint) => d.starttime,
+            filterRange: [currentTime - ARC_WINDOW_SEC, currentTime + ARC_WINDOW_SEC],
+            extensions: [arcTimeFilter],
+            pickable: true,
+          } as any),
+        );
+      }
     }
 
     // Layer 4: OD Flow arcs (Phase 2)
@@ -369,6 +500,61 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
+    // Layer 6b (Phase 2A): followed-agent trails — full-day chain per agent,
+    // bright highlight color by selection index, rendered above everything
+    // that dims.
+    if (layerVisibility.agents !== false && agentTrajectories.length > 0) {
+      const agentColor = (key: string): [number, number, number] => {
+        const idx = selectedAgents.indexOf(key);
+        return AGENT_COLORS[(idx >= 0 ? idx : 0) % AGENT_COLORS.length];
+      };
+      result.push(
+        new TripsLayer<Trajectory>({
+          id: 'agent-trails',
+          data: agentTrajectories,
+          getPath: (d: Trajectory) => d.path,
+          getTimestamps: (d: Trajectory) => d.timestamps,
+          getColor: (d: Trajectory) => agentColor(d.metadata.vehicle_key),
+          updateTriggers: { getColor: [selectedAgents] },
+          currentTime,
+          trailLength,
+          widthMinPixels: 4,
+          opacity: 1.0,
+          jointRounded: true,
+          capRounded: true,
+        }),
+      );
+      // Moving marker at each agent's interpolated position.
+      type Marker = { position: [number, number]; vehicle_key: string; timeLabel: string };
+      const hh = String(Math.floor(currentTime / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((currentTime % 3600) / 60)).padStart(2, '0');
+      const markers: Marker[] = [];
+      for (const t of agentTrajectories) {
+        const p = positionAtTime(t, currentTime);
+        if (p) markers.push({ position: p, vehicle_key: t.metadata.vehicle_key, timeLabel: `${hh}:${mm}` });
+      }
+      if (markers.length > 0) {
+        result.push(
+          new ScatterplotLayer<Marker>({
+            id: 'agent-markers',
+            data: markers,
+            getPosition: (d) => d.position,
+            getFillColor: (d) => {
+              const c = agentColor(d.vehicle_key);
+              return [c[0], c[1], c[2], 255];
+            },
+            getRadius: 60,
+            radiusMinPixels: 5,
+            radiusMaxPixels: 14,
+            stroked: true,
+            getLineColor: [255, 255, 255, 230],
+            lineWidthMinPixels: 2,
+            pickable: true,
+          }),
+        );
+      }
+    }
+
     // Layer 7: Drill click-point ring marker
     if (drillPoint) {
       result.push(
@@ -419,6 +605,7 @@ export const MapView: React.FC<MapViewProps> = ({
     odFlows, densityPoints, clusterResult, linkDensityPoints,
     drillTrajectories, drillPoint, zoneBBox,
     layerVisibility,
+    agentTrajectories, selectedAgents, styleBySource, sourceStyles,
   ]);
 
   return (
@@ -463,6 +650,14 @@ export const MapView: React.FC<MapViewProps> = ({
         if ('clusterId' in object) {
           return {
             text: `Cluster ${object.clusterId}: ${object.size} trips`,
+          };
+        }
+        // Agent marker / population dot tooltip (Phase 2A)
+        if ('vehicle_key' in object && 'position' in object) {
+          return {
+            text: 'timeLabel' in object
+              ? `${object.vehicle_key} · ${object.timeLabel}`
+              : `${object.vehicle_key}`,
           };
         }
         // Trajectory hover (Sprint A1a) — distinct shape: path + metadata

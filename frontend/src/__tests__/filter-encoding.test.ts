@@ -157,3 +157,59 @@ describe('filter hash encoding', () => {
     expect(encodeHash(DEFAULT_FILTER)).toBe('');
   });
 });
+
+// ── Agent-selection hash (Phase 2A) ────────────────────────────────────────
+// Mirror of App.tsx's encodeAgents/decodeAgents (same convention as above:
+// a shape change in App.tsx must break this test).
+
+const MAX_AGENTS = 8;
+const AGENT_KEY_RE = /^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$/;
+
+function encodeAgents(agents: string[]): string {
+  if (agents.length === 0) return '';
+  return `ag=${encodeURIComponent(agents.join(','))}`;
+}
+
+function decodeAgents(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const ag = new URLSearchParams(raw).get('ag');
+  if (!ag) return [];
+  return decodeURIComponent(ag)
+    .split(',')
+    .map(k => k.trim())
+    .filter(k => AGENT_KEY_RE.test(k))
+    .slice(0, MAX_AGENTS);
+}
+
+describe('agent-selection hash encoding (Phase 2A)', () => {
+  it('round-trips a selection', () => {
+    const agents = ['truck:1001', 'taxi:tokyo:47'];
+    expect(decodeAgents('#' + encodeAgents(agents))).toEqual(agents);
+  });
+
+  it('encodes nothing for an empty selection', () => {
+    expect(encodeAgents([])).toBe('');
+  });
+
+  it('coexists with filter keys in the same hash', () => {
+    const hash = '#vt=taxi&' + encodeAgents(['taxi:tokyo:47']);
+    expect(decodeHash(hash).vehicleType).toBe('taxi');
+    expect(decodeAgents(hash)).toEqual(['taxi:tokyo:47']);
+  });
+
+  it('caps at MAX_AGENTS on decode', () => {
+    const many = Array.from({ length: 12 }, (_, i) => `truck:${i}`);
+    expect(decodeAgents('#' + encodeAgents(many))).toHaveLength(MAX_AGENTS);
+  });
+
+  it('drops malformed keys (defends against URL injection)', () => {
+    const hash = '#ag=' + encodeURIComponent("truck:1001,'; DROP TABLE--,UPPER:1,taxi:tokyo:47");
+    expect(decodeAgents(hash)).toEqual(['truck:1001', 'taxi:tokyo:47']);
+  });
+
+  it('decodes empty for hashes without ag=', () => {
+    expect(decodeAgents('#vt=truck')).toEqual([]);
+    expect(decodeAgents('')).toEqual([]);
+  });
+});

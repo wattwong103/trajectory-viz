@@ -15,10 +15,11 @@ import { MapView } from './components/MapView';
 import { FilterPanel } from './components/FilterPanel';
 import { TimeSlider } from './components/TimeSlider';
 import { AnalysisPanel } from './components/AnalysisPanel';
+import { SourceLegend } from './components/SourceLegend';
 import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
-import { fetchFilterOptions, queryTrajectoriesPoint } from './api';
+import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
@@ -78,6 +79,32 @@ function decodeHash(hash: string): FilterState {
   };
 }
 
+// ─── Agent-selection hash encoding (Phase 2A) ─────────────
+// Followed agents ride the same URL hash as filters under the `ag=` key so a
+// pasted link restores the whole scene. Kept separate from FilterState — the
+// selection must survive filter changes without retriggering useTrajectories.
+
+const MAX_AGENTS = 8;
+// Mirrors the backend's by-vehicle key validation (routers/trajectories.py).
+const AGENT_KEY_RE = /^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$/;
+
+function encodeAgents(agents: string[]): string {
+  if (agents.length === 0) return '';
+  return `ag=${encodeURIComponent(agents.join(','))}`;
+}
+
+function decodeAgents(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const ag = new URLSearchParams(raw).get('ag');
+  if (!ag) return [];
+  return decodeURIComponent(ag)
+    .split(',')
+    .map(k => k.trim())
+    .filter(k => AGENT_KEY_RE.test(k))
+    .slice(0, MAX_AGENTS);
+}
+
 // ─── Layer visibility defaults ────────────────────────────
 
 export type LayerVisibility = Record<string, boolean>;
@@ -94,6 +121,9 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   // Phase 2 Step 2.7 F3 layers — default off (overlap with the main trail).
   speedSegments: false,
   dwellMarkers: false,
+  // Phase 2A — agent highlight trails + time-windowed arcs for arc-mode sources
+  agents: true,
+  sourceArcs: true,
 };
 
 export default function App() {
@@ -111,6 +141,15 @@ export default function App() {
   // Sprint A1a: surfaces the segments[] data F3 already attaches.
   const [selectedTrajectory, setSelectedTrajectory] = useState<Trajectory | null>(null);
 
+  // Phase 2A — followed agents (vehicle_keys) + their full-day trajectory
+  // chains. Selection is explicit user intent, so it survives filter changes;
+  // only a simulation-day change refetches.
+  const [selectedAgents, setSelectedAgents] = useState<string[]>(
+    () => decodeAgents(window.location.hash),
+  );
+  const [agentTrajectories, setAgentTrajectories] = useState<Trajectory[]>([]);
+  const [agentLoading, setAgentLoading] = useState(false);
+
   // Through-zone bbox state (Sprint A1b — F2 endpoint UI).
   // Once a query fires, App holds the bbox (rendered as yellow PolygonLayer
   // on the map) and the returned trip list (displayed in the Zone tab).
@@ -121,12 +160,29 @@ export default function App() {
     fetchFilterOptions().then(setFilterOptions).catch(console.error);
   }, []);
 
-  // Sync filter changes to URL hash
+  // Sync filter + agent-selection changes to URL hash
   useEffect(() => {
-    const encoded = encodeHash(filter);
+    const encoded = [encodeHash(filter), encodeAgents(selectedAgents)]
+      .filter(Boolean)
+      .join('&');
     const newHash = encoded ? '#' + encoded : ' ';
     window.history.replaceState(null, '', newHash || window.location.pathname);
-  }, [filter]);
+  }, [filter, selectedAgents]);
+
+  // Fetch full-day trajectory chains for followed agents (Phase 2A).
+  useEffect(() => {
+    if (selectedAgents.length === 0) {
+      setAgentTrajectories([]);
+      return;
+    }
+    let cancelled = false;
+    setAgentLoading(true);
+    fetchTrajectoriesByVehicle(selectedAgents, filter.simulationDay)
+      .then(res => { if (!cancelled) setAgentTrajectories(res.trajectories); })
+      .catch(e => { console.error('Agent trajectory fetch failed:', e); })
+      .finally(() => { if (!cancelled) setAgentLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedAgents, filter.simulationDay]);
 
   const {
     trajectories, trips, stats,
@@ -197,6 +253,19 @@ export default function App() {
     setSelectedTrajectory(traj);
   }, []);
 
+  // Phase 2A — agent follow/unfollow handlers (capped at MAX_AGENTS)
+  const addAgent = useCallback((key: string) => {
+    setSelectedAgents(prev =>
+      prev.includes(key) || prev.length >= MAX_AGENTS ? prev : [...prev, key],
+    );
+  }, []);
+
+  const removeAgent = useCallback((key: string) => {
+    setSelectedAgents(prev => prev.filter(k => k !== key));
+  }, []);
+
+  const clearAgents = useCallback(() => setSelectedAgents([]), []);
+
   const clearSelectedTrajectory = useCallback(() => {
     setSelectedTrajectory(null);
   }, []);
@@ -246,9 +315,14 @@ export default function App() {
         drillPoint={drillPoint}
         zoneBBox={zoneBBox}
         layerVisibility={layerVisibility}
+        agentTrajectories={agentTrajectories}
+        selectedAgents={selectedAgents}
+        sourceStyles={filterOptions?.sources ?? []}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
       />
+
+      <SourceLegend sources={filterOptions?.sources ?? []} />
 
       <FilterPanel
         filter={filter}
@@ -289,6 +363,11 @@ export default function App() {
         zoneTrips={zoneTrips}
         onZoneResult={handleZoneResult}
         onClearZone={clearZone}
+        selectedAgents={selectedAgents}
+        agentLoading={agentLoading}
+        onAddAgent={addAgent}
+        onRemoveAgent={removeAgent}
+        onClearAgents={clearAgents}
       />
 
       <TimeSlider

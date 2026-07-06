@@ -13,6 +13,7 @@ import type {
   FilterState,
   FilterOptions,
   MetricsDistribution,
+  AgentInfo,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -161,6 +162,39 @@ export async function queryTrajectoriesPoint(
       include_segments: includeSegments,
     }),
   });
+}
+
+// ─── Agent selection (Phase 2A) ────────────────────────
+
+// Agent search — vehicles matching a vehicle_key prefix, for the Agents tab.
+export async function fetchVehicles(
+  q?: string,
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+  limit: number = 50,
+): Promise<{ vehicles: AgentInfo[]; count: number }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (q) params.set('q', q);
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  return fetchJson(`/api/trips/vehicles?${params}`);
+}
+
+// Full-day trajectory chain for the selected agents (max 20 keys server-side;
+// the UI caps selection at 8).
+export async function fetchTrajectoriesByVehicle(
+  vehicleKeys: string[],
+  simulationDay?: number,
+  includeSegments: boolean = true,
+): Promise<TrajectoryResponse> {
+  const params = new URLSearchParams({
+    vehicle_keys: vehicleKeys.join(','),
+    include_segments: String(includeSegments),
+  });
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  return fetchJson(`/api/trajectories/by-vehicle?${params}`);
 }
 
 // ─── Analysis (Phase 2) ───────────────────────────────

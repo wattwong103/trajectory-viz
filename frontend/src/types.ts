@@ -127,6 +127,18 @@ export interface MetricsAvailable {
   detour: boolean;    // detour_ratio populated (haversine ≥ 0.1 km)
 }
 
+// Per-source rendering hints from sources.yaml render blocks (Phase 2A).
+// mode picks the visual treatment in MapView: trails (TripsLayer),
+// points (moving dots), arcs (time-windowed OD arcs for trip-only sources).
+export interface SourceStyle {
+  source_key: string;            // sources.yaml key, e.g. 'pflow-taxi-tokyo'
+  source_id: string;             // short id matching trips.source_id
+  label: string;
+  mode: 'trails' | 'points' | 'arcs';
+  color: [number, number, number] | null;  // null → hash-palette fallback
+  has_waypoints: boolean;
+}
+
 export interface FilterOptions {
   vehicle_types: string[];
   cities: string[];
@@ -135,6 +147,19 @@ export interface FilterOptions {
   goods_types: string[];
   // Sprint B5 — `{source_id: {speed, dwell, detour}}`; absent for sources with no trips.
   metrics_available?: Record<string, MetricsAvailable>;
+  // Phase 2A — rendering hints; [] when sources.yaml is absent (standalone DB).
+  sources?: SourceStyle[];
+}
+
+// ─── Agent selection (Phase 2A) ──────────────────────────
+
+export interface AgentInfo {
+  vehicle_key: string;
+  source_id: string | null;
+  trip_count: number;
+  first_start: number;           // seconds from midnight of first departure
+  last_end: number;              // seconds from midnight of last departure
+  total_km: number | null;
 }
 
 // ─── Filter State ────────────────────────────────────────

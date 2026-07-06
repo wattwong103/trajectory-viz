@@ -31,8 +31,9 @@ import {
   type LinkDensityItem, type MultiStopVehicle,
   type RouteSimilarityResponse,
 } from '../api';
+import { AgentTab } from './AgentTab';
 
-type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone';
+type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone' | 'agents';
 
 const TAB_LABELS: Record<Tab, string> = {
   summary: '\u03A3',
@@ -45,6 +46,7 @@ const TAB_LABELS: Record<Tab, string> = {
   links: '\u22A5',
   detail: '\uD83D\uDCCD',     // Sprint A1a \u2014 Trajectory Details (visible only when one selected)
   zone: '\u25AD',        // Sprint A1b \u2014 Through-zone bbox query
+  agents: '\u2691',      // Phase 2A \u2014 agent search & follow
 };
 
 function formatCompact(n: number): string {
@@ -75,6 +77,12 @@ interface AnalysisPanelProps {
   zoneTrips?: TripPoint[];
   onZoneResult?: (bbox: { w: number; s: number; e: number; n: number }, trips: TripPoint[]) => void;
   onClearZone?: () => void;
+  // Phase 2A — agent selection & playback
+  selectedAgents?: string[];
+  agentLoading?: boolean;
+  onAddAgent?: (key: string) => void;
+  onRemoveAgent?: (key: string) => void;
+  onClearAgents?: () => void;
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -309,6 +317,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   onODFlows, onDensity, onClusters, onLinkDensity,
   selectedTrajectory, onClearSelectedTrajectory,
   zoneBBox, zoneTrips, onZoneResult, onClearZone,
+  selectedAgents = [], agentLoading = false,
+  onAddAgent, onRemoveAgent, onClearAgents,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -1189,9 +1199,42 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
         {/* ── Detail Tab (Trajectory Details — Sprint A1a) ── */}
         {tab === 'detail' && selectedTrajectory && (
-          <TrajectoryDetail
-            trajectory={selectedTrajectory}
-            onClear={onClearSelectedTrajectory}
+          <>
+            <TrajectoryDetail
+              trajectory={selectedTrajectory}
+              onClear={onClearSelectedTrajectory}
+            />
+            {/* Phase 2A — jump from one sampled trip to the agent's full day */}
+            {onAddAgent && !selectedAgents.includes(selectedTrajectory.metadata.vehicle_key) && (
+              <button
+                onClick={() => {
+                  onAddAgent(selectedTrajectory.metadata.vehicle_key);
+                  setTab('agents');
+                }}
+                style={{
+                  marginTop: 8, width: '100%',
+                  background: 'rgba(255,230,100,0.12)', color: '#ffe664',
+                  border: '1px solid rgba(255,230,100,0.4)', borderRadius: 4,
+                  padding: '5px 8px', fontSize: 11, cursor: 'pointer',
+                }}
+              >
+                ★ Follow this agent (full day)
+              </button>
+            )}
+          </>
+        )}
+
+        {/* ── Agents Tab (Phase 2A — search & follow) ── */}
+        {tab === 'agents' && onAddAgent && onRemoveAgent && onClearAgents && (
+          <AgentTab
+            vehicleType={vehicleType}
+            city={city}
+            simulationDay={simulationDay}
+            selectedAgents={selectedAgents}
+            agentLoading={agentLoading}
+            onAddAgent={onAddAgent}
+            onRemoveAgent={onRemoveAgent}
+            onClearAgents={onClearAgents}
           />
         )}
 
