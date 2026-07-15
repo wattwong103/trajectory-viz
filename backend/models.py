@@ -38,6 +38,9 @@ class BBoxQuery(BaseModel):
     vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: Optional[str] = Field(None, pattern="^[a-z_]+$")
     simulation_day: Optional[int] = Field(None, ge=0)
+    # Comma-separated transport-mode ids ("0,3"). Filters by the TRIP's mode
+    # via the (vehicle_key, trip_id) subquery — see filters.TripFilters.
+    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     min_hour: Optional[int] = None
     max_hour: Optional[int] = None
     limit: int = Field(500, ge=1, le=5000)
@@ -53,6 +56,8 @@ class PointQuery(BaseModel):
     vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: Optional[str] = Field(None, pattern="^[a-z_]+$")
     simulation_day: Optional[int] = Field(None, ge=0)
+    # Comma-separated transport-mode ids ("0,3") — trip-granular filter.
+    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     limit: int = Field(200, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics
     include_segments: bool = False
@@ -66,6 +71,11 @@ class TrajectoryMetadata(BaseModel):
     vehicle_id: int
     vehicle_key: str
     trip_id: int
+    # The TRIP's transport mode (trips.transport_mode, joined at
+    # (vehicle_key, trip_id)). NOT the waypoint's — router-generated waypoints
+    # carry a uniform per-source value (taxi writer stamps 8 on everything),
+    # verified empirically. 0=walk 1=bike 2=bus 3=car 4=train 8=taxi.
+    transport_mode: Optional[int] = None
     goods_type: Optional[str] = None
     vehicle_size: Optional[str] = None
     passenger_in: Optional[str] = None
@@ -115,6 +125,8 @@ class TripPoint(BaseModel):
     distance_km: Optional[float] = None
     goods_type: Optional[str] = None
     city: Optional[str] = None
+    # 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (trips.transport_mode)
+    transport_mode: Optional[int] = None
 
 
 class TripResponse(BaseModel):

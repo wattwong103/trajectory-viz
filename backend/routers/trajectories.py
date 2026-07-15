@@ -18,10 +18,13 @@ from typing import Optional
 from ..config import BASE_EPOCH_SEC
 from ..db import get_connection
 from ..trajectory_queries import (
-    WAYPOINT_COLS as _WAYPOINT_COLS,
+    WAYPOINT_COLS_WITH_TRIP_MODE as _WAYPOINT_COLS_WITH_TRIP_MODE,
+    TRIPS_JOIN as _TRIPS_JOIN,
+    build_trip_pair_subquery as _build_trip_pair_subquery,
     build_trip_vehicle_keys_subquery as _build_trip_vehicle_keys_subquery,
     sample_waypoint_rows,
     waypoint_rows_for_vehicles,
+    _sql_str,
 )
 from ..models import (
     BBoxQuery, PointQuery,
@@ -80,26 +83,33 @@ def _rows_to_trajectories(
     vehicle_type_hint: str | None = None,
     include_segments: bool = False,
 ) -> list[Trajectory]:
-    """Group waypoint rows by (vehicle_id, trip_id) into Trajectory objects.
+    """Group waypoint rows by (vehicle_key, trip_id) into Trajectory objects.
 
     Each row: (vehicle_id, trip_id, unix_time_ms, lon, lat, vehicle_type,
                transport_mode, purpose, goods_type, vehicle_size,
-               passenger_in, fare_yen, vehicle_key, link_id)
+               passenger_in, fare_yen, vehicle_key, link_id
+               [, trip_transport_mode])
+
+    Index 14 (when present — WAYPOINT_COLS_WITH_TRIP_MODE queries) is the
+    TRIP's transport_mode from the trips join; index 6 is the waypoint's own
+    value, which is uniform per source in router output and must not be
+    surfaced as the trip's mode.
 
     When `include_segments=True` (Phase 2 Step 2.5), each Trajectory carries a
     `segments` list of length len(path)-1 with per-segment speed + dwell. Off
     by default — segments roughly double the JSON payload size.
     """
-    # Group by (vehicle_id, trip_id)
+    # Group by (vehicle_key, trip_id) — bare vehicle_id collides across
+    # cities and source_ids.
     trips: dict[tuple, list] = {}
     for r in rows:
-        key = (r[0], r[1])
+        key = (r[12], r[1])
         if key not in trips:
             trips[key] = []
         trips[key].append(r)
 
     result = []
-    for (vid, tid), waypoints in trips.items():
+    for (vkey, tid), waypoints in trips.items():
         # Sort by timestamp
         waypoints.sort(key=lambda w: w[2])
 
@@ -107,12 +117,16 @@ def _rows_to_trajectories(
         # Convert unix_time_ms → seconds from midnight for 24h animation loop
         timestamps = [int((w[2] // 1000 - BASE_EPOCH_SEC) % 86400) for w in waypoints]
 
+        vid = waypoints[0][0]
         vtype = waypoints[0][5] or vehicle_type_hint or "unknown"
         meta = TrajectoryMetadata(
             vehicle_type=vtype,
             vehicle_id=vid,
-            vehicle_key=waypoints[0][12] or f"{vtype}:{vid}",
+            vehicle_key=vkey or f"{vtype}:{vid}",
             trip_id=tid,
+            # trip's mode from the trips join (index 14); absent on legacy
+            # 13/14-column rows (e.g. /randomsample) → None.
+            transport_mode=waypoints[0][14] if len(waypoints[0]) > 14 else None,
             goods_type=waypoints[0][8],
             vehicle_size=waypoints[0][9],
             passenger_in=waypoints[0][10],
@@ -141,10 +155,13 @@ async def sample_trajectories(
     vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
+    transport_modes: Optional[str] = Query(
+        None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
+        description="Comma-separated transport-mode ids ('0,3'); filters by the trip's mode"),
     include_segments: bool = Query(False,
         description="Opt into per-segment link/speed/dwell (Phase 2 F3)"),
 ):
-    """Return n random trajectories (sampled by vehicle_id+trip_id).
+    """Return n random trajectories (sampled by vehicle_key+trip_id).
 
     Uses a subquery to sample trip IDs first, then fetches all waypoints
     for those trips. This avoids returning fragmented partial trajectories.
@@ -153,7 +170,8 @@ async def sample_trajectories(
     since those columns live on trips (not waypoints).
     """
     conn = get_connection()
-    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day)
+    modes = [int(m) for m in transport_modes.split(",")] if transport_modes else None
+    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day, modes)
     if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
     trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
@@ -220,34 +238,54 @@ async def query_trajectories_bbox(q: BBoxQuery):
     conn = get_connection()
 
     vtype_filter = f"AND vehicle_type = '{q.vehicle_type}'" if q.vehicle_type else ""
-    key_subq = _build_trip_vehicle_keys_subquery(q.vehicle_type, q.city, q.simulation_day)
-    city_filter = f"AND vehicle_key IN {key_subq}" if key_subq else ""
+    scope_filter = _waypoint_scope_filter(q)
 
-    # Step 1: Find (vehicle_id, trip_id) pairs with waypoints in bbox
+    # Step 1: Find (vehicle_key, trip_id) pairs with waypoints in bbox
     matched = conn.execute(f"""
-        SELECT DISTINCT vehicle_id, trip_id
+        SELECT DISTINCT vehicle_key, trip_id
         FROM waypoints
         WHERE lon BETWEEN {q.min_lon} AND {q.max_lon}
           AND lat BETWEEN {q.min_lat} AND {q.max_lat}
           {vtype_filter}
-          {city_filter}
+          {scope_filter}
         LIMIT {q.limit}
     """).fetchall()
 
     if not matched:
         return TrajectoryResponse(trajectories=[], count=0)
 
-    # Step 2: Fetch full trajectories
-    pairs = ", ".join(f"({m[0]}, {m[1]})" for m in matched)
-    rows = conn.execute(f"""
-        SELECT {_WAYPOINT_COLS}
-        FROM waypoints
-        WHERE (vehicle_id, trip_id) IN ({pairs})
-        ORDER BY vehicle_id, trip_id, unix_time_ms
-    """).fetchall()
-
+    rows = _fetch_full_trajectories(conn, matched)
     trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
+
+
+def _waypoint_scope_filter(q) -> str:
+    """Trip-attribute scoping for waypoint step-1 queries (bbox/point).
+
+    Mode filtering REQUIRES trip granularity — the per-vehicle vehicle_key
+    subquery over-selects (any vehicle with one matching trip would return
+    all its trips). Without modes, keep the cheaper vehicle_key path.
+    """
+    modes = ([int(m) for m in q.transport_modes.split(",")]
+             if q.transport_modes else None)
+    if modes:
+        pair_subq = _build_trip_pair_subquery(
+            q.vehicle_type, q.city, q.simulation_day, modes)
+        return f"AND (vehicle_key, trip_id) IN {pair_subq}"
+    key_subq = _build_trip_vehicle_keys_subquery(q.vehicle_type, q.city, q.simulation_day)
+    return f"AND vehicle_key IN {key_subq}" if key_subq else ""
+
+
+def _fetch_full_trajectories(conn, matched: list) -> list:
+    """Step 2: all waypoints of the matched (vehicle_key, trip_id) pairs,
+    joined to trips for the authoritative per-trip transport_mode."""
+    pairs = ", ".join(f"({_sql_str(m[0])}, {int(m[1])})" for m in matched)
+    return conn.execute(f"""
+        SELECT {_WAYPOINT_COLS_WITH_TRIP_MODE}
+        FROM waypoints w {_TRIPS_JOIN}
+        WHERE (w.vehicle_key, w.trip_id) IN ({pairs})
+        ORDER BY w.vehicle_id, w.trip_id, w.unix_time_ms
+    """).fetchall()
 
 
 @router.post("/trajectories/query-point")
@@ -266,32 +304,23 @@ async def query_trajectories_point(q: PointQuery):
     deg_offset = q.radius_km / 80.0  # ~80km per degree at 35°N latitude
 
     vtype_filter = f"AND vehicle_type = '{q.vehicle_type}'" if q.vehicle_type else ""
-    key_subq = _build_trip_vehicle_keys_subquery(q.vehicle_type, q.city, q.simulation_day)
-    city_filter = f"AND vehicle_key IN {key_subq}" if key_subq else ""
+    scope_filter = _waypoint_scope_filter(q)
 
     # Step 1: Find trips with waypoints in the approximate bbox
     matched = conn.execute(f"""
-        SELECT DISTINCT vehicle_id, trip_id
+        SELECT DISTINCT vehicle_key, trip_id
         FROM waypoints
         WHERE lon BETWEEN {q.lon - deg_offset} AND {q.lon + deg_offset}
           AND lat BETWEEN {q.lat - deg_offset} AND {q.lat + deg_offset}
           {vtype_filter}
-          {city_filter}
+          {scope_filter}
         LIMIT {q.limit}
     """).fetchall()
 
     if not matched:
         return TrajectoryResponse(trajectories=[], count=0)
 
-    # Step 2: Fetch full trajectories
-    pairs = ", ".join(f"({m[0]}, {m[1]})" for m in matched)
-    rows = conn.execute(f"""
-        SELECT {_WAYPOINT_COLS}
-        FROM waypoints
-        WHERE (vehicle_id, trip_id) IN ({pairs})
-        ORDER BY vehicle_id, trip_id, unix_time_ms
-    """).fetchall()
-
+    rows = _fetch_full_trajectories(conn, matched)
     trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 

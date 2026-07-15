@@ -160,6 +160,10 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_trips_speed        ON trips(speed_avg_kmh)",
         "CREATE INDEX IF NOT EXISTS idx_trips_dwell        ON trips(dwell_minutes)",
         "CREATE INDEX IF NOT EXISTS idx_trips_detour       ON trips(detour_ratio)",
+        # Transport-mode filter (Phase: transport mode as first-class dimension).
+        # trips only — waypoints.transport_mode is never filtered (router output
+        # carries a uniform per-source value; the trip's mode is authoritative).
+        "CREATE INDEX IF NOT EXISTS idx_trips_transport_mode ON trips(transport_mode)",
         # waypoints
         "CREATE INDEX IF NOT EXISTS idx_waypoints_vehicle_key ON waypoints(vehicle_key)",
         "CREATE INDEX IF NOT EXISTS idx_waypoints_source_id   ON waypoints(source_id)",
@@ -235,6 +239,7 @@ def build_trip_filter(
     extra: Optional[list[str]] = None,
     *,
     source_id: Optional[str] = None,
+    transport_modes: Optional[list[int]] = None,
     min_speed: Optional[float] = None,
     max_speed: Optional[float] = None,
     max_dwell_minutes: Optional[float] = None,
@@ -267,6 +272,13 @@ def build_trip_filter(
         conds.append(f"city = '{city}'")
     if simulation_day is not None:
         conds.append(f"simulation_day = {int(simulation_day)}")
+    # Transport mode is a PER-TRIP attribute (trips.transport_mode). This is
+    # the only place a mode condition is emitted — never filter on
+    # waypoints.transport_mode (uniform per source in router output).
+    # int-cast per element blocks injection, same discipline as the floats below.
+    if transport_modes:
+        ids = ", ".join(str(int(m)) for m in transport_modes)
+        conds.append(f"transport_mode IN ({ids})")
     # F1 derived metrics — float-cast on the Python side blocks injection.
     if min_speed is not None:
         conds.append(f"speed_avg_kmh >= {float(min_speed)}")

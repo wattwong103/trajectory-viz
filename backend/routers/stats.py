@@ -116,6 +116,18 @@ async def insights(
             "night_trip_pct": fare_row[5],
         }
 
+    # Per-transport-mode breakdown (drives the FilterPanel mode chips/stats).
+    # Cheap: indexed int GROUP BY under the same filter.
+    mode_rows = conn.execute(f"""
+        SELECT transport_mode, COUNT(*) AS cnt
+        FROM trips {where}
+        GROUP BY transport_mode
+        ORDER BY transport_mode
+    """).fetchall()
+    by_transport_mode = {
+        int(r[0]): r[1] for r in mode_rows if r[0] is not None
+    }
+
     # Distance distribution buckets (for sparkline)
     dist_where = f.where(extra=["distance_km IS NOT NULL", "distance_km > 0"])
     dist_buckets = conn.execute(f"""
@@ -182,6 +194,7 @@ async def insights(
             "peak_to_offpeak_ratio": round(peak[1] / off_peak[1], 1) if peak and off_peak and off_peak[1] > 0 else 0,
         },
         "fare": fare_insights,
+        "by_transport_mode": by_transport_mode,
         "distance_distribution": [
             {"bucket_km": r[0], "count": r[1]} for r in dist_buckets
         ],
@@ -220,6 +233,17 @@ async def filter_options():
         "SELECT DISTINCT goods_type FROM trips WHERE goods_type IS NOT NULL ORDER BY goods_type"
     ).fetchall()]
 
+    # Transport modes present in the dataset, with counts — the FilterPanel
+    # renders one chip per entry and needs no second call for the breakdown.
+    transport_modes = [
+        {"mode": int(r[0]), "count": r[1]}
+        for r in conn.execute("""
+            SELECT transport_mode, COUNT(*) FROM trips
+            WHERE transport_mode IS NOT NULL
+            GROUP BY transport_mode ORDER BY transport_mode
+        """).fetchall()
+    ]
+
     # Sprint B5 — per-source F1 metric availability so the frontend can disable
     # sliders that would silently filter to zero rows. Single grouped query.
     metrics_rows = conn.execute("""
@@ -243,6 +267,7 @@ async def filter_options():
         "city_centers": city_centers,
         "simulation_days": days,
         "goods_types": goods_types,
+        "transport_modes": transport_modes,
         "metrics_available": metrics_available,
         "sources": _source_styles(conn),
     }

@@ -38,6 +38,14 @@ class TripFilters(BaseModel):
     city: Optional[str] = Field(None, pattern="^[a-z_]+$")
     simulation_day: Optional[int] = Field(None, ge=0)
     goods_type: Optional[str] = Field(None, pattern="^[a-z_]+$")
+    # Comma-separated PFLOW transport-mode ids, e.g. "0,3" (0=walk, 1=bike,
+    # 2=bus, 3=car, 4=train; 8=taxi). String form (not list[int]) so GET query
+    # params and POST bodies share one representation — mirrors the
+    # /trajectories/by-vehicle comma-separated vehicle_keys contract.
+    # INVARIANT: transport_mode is per-TRIP. It is filtered exclusively from
+    # trips.transport_mode; waypoints.transport_mode is display-only garbage
+    # for router-generated trajectories (uniform per source).
+    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     min_hour: Optional[int] = Field(None, ge=0, le=23)
     max_hour: Optional[int] = Field(None, ge=0, le=23)
     # F1 derived-metric filters (Phase 2 Step 2.2)
@@ -46,6 +54,12 @@ class TripFilters(BaseModel):
     max_dwell_minutes: Optional[float] = Field(None, ge=0, le=10080)
     min_detour_ratio: Optional[float] = Field(None, ge=1.0, le=20.0)
     max_detour_ratio: Optional[float] = Field(None, ge=1.0, le=20.0)
+
+    def transport_mode_list(self) -> Optional[list[int]]:
+        """Parsed transport_modes, or None when unset. Pattern-validated ints."""
+        if not self.transport_modes:
+            return None
+        return [int(m) for m in self.transport_modes.split(",")]
 
     def extra_conds(self) -> list[str]:
         """The hour/goods_type conditions every router used to hand-build.
@@ -72,6 +86,7 @@ class TripFilters(BaseModel):
             self.city,
             self.simulation_day,
             extra=conds or None,
+            transport_modes=self.transport_mode_list(),
             min_speed=self.min_speed,
             max_speed=self.max_speed,
             max_dwell_minutes=self.max_dwell_minutes,
@@ -85,6 +100,9 @@ def trip_filters(
     city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     simulation_day: Optional[int] = Query(None, ge=0),
     goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    transport_modes: Optional[str] = Query(
+        None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
+        description="Comma-separated transport-mode ids, e.g. '0,3' (0=walk 1=bike 2=bus 3=car 4=train 8=taxi)"),
     min_hour: Optional[int] = Query(None, ge=0, le=23),
     max_hour: Optional[int] = Query(None, ge=0, le=23),
     min_speed: Optional[float] = Query(None, ge=0, le=300,
@@ -105,6 +123,7 @@ def trip_filters(
         city=city,
         simulation_day=simulation_day,
         goods_type=goods_type,
+        transport_modes=transport_modes,
         min_hour=min_hour,
         max_hour=max_hour,
         min_speed=min_speed,
