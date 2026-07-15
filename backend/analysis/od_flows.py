@@ -6,22 +6,17 @@ For taxi data, derives approximate zones from coordinate grid cells.
 Results feed DeckGL ArcLayer for flow visualization.
 """
 
-from fastapi import APIRouter, Query
-from typing import Optional
-from ..db import get_connection, build_trip_filter
+from fastapi import APIRouter, Depends, Query
+from ..db import get_connection
+from ..filters import TripFilters, trip_filters
 
 router = APIRouter()
 
 
 @router.get("/analysis/od-flows")
 async def od_flows(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     top_n: int = Query(50, ge=5, le=500),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Top-N origin-destination flow pairs with coordinates.
 
@@ -33,14 +28,7 @@ async def od_flows(
     """
     conn = get_connection()
 
-    extra = ["start_lon IS NOT NULL", "end_lon IS NOT NULL"]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    where = f.where(extra=["start_lon IS NOT NULL", "end_lon IS NOT NULL"])
 
     # Grid-based OD aggregation (works for both truck and taxi)
     # Round coordinates to 0.05° grid (~5km cells at Japan latitude)
@@ -75,10 +63,8 @@ async def od_flows(
 
 @router.get("/analysis/od-flows/zones")
 async def od_flows_by_zone(
-    vehicle_type: str = Query("truck", pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(50, ge=5, le=200),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Zone-level OD flows for trucks (uses origin_zone, dest_zone columns).
 
@@ -87,8 +73,10 @@ async def od_flows_by_zone(
     """
     conn = get_connection()
 
-    extra = ["origin_zone IS NOT NULL", "dest_zone IS NOT NULL"]
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    # Pre-refactor this endpoint defaulted vehicle_type to 'truck' — preserved.
+    if f.vehicle_type is None:
+        f = f.model_copy(update={"vehicle_type": "truck"})
+    where = f.where(extra=["origin_zone IS NOT NULL", "dest_zone IS NOT NULL"])
 
     rows = conn.execute(f"""
         SELECT

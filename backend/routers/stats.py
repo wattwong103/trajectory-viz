@@ -2,9 +2,9 @@
 Stats endpoint — dataset summary and derived insights for the frontend dashboard.
 """
 
-from fastapi import APIRouter, Query
-from typing import Optional
-from ..db import get_table_stats, get_connection, build_trip_filter
+from fastapi import APIRouter, Depends
+from ..db import get_table_stats, get_connection
+from ..filters import TripFilters, trip_filters
 from ..models import StatsResponse
 from ..sources_schema import default_sources_path, load_sources
 
@@ -24,12 +24,7 @@ async def stats():
 
 @router.get("/stats/insights")
 async def insights(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Compute derived insights from the trip dataset.
 
@@ -37,14 +32,7 @@ async def insights(
     that turn raw data into actionable understanding.
     """
     conn = get_connection()
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
 
     # Core metrics
     core = conn.execute(f"""
@@ -103,12 +91,11 @@ async def insights(
     # filter `fare_yen IS NOT NULL` excludes truck rows (whose fare_yen is NULL) and
     # any future source that doesn't declare fare_yen in sources.yaml.
     fare_insights = None
-    fare_extra = ["fare_yen IS NOT NULL"]
-    if min_hour is not None:
-        fare_extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        fare_extra.append(f"dep_hour <= {int(max_hour)}")
-    fare_where = build_trip_filter(vehicle_type, city, simulation_day, extra=fare_extra)
+    # The fare block deliberately drops goods_type (pre-refactor behavior:
+    # it applied only the hour filters). model_copy preserves that exactly.
+    fare_where = f.model_copy(update={"goods_type": None}).where(
+        extra=["fare_yen IS NOT NULL"]
+    )
     fare_row = conn.execute(f"""
         SELECT
             ROUND(AVG(fare_yen), 0)    AS avg_fare,
@@ -130,11 +117,7 @@ async def insights(
         }
 
     # Distance distribution buckets (for sparkline)
-    dist_extra = ["distance_km IS NOT NULL", "distance_km > 0"] + extra
-    dist_where = build_trip_filter(
-        vehicle_type, city, simulation_day,
-        extra=dist_extra,
-    )
+    dist_where = f.where(extra=["distance_km IS NOT NULL", "distance_km > 0"])
     dist_buckets = conn.execute(f"""
         SELECT
             FLOOR(distance_km / 2) * 2 AS bucket,

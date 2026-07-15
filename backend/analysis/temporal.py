@@ -5,9 +5,9 @@ Queries the trips table grouped by hour to produce histograms suitable
 for Recharts BarChart rendering in the frontend.
 """
 
-from fastapi import APIRouter, Query
-from typing import Optional
-from ..db import get_connection, build_trip_filter
+from fastapi import APIRouter, Depends, Query
+from ..db import get_connection
+from ..filters import TripFilters, trip_filters
 import traceback
 
 router = APIRouter()
@@ -24,12 +24,7 @@ def _safe_query(conn, sql):
 
 @router.get("/analysis/temporal/departures")
 async def hourly_departures(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Hourly trip departure distribution (0-23h histogram).
 
@@ -37,16 +32,7 @@ async def hourly_departures(
     [{"hour": 0, "truck": 1234, "taxi": 5678, "total": 6912}, ...]
     """
     conn = get_connection()
-
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
 
     rows = _safe_query(conn, f"""
         SELECT dep_hour, vehicle_type, COUNT(*) as cnt
@@ -71,27 +57,14 @@ async def hourly_departures(
 
 @router.get("/analysis/temporal/peaks")
 async def detect_peaks(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Detect peak hours (hours where volume > mean + 0.5*std).
 
     Simple statistical peak detection — no scipy dependency needed.
     """
     conn = get_connection()
-
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
 
     rows = conn.execute(f"""
         SELECT dep_hour, COUNT(*) as cnt
@@ -127,28 +100,15 @@ async def detect_peaks(
 
 @router.get("/analysis/temporal/duration")
 async def trip_duration_distribution(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     bin_minutes: int = Query(10, ge=1, le=60),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Trip distance distribution binned by distance_km.
 
     Returns histogram data for Recharts.
     """
     conn = get_connection()
-
-    extra = ["distance_km IS NOT NULL", "distance_km > 0"]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    where = f.where(extra=["distance_km IS NOT NULL", "distance_km > 0"])
 
     rows = conn.execute(f"""
         SELECT
@@ -188,12 +148,7 @@ async def metrics_distribution(
     ),
     bins: int = Query(20, ge=5, le=100,
                       description="Number of equal-width histogram bins."),
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Histogram of one F1 derived metric (speed_avg_kmh | dwell_minutes | detour_ratio).
 
@@ -203,16 +158,8 @@ async def metrics_distribution(
     """
     conn = get_connection()
 
-    # Build the per-source filter (city, sim_day, goods, hour); we add the
-    # `metric IS NOT NULL` guard so the bin range is computed from real data.
-    extra: list[str] = [f"{metric} IS NOT NULL"]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    # The `metric IS NOT NULL` guard ensures the bin range comes from real data.
+    where = f.where(extra=[f"{metric} IS NOT NULL"])
 
     # Range query first — needed to compute equal-width bins.
     bounds = conn.execute(f"""

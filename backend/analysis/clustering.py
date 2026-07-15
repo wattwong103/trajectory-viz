@@ -14,9 +14,9 @@ is the primary clustering signal for mobility data.
 """
 
 import math
-from fastapi import APIRouter, Query
-from typing import Optional
-from ..db import get_connection, build_trip_filter
+from fastapi import APIRouter, Depends, Query
+from ..db import get_connection
+from ..filters import TripFilters, trip_filters
 
 router = APIRouter()
 
@@ -67,14 +67,9 @@ async def clustering_status():
 
 @router.post("/analysis/clustering/run")
 async def run_clustering(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     sample_size: int = Query(5000, ge=100, le=50000),
     min_cluster_size: int = Query(20, ge=5, le=500),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Run clustering on a sample of trips.
 
@@ -93,19 +88,12 @@ async def run_clustering(
         }
 
     conn = get_connection()
-    extra = [
+    where = f.where(extra=[
         "distance_km IS NOT NULL",
         "distance_km > 0",
         "start_lon IS NOT NULL",
         "end_lon IS NOT NULL",
-    ]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    ])
 
     rows = conn.execute(f"""
         SELECT vehicle_key, trip_id,
@@ -200,9 +188,6 @@ async def run_clustering(
 # Jaccard distance. Detects "trips that share the same infrastructure".
 @router.post("/analysis/clustering/route-similarity")
 async def route_similarity(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     sample_size: int = Query(
         200, ge=20, le=2000,
         description=(
@@ -218,6 +203,7 @@ async def route_similarity(
         description="DBSCAN eps in Jaccard distance (0=identical link sets, 1=disjoint).",
     ),
     min_samples: int = Query(3, ge=2, le=50),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Cluster trajectories by Jaccard similarity of their link-id sets.
 
@@ -237,7 +223,7 @@ async def route_similarity(
         return {"error": "scikit-learn not installed", "algorithm": "none"}
 
     conn = get_connection()
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+    trip_where = f.where()
 
     # Sample (vehicle_key, trip_id) refs from trips. Sampling here (not waypoints)
     # avoids over-weighting long trips.

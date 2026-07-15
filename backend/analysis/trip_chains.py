@@ -8,21 +8,17 @@ Analyzes how vehicles chain multiple trips together in a day:
 - Commodity-specific patterns (truck only)
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
-from ..db import get_connection, build_trip_filter
+from ..db import get_connection
+from ..filters import TripFilters, trip_filters
 
 router = APIRouter()
 
 
 @router.get("/analysis/trip-chains/length-distribution")
 async def chain_length_distribution(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
     min_chain_length: Optional[int] = Query(
         None, ge=1, le=100,
         description="Only show vehicles with chain_length >= this (focus the long tail)",
@@ -36,15 +32,7 @@ async def chain_length_distribution(
     so the histogram focuses on multi-stop vehicles.
     """
     conn = get_connection()
-
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
 
     having = (
         f"HAVING COUNT(*) >= {int(min_chain_length)}"
@@ -73,13 +61,8 @@ async def chain_length_distribution(
 
 @router.get("/analysis/trip-chains/dwell-times")
 async def dwell_time_analysis(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     sample_vehicles: int = Query(1000, ge=10, le=10000),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Dwell time between consecutive trips for the same vehicle.
 
@@ -89,15 +72,7 @@ async def dwell_time_analysis(
     Returns histogram of dwell time bins.
     """
     conn = get_connection()
-
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
     where_and = where.replace('WHERE', 'AND', 1) if where else ''
 
     # Sample vehicles with 2+ trips
@@ -150,14 +125,9 @@ async def dwell_time_analysis(
 
 @router.get("/analysis/trip-chains/round-trips")
 async def round_trip_analysis(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     threshold_km: float = Query(2.0, ge=0.5, le=10.0,
                                 description="Max distance between first origin and last destination to count as round-trip"),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Detect round-trip vehicles (those returning near their starting point).
 
@@ -165,15 +135,7 @@ async def round_trip_analysis(
     of its first origin. Common for delivery trucks and taxis.
     """
     conn = get_connection()
-
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    where = f.where()
     where_and = where.replace('WHERE', 'AND', 1) if where else ''
 
     # For each vehicle, compare first trip origin with last trip destination
@@ -227,13 +189,8 @@ async def round_trip_analysis(
 
 @router.get("/analysis/trip-chains/commodity-patterns")
 async def commodity_chain_patterns(
-    vehicle_type: str = Query("truck", pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(20, ge=5, le=100),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Most common commodity sequences for trucks.
 
@@ -242,14 +199,10 @@ async def commodity_chain_patterns(
     """
     conn = get_connection()
 
-    extra = ["goods_type IS NOT NULL"]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    # Pre-refactor this endpoint defaulted vehicle_type to 'truck' — preserved.
+    if f.vehicle_type is None:
+        f = f.model_copy(update={"vehicle_type": "truck"})
+    where = f.where(extra=["goods_type IS NOT NULL"])
 
     rows = conn.execute(f"""
         WITH truck_sequences AS (
@@ -289,10 +242,8 @@ async def trips_through_zone_bbox(
     s: float = Query(..., description="South (min lat)"),
     e: float = Query(..., description="East (max lon)"),
     n: float = Query(..., description="North (max lat)"),
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     limit: int = Query(500, ge=1, le=5000),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Return trips whose trajectories pass through an axis-aligned bbox.
 
@@ -305,7 +256,7 @@ async def trips_through_zone_bbox(
         return {"trips": [], "count": 0, "total_matching": None,
                 "error": "Bad bbox: require w<e and s<n"}
 
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+    trip_where = f.where()
     and_or_where = "AND" if trip_where else "WHERE"
 
     # Composite IN: match trajectories.py:query-bbox pattern.
@@ -347,19 +298,13 @@ async def trips_through_zone_bbox(
 async def multi_stop_chains(
     min_stops: int = Query(3, ge=2, le=50,
                            description="Minimum trips per vehicle to include"),
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
     limit: int = Query(100, ge=1, le=1000,
                        description="Max vehicles returned (sorted by chain length desc)"),
+    f: TripFilters = Depends(trip_filters),
 ):
     """List vehicles with >= min_stops trips, each with its full ordered trip list."""
     conn = get_connection()
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+    trip_where = f.where()
 
     # Two-stage query:
     # 1. Find the top-N vehicles by chain length matching the filter.
