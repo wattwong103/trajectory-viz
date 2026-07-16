@@ -22,6 +22,7 @@ export function useInsights(
   goodsType?: string,
   minHour?: number,
   maxHour?: number,
+  transportModes?: number[],
 ): UseInsights {
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,7 +34,9 @@ export function useInsights(
     setError(null);
     try {
       const vtype = vehicleType === 'all' ? undefined : vehicleType;
-      const data = await fetchInsights(vtype, city, simulationDay, goodsType, minHour, maxHour);
+      const data = await fetchInsights(
+        vtype, city, simulationDay, goodsType, minHour, maxHour, transportModes,
+      );
       setInsights(data);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load insights';
@@ -42,7 +45,9 @@ export function useInsights(
     } finally {
       setLoading(false);
     }
-  }, [vehicleType, city, simulationDay, hasData, goodsType, minHour, maxHour]);
+    // transportModes joined to a string — array identity changes per toggle.
+  }, [vehicleType, city, simulationDay, hasData, goodsType, minHour, maxHour,
+      transportModes?.join(',')]);
 
   useEffect(() => {
     load();

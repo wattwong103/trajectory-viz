@@ -10,6 +10,9 @@ export interface TrajectoryMetadata {
   vehicle_id: number;
   vehicle_key: string;
   trip_id: number;
+  // The TRIP's transport mode (0=walk 1=bike 2=bus 3=car 4=train 8=taxi).
+  // Never the waypoint's — see transportModes.ts.
+  transport_mode?: number | null;
   goods_type?: string;
   vehicle_size?: string;
   passenger_in?: string;
@@ -53,6 +56,8 @@ export interface TripPoint {
   distance_km?: number;
   goods_type?: string;
   city?: string;
+  // 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (trips.transport_mode)
+  transport_mode?: number | null;
 }
 
 export interface TripResponse {
@@ -112,6 +117,9 @@ export interface InsightsResponse {
     avg_day_fare_yen: number | null;
     night_trip_pct: number;
   } | null;
+  // Per-transport-mode trip counts under the current filter (keys are the
+  // stringified mode ids — JSON object keys).
+  by_transport_mode?: Record<string, number>;
   distance_distribution: Array<{ bucket_km: number; count: number }>;
   text_insights: string[];
 }
@@ -149,6 +157,9 @@ export interface FilterOptions {
   metrics_available?: Record<string, MetricsAvailable>;
   // Phase 2A — rendering hints; [] when sources.yaml is absent (standalone DB).
   sources?: SourceStyle[];
+  // Phase 1 (transport mode) — modes present in trips + their counts, so the
+  // FilterPanel chips + breakdown render without a second call.
+  transport_modes?: Array<{ mode: number; count: number }>;
 }
 
 // ─── Agent selection (Phase 2A) ──────────────────────────
@@ -178,6 +189,10 @@ export interface FilterState {
   maxDwellMinutes?: number;
   minDetourRatio?: number;
   maxDetourRatio?: number;
+  // Transport-mode multi-select (undefined/empty = all modes) + color scheme.
+  // NAMING: "transportModes", never bare "mode" (taken by SourceStyle.mode).
+  transportModes?: number[];
+  colorBy?: 'source' | 'transportMode';
 }
 
 // F1 metric distribution (Phase 2 Step 2.2b)

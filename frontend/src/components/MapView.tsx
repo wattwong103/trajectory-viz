@@ -31,6 +31,8 @@ import { positionAtTime, hourPhase } from '../utils/interpolate';
 import {
   BUILDING_SOURCES, heightRamp, decodePBLD, type DecodedBuilding,
 } from '../buildings';
+import { transportModeColor, transportModeLabel } from '../transportModes';
+import { sourceFallbackColor } from '../sourceColors';
 
 // Night-scene lighting (Phase 2C): dim ambient + one directional from NW so
 // extruded walls shade instead of rendering flat. Module-level — shared by
@@ -73,16 +75,6 @@ const COLORS = {
   drillTrail: [255, 230, 100] as [number, number, number],
 };
 
-// Per-source trail colors. Built-in entries for truck/taxi keep v0.1 colors;
-// any other source_id from sources.yaml gets a deterministic palette pick.
-const VEHICLE_TYPE_COLORS: Record<string, [number, number, number]> = {
-  truck: COLORS.truckTrail,
-  taxi:  COLORS.taxiTrail,
-};
-const FALLBACK_PALETTE: [number, number, number][] = [
-  [212, 160, 23], [43, 200, 80], [155, 89, 182], [231, 76, 60],
-  [52, 152, 219], [26, 188, 156], [243, 156, 18], [233, 30, 99],
-];
 // F3 speed gradient (Phase 2 Step 2.7) — maps per-segment speed_kmh to a color.
 // Buckets: idle/slow/medium/fast/highway. Bucket edges chosen to make the
 // gradient visible at typical PFLOW urban speeds (most segments fall 0-60).
@@ -95,17 +87,6 @@ function speedToColor(kmh: number | null | undefined): [number, number, number, 
   return            [52,  152, 219, 200];      // blue — highway
 }
 
-function getTrailColor(vehicleType: string): [number, number, number] {
-  const known = VEHICLE_TYPE_COLORS[vehicleType];
-  if (known) return known;
-  // Deterministic hash → palette index, so the same source always picks the
-  // same fallback color across reloads.
-  let h = 0;
-  for (let i = 0; i < vehicleType.length; i++) {
-    h = (h * 31 + vehicleType.charCodeAt(i)) | 0;
-  }
-  return FALLBACK_PALETTE[Math.abs(h) % FALLBACK_PALETTE.length];
-}
 
 const CLUSTER_COLORS: [number, number, number][] = [
   [253, 128, 93], [23, 184, 190], [43, 200, 80], [212, 160, 23],
@@ -148,6 +129,9 @@ interface MapViewProps {
   pulseData?: HourlyDensity | null;
   // Phase 2C — which city's building source to use when buildings are on
   buildingsCity?: string;
+  // Phase 1 (transport mode) — color scheme + per-source visibility
+  colorBy?: 'source' | 'transportMode';
+  hiddenSources?: string[];
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -165,6 +149,8 @@ export const MapView: React.FC<MapViewProps> = ({
   sourceStyles = [],
   pulseData = null,
   buildingsCity = 'tokyo',
+  colorBy = 'source',
+  hiddenSources = [],
   onMapClick,
   onTrajectoryClick,
 }) => {
@@ -231,7 +217,18 @@ export const MapView: React.FC<MapViewProps> = ({
   }, [sourceStyles]);
 
   const colorFor = (vehicleType: string): [number, number, number] =>
-    styleBySource[vehicleType]?.color ?? getTrailColor(vehicleType);
+    styleBySource[vehicleType]?.color ?? sourceFallbackColor(vehicleType);
+
+  // Phase 1 — single color indirection for data layers: per-source style, or
+  // the TRIP's transport-mode color when colorBy === 'transportMode'.
+  const trailColorFor = (
+    vehicleType: string, transportMode?: number | null,
+  ): [number, number, number] =>
+    colorBy === 'transportMode' ? transportModeColor(transportMode) : colorFor(vehicleType);
+
+  // Phase 1 — per-source visibility (legend row toggles). Data-level filter,
+  // not layer `visible`: sources share single layers.
+  const hidden = useMemo(() => new Set(hiddenSources), [hiddenSources]);
 
   useEffect(() => {
     if (cityCenter) {
@@ -398,10 +395,16 @@ export const MapView: React.FC<MapViewProps> = ({
     // dots + a faint short trail; everything else stays a full TripsLayer
     // trail. When agents are followed, background layers dim to alpha 40.
     const dimmed = selectedAgents.length > 0;
-    const trailTrajs = trajectories.filter(
+    const visibleTrajs = hidden.size > 0
+      ? trajectories.filter(t => !hidden.has(t.metadata.vehicle_type))
+      : trajectories;
+    const visibleTrips = hidden.size > 0
+      ? trips.filter(d => !hidden.has(d.vehicle_type))
+      : trips;
+    const trailTrajs = visibleTrajs.filter(
       t => styleBySource[t.metadata.vehicle_type]?.mode !== 'points',
     );
-    const pointTrajs = trajectories.filter(
+    const pointTrajs = visibleTrajs.filter(
       t => styleBySource[t.metadata.vehicle_type]?.mode === 'points',
     );
 
@@ -413,10 +416,10 @@ export const MapView: React.FC<MapViewProps> = ({
           getPath: (d: Trajectory) => d.path,
           getTimestamps: (d: Trajectory) => d.timestamps,
           getColor: (d: Trajectory) => {
-            const c = colorFor(d.metadata.vehicle_type);
+            const c = trailColorFor(d.metadata.vehicle_type, d.metadata.transport_mode);
             return dimmed ? [c[0], c[1], c[2], 40] : c;
           },
-          updateTriggers: { getColor: [dimmed, sourceStyles] },
+          updateTriggers: { getColor: [dimmed, sourceStyles, colorBy] },
           currentTime,
           trailLength,
           widthMinPixels: 2,
@@ -447,10 +450,10 @@ export const MapView: React.FC<MapViewProps> = ({
           getPath: (d: Trajectory) => d.path,
           getTimestamps: (d: Trajectory) => d.timestamps,
           getColor: (d: Trajectory) => {
-            const c = colorFor(d.metadata.vehicle_type);
+            const c = trailColorFor(d.metadata.vehicle_type, d.metadata.transport_mode);
             return [c[0], c[1], c[2], dimmed ? 20 : 80];
           },
-          updateTriggers: { getColor: [dimmed, sourceStyles] },
+          updateTriggers: { getColor: [dimmed, sourceStyles, colorBy] },
           currentTime,
           trailLength: Math.min(trailLength, 300),
           widthMinPixels: 1,
@@ -460,11 +463,17 @@ export const MapView: React.FC<MapViewProps> = ({
           parameters: buildingsOn ? { depthCompare: 'always' } : {},
         }),
       );
-      type Dot = { position: [number, number]; vehicle_key: string; source: string };
+      type Dot = {
+        position: [number, number]; vehicle_key: string; source: string;
+        transport_mode?: number | null;
+      };
       const dots: Dot[] = [];
       for (const t of pointTrajs) {
         const p = positionAtTime(t, currentTime);
-        if (p) dots.push({ position: p, vehicle_key: t.metadata.vehicle_key, source: t.metadata.vehicle_type });
+        if (p) dots.push({
+          position: p, vehicle_key: t.metadata.vehicle_key,
+          source: t.metadata.vehicle_type, transport_mode: t.metadata.transport_mode,
+        });
       }
       if (dots.length > 0) {
         result.push(
@@ -473,7 +482,7 @@ export const MapView: React.FC<MapViewProps> = ({
             data: dots,
             getPosition: (d) => d.position,
             getFillColor: (d) => {
-              const c = colorFor(d.source);
+              const c = trailColorFor(d.source, d.transport_mode);
               return [c[0], c[1], c[2], dimmed ? 60 : 230];
             },
             getRadius: 25,
@@ -486,11 +495,11 @@ export const MapView: React.FC<MapViewProps> = ({
     }
 
     // Layer 3b: Trip origins
-    if (layerVisibility.origins && trips.length > 0) {
+    if (layerVisibility.origins && visibleTrips.length > 0) {
       result.push(
         new ScatterplotLayer<TripPoint>({
           id: 'origins',
-          data: trips,
+          data: visibleTrips,
           getPosition: (d: TripPoint) => [d.start_lon, d.start_lat],
           getFillColor: COLORS.origin,
           getRadius: 80,
@@ -503,11 +512,11 @@ export const MapView: React.FC<MapViewProps> = ({
     }
 
     // Layer 3c: Trip destinations
-    if (layerVisibility.destinations && trips.length > 0) {
+    if (layerVisibility.destinations && visibleTrips.length > 0) {
       result.push(
         new ScatterplotLayer<TripPoint>({
           id: 'destinations',
-          data: trips,
+          data: visibleTrips,
           getPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
           getFillColor: COLORS.dest,
           getRadius: 80,
@@ -523,7 +532,7 @@ export const MapView: React.FC<MapViewProps> = ({
     // (trip-only populations with no waypoints). DataFilterExtension applies
     // the ±30 min window as a GPU uniform — no per-frame data re-upload.
     if (layerVisibility.sourceArcs !== false) {
-      const arcTrips = trips.filter(
+      const arcTrips = visibleTrips.filter(
         d => styleBySource[d.vehicle_type]?.mode === 'arcs',
       );
       if (arcTrips.length > 0) {
@@ -534,14 +543,17 @@ export const MapView: React.FC<MapViewProps> = ({
             getSourcePosition: (d: TripPoint) => [d.start_lon, d.start_lat],
             getTargetPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
             getSourceColor: (d: TripPoint) => {
-              const c = colorFor(d.vehicle_type);
+              const c = trailColorFor(d.vehicle_type, d.transport_mode);
               return [c[0], c[1], c[2], dimmed ? 40 : 200];
             },
             getTargetColor: (d: TripPoint) => {
-              const c = colorFor(d.vehicle_type);
+              const c = trailColorFor(d.vehicle_type, d.transport_mode);
               return [c[0], c[1], c[2], dimmed ? 20 : 90];
             },
-            updateTriggers: { getSourceColor: [dimmed, sourceStyles], getTargetColor: [dimmed, sourceStyles] },
+            updateTriggers: {
+              getSourceColor: [dimmed, sourceStyles, colorBy],
+              getTargetColor: [dimmed, sourceStyles, colorBy],
+            },
             getWidth: 2,
             widthMinPixels: 1,
             widthMaxPixels: 5,
@@ -728,6 +740,7 @@ export const MapView: React.FC<MapViewProps> = ({
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
     pulseData,
+    colorBy, hidden,
   ]);
 
   return (
@@ -754,6 +767,8 @@ export const MapView: React.FC<MapViewProps> = ({
           return {
             text: `${t.vehicle_type} #${t.vehicle_id}\n` +
               `${t.distance_km?.toFixed(1) ?? '?'} km` +
+              (t.transport_mode !== undefined && t.transport_mode !== null
+                ? `\n${transportModeLabel(t.transport_mode)}` : '') +
               (t.goods_type ? `\n${t.goods_type}` : '') +
               (t.city ? `\n${t.city}` : ''),
           };
@@ -789,10 +804,13 @@ export const MapView: React.FC<MapViewProps> = ({
         if ('metadata' in object && 'path' in object && 'timestamps' in object) {
           const t = object as Trajectory;
           const segCount = t.segments?.length ?? 0;
+          const tm = t.metadata.transport_mode;
           return {
             text:
               `${t.metadata.vehicle_type} ${t.metadata.vehicle_key}\n` +
-              `trip ${t.metadata.trip_id} · ${t.path.length} waypoints${segCount ? ` · ${segCount} segments` : ''}\n` +
+              `trip ${t.metadata.trip_id}` +
+              (tm !== undefined && tm !== null ? ` · ${transportModeLabel(tm)}` : '') +
+              ` · ${t.path.length} waypoints${segCount ? ` · ${segCount} segments` : ''}\n` +
               `(click for details)`,
           };
         }

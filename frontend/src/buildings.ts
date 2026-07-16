@@ -28,6 +28,7 @@ export const BUILDING_SOURCES: Record<string, BuildingSource> = {
   },
   // Baked cities appear here as scripts/build_buildings.py outputs are added:
   // osaka: { kind: 'baked', url: '/api/buildings/osaka', attribution: PLATEAU_ATTRIBUTION },
+  kichijoji: { kind: 'baked', url: '/api/buildings/kichijoji', attribution: PLATEAU_ATTRIBUTION },
 };
 
 /** Night-grid height ramp: deep indigo base → cyan mid-rise → amber accents

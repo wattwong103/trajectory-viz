@@ -56,7 +56,21 @@ function encodeHash(filter: FilterState): string {
   if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
   if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
   if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
+  // Phase 1 — transport-mode selection + color scheme (short keys tm/cb)
+  if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
+  if (filter.colorBy === 'transportMode') parts.push('cb=tm');
   return parts.join('&');
+}
+
+// tm= value: comma-separated small ints, capped at 16 entries (mirrors the
+// backend TripFilters pattern ^\d{1,2}(,\d{1,2}){0,15}$).
+const TM_RE = /^\d{1,2}(,\d{1,2}){0,15}$/;
+
+function decodeTransportModes(params: URLSearchParams): number[] | undefined {
+  const tm = params.get('tm');
+  if (!tm || !TM_RE.test(tm)) return undefined;
+  const modes = [...new Set(tm.split(',').map(Number))];
+  return modes.length > 0 ? modes : undefined;
 }
 
 function decodeHash(hash: string): FilterState {
@@ -78,7 +92,28 @@ function decodeHash(hash: string): FilterState {
     maxDwellMinutes: numParam(params, 'xd'),
     minDetourRatio: numParam(params, 'mr'),
     maxDetourRatio: numParam(params, 'xr'),
+    transportModes: decodeTransportModes(params),
+    colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
   };
+}
+
+// ─── Hidden-sources hash encoding (Phase 1 legend toggles) ────────────────
+// Per-source visibility rides the hash under `hs=` so a pasted link restores
+// which populations are hidden. Same source_id validation as vt=.
+
+const SOURCE_ID_RE = /^[a-z][a-z0-9_]*$/;
+
+function encodeHiddenSources(hidden: string[]): string {
+  if (hidden.length === 0) return '';
+  return `hs=${hidden.join(',')}`;
+}
+
+function decodeHiddenSources(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const hs = new URLSearchParams(raw).get('hs');
+  if (!hs) return [];
+  return hs.split(',').map(s => s.trim()).filter(s => SOURCE_ID_RE.test(s));
 }
 
 // ─── Agent-selection hash encoding (Phase 2A) ─────────────
@@ -156,6 +191,17 @@ export default function App() {
   const [agentTrajectories, setAgentTrajectories] = useState<Trajectory[]>([]);
   const [agentLoading, setAgentLoading] = useState(false);
 
+  // Phase 1 — per-source visibility toggles (legend rows click to hide).
+  // Array (not Set) for stable React identity + trivial hash encoding.
+  const [hiddenSources, setHiddenSources] = useState<string[]>(
+    () => decodeHiddenSources(window.location.hash),
+  );
+  const toggleSource = useCallback((sourceId: string) => {
+    setHiddenSources(prev =>
+      prev.includes(sourceId) ? prev.filter(s => s !== sourceId) : [...prev, sourceId],
+    );
+  }, []);
+
   // Through-zone bbox state (Sprint A1b — F2 endpoint UI).
   // Once a query fires, App holds the bbox (rendered as yellow PolygonLayer
   // on the map) and the returned trip list (displayed in the Zone tab).
@@ -166,14 +212,14 @@ export default function App() {
     fetchFilterOptions().then(setFilterOptions).catch(console.error);
   }, []);
 
-  // Sync filter + agent-selection changes to URL hash
+  // Sync filter + agent-selection + hidden-source changes to URL hash
   useEffect(() => {
-    const encoded = [encodeHash(filter), encodeAgents(selectedAgents)]
+    const encoded = [encodeHash(filter), encodeAgents(selectedAgents), encodeHiddenSources(hiddenSources)]
       .filter(Boolean)
       .join('&');
     const newHash = encoded ? '#' + encoded : ' ';
     window.history.replaceState(null, '', newHash || window.location.pathname);
-  }, [filter, selectedAgents]);
+  }, [filter, selectedAgents, hiddenSources]);
 
   // Fetch full-day trajectory chains for followed agents (Phase 2A).
   useEffect(() => {
@@ -201,6 +247,7 @@ export default function App() {
   const { insights, loading: insightsLoading } = useInsights(
     filter.vehicleType, filter.city, filter.simulationDay, hasData,
     filter.goodsType, filter.minHour, filter.maxHour,
+    filter.transportModes,
   );
 
   const cityCenter: [number, number] | null =
@@ -233,7 +280,9 @@ export default function App() {
     // Sprint A1b: also clear zone results — they were filter-scoped
     setZoneBBox(null);
     setZoneTrips([]);
-  }, [filter.vehicleType, filter.city, filter.simulationDay, filter.goodsType]);
+    // transportModes joined to a string — array identity changes per toggle.
+  }, [filter.vehicleType, filter.city, filter.simulationDay, filter.goodsType,
+      filter.transportModes?.join(',')]);
 
   // Map click handler — fires radius query on empty-map clicks
   const handleMapClick = useCallback(async (lon: number, lat: number) => {
@@ -331,6 +380,8 @@ export default function App() {
         sourceStyles={filterOptions?.sources ?? []}
         pulseData={pulse.data}
         buildingsCity={filter.city || 'tokyo'}
+        colorBy={filter.colorBy ?? 'source'}
+        hiddenSources={hiddenSources}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
       />
@@ -338,6 +389,10 @@ export default function App() {
       <SourceLegend
         sources={filterOptions?.sources ?? []}
         attribution={layerVisibility.buildings ? PLATEAU_ATTRIBUTION : undefined}
+        colorBy={filter.colorBy ?? 'source'}
+        transportModes={filterOptions?.transport_modes ?? []}
+        hiddenSources={hiddenSources}
+        onToggleSource={toggleSource}
       />
 
       {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}

@@ -22,6 +22,8 @@ type FilterState = {
   maxDwellMinutes?: number;
   minDetourRatio?: number;
   maxDetourRatio?: number;
+  transportModes?: number[];
+  colorBy?: 'source' | 'transportMode';
 };
 
 const DEFAULT_FILTER: FilterState = {
@@ -50,7 +52,18 @@ function encodeHash(filter: FilterState): string {
   if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
   if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
   if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
+  if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
+  if (filter.colorBy === 'transportMode') parts.push('cb=tm');
   return parts.join('&');
+}
+
+const TM_RE = /^\d{1,2}(,\d{1,2}){0,15}$/;
+
+function decodeTransportModes(params: URLSearchParams): number[] | undefined {
+  const tm = params.get('tm');
+  if (!tm || !TM_RE.test(tm)) return undefined;
+  const modes = [...new Set(tm.split(',').map(Number))];
+  return modes.length > 0 ? modes : undefined;
 }
 
 function decodeHash(hash: string): FilterState {
@@ -70,7 +83,24 @@ function decodeHash(hash: string): FilterState {
     maxDwellMinutes: numParam(params, 'xd'),
     minDetourRatio: numParam(params, 'mr'),
     maxDetourRatio: numParam(params, 'xr'),
+    transportModes: decodeTransportModes(params),
+    colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
   };
+}
+
+const SOURCE_ID_RE = /^[a-z][a-z0-9_]*$/;
+
+function encodeHiddenSources(hidden: string[]): string {
+  if (hidden.length === 0) return '';
+  return `hs=${hidden.join(',')}`;
+}
+
+function decodeHiddenSources(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const hs = new URLSearchParams(raw).get('hs');
+  if (!hs) return [];
+  return hs.split(',').map(s => s.trim()).filter(s => SOURCE_ID_RE.test(s));
 }
 
 describe('filter hash encoding', () => {
@@ -155,6 +185,65 @@ describe('filter hash encoding', () => {
   it('encodes nothing when all filters are at default', () => {
     // simulationDay=undefined is the default; encode skips it.
     expect(encodeHash(DEFAULT_FILTER)).toBe('');
+  });
+
+  // ── Transport mode + color-by (Phase 1) ────────────────────────────────
+
+  it('round-trips transport modes and colorBy', () => {
+    const original: FilterState = {
+      ...DEFAULT_FILTER,
+      transportModes: [0, 3, 8],
+      colorBy: 'transportMode',
+    };
+    const out = decodeHash(encodeHash(original));
+    expect(out.transportModes).toEqual([0, 3, 8]);
+    expect(out.colorBy).toBe('transportMode');
+  });
+
+  it('encodes tm/cb only when set', () => {
+    expect(encodeHash({ ...DEFAULT_FILTER, transportModes: [0, 3] })).toBe('tm=0,3');
+    expect(encodeHash({ ...DEFAULT_FILTER, transportModes: [] })).toBe('');
+    expect(encodeHash({ ...DEFAULT_FILTER, colorBy: 'transportMode' })).toBe('cb=tm');
+    expect(encodeHash({ ...DEFAULT_FILTER, colorBy: 'source' })).toBe('');
+  });
+
+  it('rejects malformed tm values', () => {
+    expect(decodeHash('#tm=abc').transportModes).toBeUndefined();
+    expect(decodeHash('#tm=0,x,3').transportModes).toBeUndefined();
+    expect(decodeHash('#tm=999').transportModes).toBeUndefined();  // 3 digits
+    expect(decodeHash('#tm=0;DROP').transportModes).toBeUndefined();
+    // > 16 entries fails the pattern
+    const many = Array.from({ length: 20 }, (_, i) => i).join(',');
+    expect(decodeHash(`#tm=${many}`).transportModes).toBeUndefined();
+  });
+
+  it('dedupes repeated tm entries', () => {
+    expect(decodeHash('#tm=0,0,3').transportModes).toEqual([0, 3]);
+  });
+});
+
+// ── Hidden-sources hash (Phase 1 legend toggles) ───────────────────────────
+
+describe('hidden-sources hash encoding', () => {
+  it('round-trips hidden sources', () => {
+    expect(decodeHiddenSources('#' + encodeHiddenSources(['truck', 'people'])))
+      .toEqual(['truck', 'people']);
+  });
+
+  it('encodes nothing for an empty list', () => {
+    expect(encodeHiddenSources([])).toBe('');
+  });
+
+  it('drops malformed source_ids', () => {
+    expect(decodeHiddenSources('#hs=truck,Taxi,1bad,ok_one'))
+      .toEqual(['truck', 'ok_one']);
+  });
+
+  it('coexists with filter keys in the same hash', () => {
+    const hash = '#vt=taxi&tm=8&hs=truck';
+    expect(decodeHash(hash).vehicleType).toBe('taxi');
+    expect(decodeHash(hash).transportModes).toEqual([8]);
+    expect(decodeHiddenSources(hash)).toEqual(['truck']);
   });
 });
 

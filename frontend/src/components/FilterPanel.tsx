@@ -8,6 +8,8 @@
 import React, { useState } from 'react';
 import type { FilterState, StatsResponse, FilterOptions, Trajectory } from '../types';
 import type { LayerVisibility } from '../App';
+import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
+import { sourceFallbackColor } from '../sourceColors';
 
 interface FilterPanelProps {
   filter: FilterState;
@@ -154,11 +156,17 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             <div>{totalTrips.toLocaleString()} trips</div>
             {stats?.trips?.by_vehicle_type && (
               <div style={{ fontSize: 11, marginTop: 1 }}>
-                {Object.entries(stats.trips.by_vehicle_type).map(([type, info]) => (
-                  <div key={type} style={{ color: type === 'truck' ? '#fd805d' : '#17b8be' }}>
-                    {info.count.toLocaleString()} {type}
-                  </div>
-                ))}
+                {Object.entries(stats.trips.by_vehicle_type).map(([type, info]) => {
+                  // Source-style color (sources.yaml) with the shared hash
+                  // fallback — was hardcoded truck/taxi hex before Phase 1.
+                  const c = filterOptions?.sources?.find(s => s.source_id === type)?.color
+                    ?? sourceFallbackColor(type);
+                  return (
+                    <div key={type} style={{ color: `rgb(${c[0]},${c[1]},${c[2]})` }}>
+                      {info.count.toLocaleString()} {type}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div>{totalWaypoints.toLocaleString()} waypoints</div>
@@ -196,6 +204,72 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Transport mode multi-select chips + color-by toggle (Phase 1).
+          Filters by the TRIP's mode (trips.transport_mode). Hidden for
+          single-mode datasets — nothing to filter. */}
+      {filterOptions?.transport_modes && filterOptions.transport_modes.length >= 2 && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>Transport Mode</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            <button
+              key="all-modes"
+              style={{
+                ...styles.modeChip,
+                ...(!filter.transportModes?.length ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, transportModes: undefined })}
+            >
+              All
+            </button>
+            {filterOptions.transport_modes.map(({ mode, count }) => {
+              const active = filter.transportModes?.includes(mode) ?? false;
+              const c = TRANSPORT_MODE_META[mode]?.color ?? [128, 128, 128];
+              return (
+                <button
+                  key={mode}
+                  style={{
+                    ...styles.modeChip,
+                    ...(active ? styles.toggleActive : {}),
+                    borderLeft: `3px solid rgb(${c[0]},${c[1]},${c[2]})`,
+                  }}
+                  title={`${count.toLocaleString()} trips`}
+                  onClick={() => {
+                    const cur = filter.transportModes ?? [];
+                    const next = cur.includes(mode)
+                      ? cur.filter(m => m !== mode)
+                      : [...cur, mode].sort((a, b) => a - b);
+                    onChange({ ...filter, transportModes: next.length ? next : undefined });
+                  }}
+                >
+                  {transportModeLabel(mode)}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ ...styles.row, marginTop: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: '#999' }}>Color by</span>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...(filter.colorBy !== 'transportMode' ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, colorBy: undefined })}
+            >
+              Source
+            </button>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...(filter.colorBy === 'transportMode' ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, colorBy: 'transportMode' })}
+            >
+              Mode
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* City dropdown */}
       {filterOptions && filterOptions.cities.length > 0 && (
@@ -524,6 +598,17 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#1a5276',
     borderColor: '#4fc3f7',
     color: '#fff',
+  },
+  // Transport-mode chips (Phase 1) — like toggleBtn but content-sized so
+  // 5-6 chips wrap instead of squeezing into one row.
+  modeChip: {
+    padding: '4px 8px',
+    border: '1px solid #444',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#aaa',
+    cursor: 'pointer',
+    fontSize: 11,
   },
   row: {
     display: 'flex',
