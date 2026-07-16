@@ -259,14 +259,19 @@ async def trips_through_zone_bbox(
     trip_where = f.where()
     and_or_where = "AND" if trip_where else "WHERE"
 
-    # Composite IN: match trajectories.py:query-bbox pattern.
+    # Semi-join on (vehicle_key, trip_id), NOT (vehicle_id, trip_id):
+    # vehicle_id collides across source_ids AND taxi cities (verified on the
+    # kichijoji DB — kjbaseline/kjcar/kjwalk share vehicle_id space), so a
+    # bare (vehicle_id, trip_id) IN would match one source's trip against
+    # another source's waypoints in the bbox. vehicle_key is globally unique.
     rows = conn.execute(f"""
         SELECT vehicle_id, trip_id, starttime, start_lon, start_lat,
-               end_lon, end_lat, vehicle_type, distance_km, goods_type, city
+               end_lon, end_lat, vehicle_type, distance_km, goods_type, city,
+               transport_mode
         FROM trips
         {trip_where}
-        {and_or_where} (vehicle_id, trip_id) IN (
-            SELECT DISTINCT vehicle_id, trip_id
+        {and_or_where} (vehicle_key, trip_id) IN (
+            SELECT DISTINCT vehicle_key, trip_id
             FROM waypoints
             WHERE lon BETWEEN {float(w)} AND {float(e)}
               AND lat BETWEEN {float(s)} AND {float(n)}
@@ -282,6 +287,7 @@ async def trips_through_zone_bbox(
                 "end_lon":      r[5], "end_lat":    r[6],
                 "vehicle_type": r[7], "distance_km": r[8],
                 "goods_type":   r[9], "city":       r[10],
+                "transport_mode": r[11],
             }
             for r in rows
         ],
