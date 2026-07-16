@@ -181,6 +181,21 @@ def unpack(data: bytes) -> BuildingSet:
 # --- Sources ------------------------------------------------------------------
 
 
+# Rows above this footprint area are treated as DISSOLVED BLOCKS, not single
+# buildings. Verified on Kichijoji (city 13203): the shotengai blocks around
+# the station appear as single rows up to 43,000 m2 — merged wall-to-wall
+# low-rise polygons — while true single buildings there top out ~6,000 m2.
+# One centered square + the log2 height rule turned each block into an
+# overlapping ~200 m x 60 m-tall monolith slab.
+BLOCK_AREA_M2 = 3000.0
+# Block sub-division: grid pitch + gap (visual urban fabric, not a slab).
+BLOCK_CELL_PITCH_M = 28.0
+BLOCK_CELL_GAP_M = 4.0
+# Merged blocks are low-rise arcades/rowhouses: 2-5 floors.
+BLOCK_HEIGHT_MIN_M = 8.0
+BLOCK_HEIGHT_MAX_M = 16.0
+
+
 def synthesize_from_tatemono(
     rows: list[tuple[float, float, float]],
     seed: int = 42,
@@ -192,6 +207,10 @@ def synthesize_from_tatemono(
     axis-aligned square of the same area and assign a heuristic height
     h = clamp(8, 4*log2(area_m2), 60) with deterministic jitter. Output is
     flagged heights_synthesized=True all the way to the UI.
+
+    Rows larger than BLOCK_AREA_M2 are dissolved city blocks (see constant
+    above): those are split into a gapped grid of low-rise cells instead —
+    big merged area must NOT read as one tall tower.
     """
     import random
     rng = random.Random(seed)
@@ -202,6 +221,30 @@ def synthesize_from_tatemono(
         if area_m2 < 25:
             continue
         side_m = math.sqrt(area_m2)
+
+        if area_m2 > BLOCK_AREA_M2:
+            # Dissolved block → n x n grid of low-rise cells with gaps.
+            n = max(2, round(side_m / BLOCK_CELL_PITCH_M))
+            pitch_m = side_m / n
+            cell_m = max(pitch_m - BLOCK_CELL_GAP_M, pitch_m * 0.6)
+            for gi in range(n):
+                for gj in range(n):
+                    cx = lon + ((gi + 0.5) / n - 0.5) * side_m / m_per_deg_lon
+                    cy = lat + ((gj + 0.5) / n - 0.5) * side_m / M_PER_DEG_LAT
+                    hx = cell_m / 2 / m_per_deg_lon
+                    hy = cell_m / 2 / M_PER_DEG_LAT
+                    ring = [
+                        (cx - hx, cy - hy),
+                        (cx + hx, cy - hy),
+                        (cx + hx, cy + hy),
+                        (cx - hx, cy + hy),
+                    ]
+                    h = BLOCK_HEIGHT_MIN_M + (
+                        BLOCK_HEIGHT_MAX_M - BLOCK_HEIGHT_MIN_M
+                    ) * rng.random()
+                    out.append(Building(rings=[ring], height_m=h))
+            continue
+
         half_lon = side_m / 2 / m_per_deg_lon
         half_lat = side_m / 2 / M_PER_DEG_LAT
         ring = [

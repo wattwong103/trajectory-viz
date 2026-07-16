@@ -107,6 +107,19 @@ def test_synthesize_is_deterministic():
     assert a[0].height_m == b[0].height_m
 
 
+def test_synthesize_splits_dissolved_blocks_into_low_rise_grid():
+    # 43,000 m² row = a dissolved shotengai block (Kichijoji station area),
+    # NOT one building. Must become many low-rise cells, never one 60 m slab.
+    area_deg2 = 43_000 / (111_320.0 * 111_320.0 * 0.813)
+    out = synthesize_from_tatemono([(139.58, 35.6, area_deg2)])
+    assert len(out) > 20                                  # gridded, not one square
+    assert all(b.height_m <= 16.0 for b in out)           # low-rise arcade heights
+    # each cell is small and the cells tile the original extent with gaps
+    assert all(ring_area_m2(b.outer()) < 1000 for b in out)
+    total_cell_area = sum(ring_area_m2(b.outer()) for b in out)
+    assert total_cell_area < 43_000                        # gaps exist
+
+
 # --- sampling -----------------------------------------------------------------
 
 
