@@ -99,11 +99,17 @@ Every data endpoint (`/api/trips/*`, `/api/trajectories/*`, `/api/analysis/*`, `
 | `vehicle_type` | `^[a-z][a-z0-9_]*$` | Any source_id from `sources.yaml` (e.g. `truck`, `taxi`) |
 | `city` | `^[a-z_]+$` | e.g. `tokyo`, `osaka`. Query `/api/stats/filter-options` for the live list. |
 | `simulation_day` | `int ≥ 0` | Day index in the run |
+| `transport_modes` | `^\d{1,2}(,\d{1,2}){0,15}$` | Comma-separated PFLOW mode ids (`0`=walk `1`=bike `2`=bus `3`=car `4`=train `8`=taxi). Filters by the **trip's** mode. |
 | `min_speed` / `max_speed` | `float` km/h | F1 speed filter |
 | `max_dwell_minutes` | `float` | F1 utilization filter (heavy users have low dwell) |
 | `min_detour_ratio` / `max_detour_ratio` | `float` ≥ 1.0 | F1 route-shape filter |
+| `scenario` + `sc_w/sc_s/sc_e/sc_n` | `pedestrianize` + bbox floats | Query-time scenario: excludes car trips whose trajectories enter the bbox. `GET /api/stats/scenario-impact` reports what's removed. |
 
-Assembled internally via `db.build_trip_filter(...)`. All filter params are SQL-injection-safe (Pydantic patterns or explicit `int()`/`float()` casts).
+All shared dimensions live in `backend/filters.py` (`TripFilters` — the FastAPI dependency every router uses), which delegates to `db.build_trip_filter(...)`. All filter params are SQL-injection-safe (Pydantic patterns or explicit `int()`/`float()` casts).
+
+URL-hash keys for shareable views: `vt city day minh maxh gt ms xs xd mr xr` + `tm` (transport modes), `cb=tm` (color by mode), `hs` (hidden sources), `sc` (scenario), `ag` (followed agents).
+
+> Note: `.claude/rules/trajectory-viz.md` says the DuckDB connection is per-request; the code actually uses a module-level singleton (`db.get_connection`). Flagged during the Phase-0 refactor — reconcile whichever way is intended.
 
 ---
 
@@ -119,6 +125,18 @@ Waypoint queries filter through the subquery pattern:
 SELECT ... FROM waypoints
 WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {build_trip_filter(...)})
 ```
+
+**Per-trip conditions need trip granularity.** `transport_mode` and the
+pedestrianize scenario are per-TRIP attributes; the per-vehicle subquery
+above over-selects for them (a vehicle with one matching trip would drag in
+all its trips). Whenever either is set, waypoint queries switch to:
+
+```sql
+WHERE (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {build_trip_filter(...)})
+```
+
+(`build_trip_pair_subquery` in `backend/trajectory_queries.py`.) Never join
+on bare `(vehicle_id, trip_id)` — vehicle_id collides across source_ids too.
 
 ---
 
