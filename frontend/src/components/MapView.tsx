@@ -11,7 +11,7 @@
  * 7. ScatterplotLayer — drill click-point ring marker
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import {
   FlyToInterpolator, AmbientLight, DirectionalLight, LightingEffect,
@@ -29,7 +29,8 @@ import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensit
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
 import {
-  BUILDING_SOURCES, heightRamp, decodePBLD, type DecodedBuilding,
+  BUILDING_SOURCES, pickBuildingSource, heightRamp, decodePBLD,
+  type DecodedBuilding,
 } from '../buildings';
 import { transportModeColor, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
@@ -129,8 +130,11 @@ interface MapViewProps {
   pulseData?: HourlyDensity | null;
   // Footfall — walk-trip waypoint density points (empty = layer off/no data)
   footfallPoints?: DensityPoint[];
-  // Phase 2C — which city's building source to use when buildings are on
+  // Phase 2C — building-source preference when the viewport doesn't resolve
+  // one (Phase 3: viewport bbox now decides; this is the fallback)
   buildingsCity?: string;
+  // Phase 3 — building height multiplier (FilterPanel slider, default 1)
+  buildingExaggeration?: number;
   // Phase 1 (transport mode) — color scheme + per-source visibility
   colorBy?: 'source' | 'transportMode';
   hiddenSources?: string[];
@@ -152,6 +156,7 @@ export const MapView: React.FC<MapViewProps> = ({
   pulseData = null,
   footfallPoints = [],
   buildingsCity = 'tokyo',
+  buildingExaggeration = 1,
   colorBy = 'source',
   hiddenSources = [],
   onMapClick,
@@ -165,18 +170,39 @@ export const MapView: React.FC<MapViewProps> = ({
   // (which re-runs every RAF frame via currentTime) would thrash that cache.
   // Everything else stays in the main memo to preserve layer order exactly.
   const buildingsOn = !!layerVisibility.buildings;
-  const buildingSource = BUILDING_SOURCES[buildingsCity] ?? null;
+  // Phase 3 — resolve the building source from the viewport center, not the
+  // city dropdown (which stays as fallback preference). Quantized to ~0.005°
+  // (~500 m) so panning doesn't re-resolve every frame — must stay finer
+  // than the smallest registered bbox (kichijoji is ~0.023° wide; a 0.05°
+  // grid would snap the center right past it).
+  const qLon = Math.round(viewState.longitude * 200) / 200;
+  const qLat = Math.round(viewState.latitude * 200) / 200;
+  const buildingsKey = useMemo(
+    () => pickBuildingSource(qLon, qLat, buildingsCity),
+    [qLon, qLat, buildingsCity],
+  );
+  const buildingSource = BUILDING_SOURCES[buildingsKey] ?? null;
+  // Decoded baked sets cached per URL — toggling layers or panning away and
+  // back must not refetch/redecode. globalThis.Map: the bare name `Map` is
+  // shadowed by the react-map-gl component import in this file.
+  const bakedCache = useRef(new globalThis.Map<string, DecodedBuilding[]>());
   const [bakedBuildings, setBakedBuildings] = useState<DecodedBuilding[] | null>(null);
 
   useEffect(() => {
     if (!buildingsOn || !buildingSource || buildingSource.kind !== 'baked') return;
+    const cached = bakedCache.current.get(buildingSource.url);
+    if (cached) { setBakedBuildings(cached); return; }
     let cancelled = false;
     fetch(buildingSource.url)
       .then(r => {
         if (!r.ok) throw new Error(`buildings fetch: ${r.status}`);
         return r.arrayBuffer();
       })
-      .then(buf => { if (!cancelled) setBakedBuildings(decodePBLD(buf).buildings); })
+      .then(buf => {
+        const decoded = decodePBLD(buf).buildings;
+        bakedCache.current.set(buildingSource.url, decoded);
+        if (!cancelled) setBakedBuildings(decoded);
+      })
       .catch(e => console.error('Baked buildings load failed:', e));
     return () => { cancelled = true; };
   }, [buildingsOn, buildingSource]);
@@ -190,8 +216,10 @@ export const MapView: React.FC<MapViewProps> = ({
         minZoom: buildingSource.minZoom,
         maxZoom: buildingSource.maxZoom,
         extruded: true,
-        getElevation: (f: any) => f.properties?.[buildingSource.heightAttr] ?? 12,
+        getElevation: (f: any) =>
+          (f.properties?.[buildingSource.heightAttr] ?? 12) * buildingExaggeration,
         getFillColor: (f: any) => heightRamp(f.properties?.[buildingSource.heightAttr] ?? 12),
+        updateTriggers: { getElevation: [buildingExaggeration] },
         opacity: 0.95,
         pickable: false,
         material: { ambient: 0.6, diffuse: 0.4, shininess: 40, specularColor: [30, 40, 60] },
@@ -203,14 +231,15 @@ export const MapView: React.FC<MapViewProps> = ({
       data: bakedBuildings,
       getPolygon: (d) => d.polygon,
       extruded: true,
-      getElevation: (d) => d.height,
+      getElevation: (d) => d.height * buildingExaggeration,
       getFillColor: (d) => heightRamp(d.height),
+      updateTriggers: { getElevation: [buildingExaggeration] },
       opacity: 0.95,
       stroked: false,
       pickable: false,
       material: { ambient: 0.6, diffuse: 0.4, shininess: 40, specularColor: [30, 40, 60] },
     });
-  }, [buildingsOn, buildingSource, bakedBuildings]);
+  }, [buildingsOn, buildingSource, bakedBuildings, buildingExaggeration]);
 
   // Per-source rendering hints keyed by source_id (Phase 2A).
   const styleBySource = useMemo(() => {
@@ -773,6 +802,9 @@ export const MapView: React.FC<MapViewProps> = ({
       viewState={viewState}
       onViewStateChange={(e: any) => setViewState(e.viewState)}
       controller={true}
+      // Phase 3 note: no preserveDrawingBuffer needed on DeckGL — deck.gl 9
+      // defaults it to true (deviceProps.webgl); MapLibre needs it explicitly
+      // (prop on <Map> below) for the composite PNG export.
       // buildingsLayer is memoized separately (tile cache) and sits at the
       // very bottom of the stack; deck.gl skips null entries.
       layers={[buildingsLayer, ...layers]}
@@ -842,7 +874,7 @@ export const MapView: React.FC<MapViewProps> = ({
         return null;
       }}
     >
-      <Map mapStyle={MAP_STYLE} />
+      <Map mapStyle={MAP_STYLE} preserveDrawingBuffer />
     </DeckGL>
   );
 };

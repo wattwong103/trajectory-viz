@@ -9,9 +9,11 @@
  *           scripts/build_buildings.py (format: backend/buildings_io.py)
  */
 
+// bbox: [w, s, e, n] — the source's coverage extent. pickBuildingSource
+// resolves the viewport center against these (smallest containing wins).
 export type BuildingSource =
-  | { kind: 'mvt'; url: string; sourceLayer: string; heightAttr: string; minZoom: number; maxZoom: number; attribution: string }
-  | { kind: 'baked'; url: string; attribution: string };
+  | { kind: 'mvt'; url: string; sourceLayer: string; heightAttr: string; minZoom: number; maxZoom: number; attribution: string; bbox: [number, number, number, number] }
+  | { kind: 'baked'; url: string; attribution: string; bbox: [number, number, number, number] };
 
 export const PLATEAU_ATTRIBUTION =
   '建物データ: 国土交通省 Project PLATEAU (CC-BY-4.0)';
@@ -25,11 +27,43 @@ export const BUILDING_SOURCES: Record<string, BuildingSource> = {
     minZoom: 10,
     maxZoom: 16,
     attribution: PLATEAU_ATTRIBUTION,
+    // 23-wards LOD2 tileset extent (approx)
+    bbox: [139.55, 35.50, 139.95, 35.85],
   },
   // Baked cities appear here as scripts/build_buildings.py outputs are added:
-  // osaka: { kind: 'baked', url: '/api/buildings/osaka', attribution: PLATEAU_ATTRIBUTION },
-  kichijoji: { kind: 'baked', url: '/api/buildings/kichijoji', attribution: PLATEAU_ATTRIBUTION },
+  // osaka: { kind: 'baked', url: '/api/buildings/osaka', attribution: PLATEAU_ATTRIBUTION, bbox: [...] },
+  kichijoji: {
+    kind: 'baked',
+    url: '/api/buildings/kichijoji',
+    attribution: PLATEAU_ATTRIBUTION,
+    // True PBLD vertex extent [139.573, 35.695, 139.590, 35.709], padded.
+    bbox: [139.570, 35.692, 139.593, 35.712],
+  },
 };
+
+/** Resolve which building source to render for a viewport center.
+ *
+ * Sources whose bbox contains the point are candidates; the smallest-area
+ * (most specific) one wins — so panning to Kichijoji picks the baked set
+ * over the surrounding Tokyo MVT extent. Falls back to `preferredCity`
+ * (the filter's city) when registered, else Tokyo.
+ */
+export function pickBuildingSource(
+  lon: number, lat: number, preferredCity?: string,
+): string {
+  let best: string | null = null;
+  let bestArea = Infinity;
+  for (const [city, src] of Object.entries(BUILDING_SOURCES)) {
+    const [w, s, e, n] = src.bbox;
+    if (lon >= w && lon <= e && lat >= s && lat <= n) {
+      const area = (e - w) * (n - s);
+      if (area < bestArea) { best = city; bestArea = area; }
+    }
+  }
+  if (best) return best;
+  if (preferredCity && BUILDING_SOURCES[preferredCity]) return preferredCity;
+  return 'tokyo';
+}
 
 /** Night-grid height ramp: deep indigo base → cyan mid-rise → amber accents
  * above 100 m. Log-ish curve so the 6-40 m mass stays differentiated. */

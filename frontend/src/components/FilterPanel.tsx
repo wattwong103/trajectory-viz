@@ -23,10 +23,13 @@ interface FilterPanelProps {
   drillPoint: [number, number] | null;
   drillLoading: boolean;
   layerVisibility: LayerVisibility;
+  // Phase 3 — building height multiplier (shown under the 3D Buildings row)
+  buildingExaggeration: number;
   onChange: (f: FilterState) => void;
   onRefetch: () => void;
   onClearDrill: () => void;
   onLayerToggle: (key: string) => void;
+  onBuildingExaggeration: (v: number) => void;
   onScreenshot: () => void;
 }
 
@@ -69,7 +72,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   filterOptions,
   drillTrajectories, drillPoint, drillLoading,
   layerVisibility,
-  onChange, onRefetch, onClearDrill, onLayerToggle, onScreenshot,
+  buildingExaggeration,
+  onChange, onRefetch, onClearDrill, onLayerToggle,
+  onBuildingExaggeration, onScreenshot,
 }) => {
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
@@ -479,15 +484,31 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         {layersExpanded && (
           <div style={styles.layersList}>
             {LAYER_LABELS.map(({ key, label }) => (
-              <label key={key} style={styles.layerRow}>
-                <input
-                  type="checkbox"
-                  checked={layerVisibility[key] ?? true}
-                  onChange={() => onLayerToggle(key)}
-                  style={{ marginRight: 6, accentColor: '#4fc3f7' }}
-                />
-                {label}
-              </label>
+              <React.Fragment key={key}>
+                <label style={styles.layerRow}>
+                  <input
+                    type="checkbox"
+                    checked={layerVisibility[key] ?? true}
+                    onChange={() => onLayerToggle(key)}
+                    style={{ marginRight: 6, accentColor: '#4fc3f7' }}
+                  />
+                  {label}
+                </label>
+                {/* Phase 3 — height exaggeration, only while buildings are on */}
+                {key === 'buildings' && layerVisibility.buildings && (
+                  <div style={{ padding: '2px 0 4px 22px' }}>
+                    <label style={{ ...styles.sectionLabel, marginBottom: 2 }}>
+                      Height ×{buildingExaggeration.toFixed(1)}
+                    </label>
+                    <input
+                      type="range" min={0.5} max={5} step={0.1}
+                      value={buildingExaggeration}
+                      onChange={e => onBuildingExaggeration(Number(e.target.value))}
+                      style={{ ...styles.rangeInput, width: '90%' }}
+                    />
+                  </div>
+                )}
+              </React.Fragment>
             ))}
           </div>
         )}

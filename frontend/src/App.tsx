@@ -10,7 +10,7 @@
  *   AnalysisPanel → analysis APIs       → MapView overlay layers
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { MapView } from './components/MapView';
 import { FilterPanel } from './components/FilterPanel';
 import { TimeSlider } from './components/TimeSlider';
@@ -23,6 +23,7 @@ import { useInsights } from './hooks/useInsights';
 import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { useFootfall } from './hooks/useFootfall';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
+import { exportCompositePng } from './utils/exportPng';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
@@ -351,24 +352,20 @@ export default function App() {
     setZoneTrips([]);
   }, []);
 
-  // Screenshot handler
+  // Phase 3 — building height exaggeration (render param, not a data filter:
+  // lives outside FilterState/hash, like trailLength).
+  const [buildingExaggeration, setBuildingExaggeration] = useState(1);
+
+  // Screenshot handler — composites basemap + deck canvases (Phase 3).
+  const mapContainerRef = useRef<HTMLDivElement>(null);
   const handleScreenshot = useCallback(() => {
-    const canvas = document.querySelector('canvas') as HTMLCanvasElement | null;
-    if (!canvas) return;
+    if (!mapContainerRef.current) return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    canvas.toBlob(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `pflow-viz-${timestamp}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }, 'image/png');
+    exportCompositePng(mapContainerRef.current, `pflow-viz-${timestamp}.png`);
   }, []);
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+    <div ref={mapContainerRef} style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <MapView
         trajectories={trajectories}
         trips={trips}
@@ -389,6 +386,7 @@ export default function App() {
         pulseData={pulse.data}
         footfallPoints={layerVisibility.footfall ? footfall.points : []}
         buildingsCity={filter.city || 'tokyo'}
+        buildingExaggeration={buildingExaggeration}
         colorBy={filter.colorBy ?? 'source'}
         hiddenSources={hiddenSources}
         onMapClick={handleMapClick}
@@ -444,10 +442,12 @@ export default function App() {
         drillPoint={drillPoint}
         drillLoading={drillLoading}
         layerVisibility={layerVisibility}
+        buildingExaggeration={buildingExaggeration}
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
         onLayerToggle={(key) => setLayerVisibility(prev => ({ ...prev, [key]: !prev[key] }))}
+        onBuildingExaggeration={setBuildingExaggeration}
         onScreenshot={handleScreenshot}
       />
 
