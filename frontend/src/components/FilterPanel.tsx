@@ -47,6 +47,7 @@ const LAYER_LABELS: Array<{ key: string; label: string }> = [
   { key: 'sourceArcs',    label: 'O-D arcs (trip-only sources)' },
   { key: 'pulse',         label: '◉ Pulse (hourly density)' },
   { key: 'buildings',     label: '🏙 3D Buildings' },
+  { key: 'footfall',      label: '🚶 Footfall (walk density)' },
 ];
 
 /** Relabel EMPTY goods type for display; sort EMPTY last */

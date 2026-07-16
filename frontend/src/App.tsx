@@ -21,6 +21,7 @@ import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
 import { useHourlyDensity } from './hooks/useHourlyDensity';
+import { useFootfall } from './hooks/useFootfall';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
@@ -165,6 +166,8 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   pulse: false,
   // Phase 2C — 3D buildings night scene (opt-in; keeps first paint fast)
   buildings: false,
+  // Footfall — walk-trip waypoint density (opt-in; needs trajectory data)
+  footfall: false,
 };
 
 export default function App() {
@@ -256,6 +259,11 @@ export default function App() {
   // Phase 2B — pulse heatmap data (fetched once per filter change while on)
   const pulse = useHourlyDensity(
     !!layerVisibility.pulse, filter.vehicleType, filter.city,
+  );
+
+  // Footfall — walk-trip waypoint density (fetched when the layer is on)
+  const footfall = useFootfall(
+    !!layerVisibility.footfall, filter.vehicleType, filter.city, filter.simulationDay,
   );
 
   // Phase 2/3 overlay state
@@ -379,6 +387,7 @@ export default function App() {
         selectedAgents={selectedAgents}
         sourceStyles={filterOptions?.sources ?? []}
         pulseData={pulse.data}
+        footfallPoints={layerVisibility.footfall ? footfall.points : []}
         buildingsCity={filter.city || 'tokyo'}
         colorBy={filter.colorBy ?? 'source'}
         hiddenSources={hiddenSources}
@@ -404,6 +413,22 @@ export default function App() {
           zIndex: 5,
         }}>
           Pulse layer unavailable: {pulse.error}
+        </div>
+      )}
+
+      {/* Footfall — honest labels for degraded states (pulse-409 pattern) */}
+      {layerVisibility.footfall && (footfall.error || footfall.fallback) && (
+        <div style={{
+          position: 'absolute', bottom: footfall.error ? 96 : 148, right: 12, maxWidth: 320,
+          background: footfall.error ? 'rgba(60,20,20,0.9)' : 'rgba(60,45,15,0.9)',
+          border: footfall.error ? '1px solid #a55' : '1px solid #a85',
+          borderRadius: 6, padding: '8px 10px', fontSize: 11,
+          color: footfall.error ? '#f0c0c0' : '#f0d8b0',
+          zIndex: 5,
+        }}>
+          {footfall.error
+            ? `Footfall layer unavailable: ${footfall.error}`
+            : 'Footfall: no walk waypoints in this dataset — showing walk-trip OD density instead.'}
         </div>
       )}
 

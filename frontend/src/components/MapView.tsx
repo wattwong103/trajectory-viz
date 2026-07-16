@@ -127,6 +127,8 @@ interface MapViewProps {
   sourceStyles?: SourceStyle[];
   // Phase 2B — pulse heatmap (24 pre-fetched hour buckets)
   pulseData?: HourlyDensity | null;
+  // Footfall — walk-trip waypoint density points (empty = layer off/no data)
+  footfallPoints?: DensityPoint[];
   // Phase 2C — which city's building source to use when buildings are on
   buildingsCity?: string;
   // Phase 1 (transport mode) — color scheme + per-source visibility
@@ -148,6 +150,7 @@ export const MapView: React.FC<MapViewProps> = ({
   selectedAgents = [],
   sourceStyles = [],
   pulseData = null,
+  footfallPoints = [],
   buildingsCity = 'tokyo',
   colorBy = 'source',
   hiddenSources = [],
@@ -291,6 +294,28 @@ export const MapView: React.FC<MapViewProps> = ({
           intensity: 1.5,
           threshold: 0.05,
           opacity: 0.6,
+        }),
+      );
+    }
+
+    // Layer 1b: Footfall heatmap — walk-trip waypoint density (Phase 2).
+    // Distinct green "pedestrian ground glow" ramp so it reads apart from the
+    // generic density heatmap; stays low in the z-order with the other heatmaps.
+    if (layerVisibility.footfall && footfallPoints.length > 0) {
+      result.push(
+        new HeatmapLayer({
+          id: 'footfall-heatmap',
+          data: footfallPoints,
+          getPosition: (d: DensityPoint) => [d.lon, d.lat],
+          getWeight: (d: DensityPoint) => d.weight,
+          radiusPixels: 25,
+          colorRange: [
+            [10, 30, 18], [18, 84, 38], [30, 140, 60],
+            [43, 200, 80], [150, 235, 130], [235, 255, 220],
+          ],
+          intensity: 1.4,
+          threshold: 0.03,
+          opacity: 0.7,
         }),
       );
     }
@@ -739,7 +764,7 @@ export const MapView: React.FC<MapViewProps> = ({
     drillTrajectories, drillPoint, zoneBBox,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
-    pulseData,
+    pulseData, footfallPoints,
     colorBy, hidden,
   ]);
 

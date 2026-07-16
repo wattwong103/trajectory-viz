@@ -179,7 +179,13 @@ async def waypoint_density(
 
     trip_where = f.where()
 
-    if trip_where:
+    # INVARIANT: transport_mode is per-TRIP. With a mode filter set, per-vehicle
+    # scoping over-selects (one walk trip drags in the vehicle's car waypoints
+    # too), so switch to trip-granular (vehicle_key, trip_id) scoping. The
+    # vehicle_key path stays for the common no-mode case (identical to before).
+    if trip_where and f.transport_mode_list():
+        waypoint_where = f"WHERE (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
+    elif trip_where:
         waypoint_where = f"WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
     else:
         waypoint_where = ""
@@ -229,7 +235,10 @@ async def link_density(
     conn = get_connection()
 
     trip_where = f.where()
-    if trip_where:
+    # Same trip-granular scoping rule as waypoint-density (see comment there).
+    if trip_where and f.transport_mode_list():
+        waypoint_scope = f"AND (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
+    elif trip_where:
         waypoint_scope = f"AND vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
     else:
         waypoint_scope = ""
