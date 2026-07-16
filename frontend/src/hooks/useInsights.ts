@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import type { InsightsResponse } from '../types';
+import type { FilterState, InsightsResponse } from '../types';
 import { fetchInsights } from '../api';
 
 interface UseInsights {
@@ -23,6 +23,7 @@ export function useInsights(
   minHour?: number,
   maxHour?: number,
   transportModes?: number[],
+  scenario?: FilterState['scenario'],
 ): UseInsights {
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,7 +36,8 @@ export function useInsights(
     try {
       const vtype = vehicleType === 'all' ? undefined : vehicleType;
       const data = await fetchInsights(
-        vtype, city, simulationDay, goodsType, minHour, maxHour, transportModes,
+        vtype, city, simulationDay, goodsType, minHour, maxHour,
+        transportModes, scenario,
       );
       setInsights(data);
     } catch (e) {
@@ -45,9 +47,10 @@ export function useInsights(
     } finally {
       setLoading(false);
     }
-    // transportModes joined to a string — array identity changes per toggle.
+    // Arrays/objects serialized to strings — identity changes per toggle.
   }, [vehicleType, city, simulationDay, hasData, goodsType, minHour, maxHour,
-      transportModes?.join(',')]);
+      transportModes?.join(','),
+      scenario && JSON.stringify(scenario.bbox)]);
 
   useEffect(() => {
     load();

@@ -10,6 +10,7 @@ import type { FilterState, StatsResponse, FilterOptions, Trajectory } from '../t
 import type { LayerVisibility } from '../App';
 import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
+import type { ScenarioImpact } from '../hooks/useScenarioImpact';
 
 interface FilterPanelProps {
   filter: FilterState;
@@ -25,6 +26,8 @@ interface FilterPanelProps {
   layerVisibility: LayerVisibility;
   // Phase 3 — building height multiplier (shown under the 3D Buildings row)
   buildingExaggeration: number;
+  // Phase 4 — impact numbers for the active-scenario badge (null = inactive)
+  scenarioImpact: ScenarioImpact | null;
   onChange: (f: FilterState) => void;
   onRefetch: () => void;
   onClearDrill: () => void;
@@ -73,6 +76,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   drillTrajectories, drillPoint, drillLoading,
   layerVisibility,
   buildingExaggeration,
+  scenarioImpact,
   onChange, onRefetch, onClearDrill, onLayerToggle,
   onBuildingExaggeration, onScreenshot,
 }) => {
@@ -454,6 +458,27 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         {error && <div style={styles.error}>{error}</div>}
       </div>
 
+      {/* Phase 4 — active pedestrianize-scenario badge */}
+      {filter.scenario && (
+        <div style={styles.scenarioBox}>
+          <span>
+            <span style={{ color: '#ff8a80', fontWeight: 600 }}>Pedestrianized zone</span>
+            {scenarioImpact && (
+              <span style={{ display: 'block', color: '#f0c0a0' }}>
+                −{scenarioImpact.excluded_trips.toLocaleString()} car trips
+                {' · '}−{Math.round(scenarioImpact.excluded_vkt_km).toLocaleString()} km VKT
+              </span>
+            )}
+          </span>
+          <button
+            onClick={() => onChange({ ...filter, scenario: undefined })}
+            style={styles.scenarioClearBtn}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Drill status indicator */}
       {(drillPoint || drillLoading) && (
         <div style={styles.drillBox}>
@@ -669,6 +694,31 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     background: 'transparent',
     color: '#ffe566',
+    cursor: 'pointer',
+    fontSize: 10,
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
+  },
+  // Phase 4 — amber/red scenario badge (mirrors drillBox styling)
+  scenarioBox: {
+    background: 'rgba(231, 76, 60, 0.10)',
+    border: '1px solid rgba(231, 76, 60, 0.45)',
+    borderRadius: 6,
+    padding: '5px 8px',
+    fontSize: 11,
+    marginBottom: 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    lineHeight: 1.4,
+  },
+  scenarioClearBtn: {
+    padding: '2px 7px',
+    border: '1px solid rgba(231, 76, 60, 0.5)',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#ff8a80',
     cursor: 'pointer',
     fontSize: 10,
     whiteSpace: 'nowrap' as const,

@@ -22,6 +22,7 @@ import { useAnimation } from './hooks/useAnimation';
 import { useInsights } from './hooks/useInsights';
 import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { useFootfall } from './hooks/useFootfall';
+import { useScenarioImpact } from './hooks/useScenarioImpact';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
 import { exportCompositePng } from './utils/exportPng';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
@@ -61,7 +62,23 @@ function encodeHash(filter: FilterState): string {
   // Phase 1 — transport-mode selection + color scheme (short keys tm/cb)
   if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
   if (filter.colorBy === 'transportMode') parts.push('cb=tm');
+  // Phase 4 — scenario: sc=p:{w},{s},{e},{n}
+  if (filter.scenario) {
+    const b = filter.scenario.bbox;
+    parts.push(`sc=p:${b.w},${b.s},${b.e},${b.n}`);
+  }
   return parts.join('&');
+}
+
+// sc= value: 'p:' + four finite floats (w,s,e,n) with w<e, s<n.
+function decodeScenario(params: URLSearchParams): FilterState['scenario'] {
+  const sc = params.get('sc');
+  if (!sc || !sc.startsWith('p:')) return undefined;
+  const nums = sc.slice(2).split(',').map(Number);
+  if (nums.length !== 4 || nums.some(v => !Number.isFinite(v))) return undefined;
+  const [w, s, e, n] = nums;
+  if (w >= e || s >= n) return undefined;
+  return { type: 'pedestrianize', bbox: { w, s, e, n } };
 }
 
 // tm= value: comma-separated small ints, capped at 16 entries (mirrors the
@@ -96,6 +113,7 @@ function decodeHash(hash: string): FilterState {
     maxDetourRatio: numParam(params, 'xr'),
     transportModes: decodeTransportModes(params),
     colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
+    scenario: decodeScenario(params),
   };
 }
 
@@ -251,8 +269,25 @@ export default function App() {
   const { insights, loading: insightsLoading } = useInsights(
     filter.vehicleType, filter.city, filter.simulationDay, hasData,
     filter.goodsType, filter.minHour, filter.maxHour,
-    filter.transportModes,
+    filter.transportModes, filter.scenario,
   );
+
+  // Phase 4 — scenario impact badge data (null when no scenario active)
+  const scenarioImpact = useScenarioImpact(
+    filter.scenario, filter.vehicleType, filter.city, filter.simulationDay,
+  );
+
+  // Scenario bbox is city-specific: a city switch clears it (other filter
+  // changes keep it — it's a declared experiment). First-run guard so a
+  // hash-restored scenario survives the mount ('' sentinel ≠ any real city,
+  // and prev may legitimately be undefined = "All cities").
+  const prevCityRef = useRef<string | undefined | ''>('');
+  useEffect(() => {
+    const prev = prevCityRef.current;
+    prevCityRef.current = filter.city;
+    if (prev === '' || prev === filter.city) return;
+    setFilter(f => (f.scenario ? { ...f, scenario: undefined } : f));
+  }, [filter.city]);
 
   const cityCenter: [number, number] | null =
     (filter.city && filterOptions?.city_centers[filter.city]) || null;
@@ -379,6 +414,7 @@ export default function App() {
         drillTrajectories={drillTrajectories}
         drillPoint={drillPoint}
         zoneBBox={zoneBBox}
+        scenarioBBox={filter.scenario?.bbox ?? null}
         layerVisibility={layerVisibility}
         agentTrajectories={agentTrajectories}
         selectedAgents={selectedAgents}
@@ -443,6 +479,7 @@ export default function App() {
         drillLoading={drillLoading}
         layerVisibility={layerVisibility}
         buildingExaggeration={buildingExaggeration}
+        scenarioImpact={scenarioImpact}
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
@@ -471,6 +508,11 @@ export default function App() {
         zoneTrips={zoneTrips}
         onZoneResult={handleZoneResult}
         onClearZone={clearZone}
+        scenarioActive={!!filter.scenario}
+        onPedestrianize={(bbox) => setFilter(f => ({
+          ...f, scenario: { type: 'pedestrianize', bbox },
+        }))}
+        onClearScenario={() => setFilter(f => ({ ...f, scenario: undefined }))}
         selectedAgents={selectedAgents}
         agentLoading={agentLoading}
         onAddAgent={addAgent}

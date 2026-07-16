@@ -121,6 +121,9 @@ interface MapViewProps {
   drillPoint: [number, number] | null;
   // Sprint A1b: through-zone bbox rendered as a translucent yellow PolygonLayer
   zoneBBox?: { w: number; s: number; e: number; n: number } | null;
+  // Phase 4: active pedestrianize-scenario bbox — red, distinct from the
+  // yellow zone bbox (they can coexist)
+  scenarioBBox?: { w: number; s: number; e: number; n: number } | null;
   layerVisibility: LayerVisibility;
   // Phase 2A — agent selection & per-source rendering
   agentTrajectories?: Trajectory[];
@@ -149,6 +152,7 @@ export const MapView: React.FC<MapViewProps> = ({
   linkDensityPoints,
   drillTrajectories, drillPoint,
   zoneBBox,
+  scenarioBBox = null,
   layerVisibility,
   agentTrajectories = [],
   selectedAgents = [],
@@ -786,11 +790,36 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
+    // Layer 9: Pedestrianize-scenario bbox (Phase 4) — red, so it reads as
+    // "cars excluded here" and stays distinct from the yellow query zone.
+    if (scenarioBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [scenarioBBox.w, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'scenario-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [231, 76, 60, 25],
+          getLineColor: [231, 76, 60, 230],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+
     return result;
   }, [
     trajectories, trips, currentTime, trailLength,
     odFlows, densityPoints, clusterResult, linkDensityPoints,
-    drillTrajectories, drillPoint, zoneBBox,
+    drillTrajectories, drillPoint, zoneBBox, scenarioBBox,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
     pulseData, footfallPoints,

@@ -36,12 +36,13 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
       const city = filter.city;
       const simulationDay = filter.simulationDay;
       const transportModes = filter.transportModes;
+      const scenario = filter.scenario;
 
       // Always fetch trips (OD points) — they exist even without trajectory generation
       if (s.trips.row_count > 0) {
         const tripRes = await fetchTripSample(
           2000, vtype, city, simulationDay,
-          undefined, undefined, undefined, transportModes,
+          undefined, undefined, undefined, transportModes, scenario,
         );
         setTrips(tripRes.trips);
       }
@@ -52,7 +53,7 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
       // the JSON payload — acceptable at sample=200; reconsider if we raise n.
       if (s.has_trajectories) {
         const trajRes = await fetchTrajectorySample(
-          200, vtype, city, simulationDay, true, transportModes,
+          200, vtype, city, simulationDay, true, transportModes, scenario,
         );
         setTrajectories(trajRes.trajectories);
       } else {
@@ -65,9 +66,10 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
     } finally {
       setLoading(false);
     }
-    // transportModes joined to a string — array identity changes per toggle.
+    // Arrays/objects serialized to strings — identity changes per toggle.
   }, [filter.vehicleType, filter.city, filter.simulationDay,
-      filter.transportModes?.join(',')]);
+      filter.transportModes?.join(','),
+      filter.scenario && JSON.stringify(filter.scenario.bbox)]);
 
   useEffect(() => {
     load();

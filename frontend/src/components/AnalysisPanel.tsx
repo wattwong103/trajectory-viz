@@ -77,6 +77,10 @@ interface AnalysisPanelProps {
   zoneTrips?: TripPoint[];
   onZoneResult?: (bbox: { w: number; s: number; e: number; n: number }, trips: TripPoint[]) => void;
   onClearZone?: () => void;
+  // Phase 4 — pedestrianize scenario controls (Zone tab)
+  scenarioActive?: boolean;
+  onPedestrianize?: (bbox: { w: number; s: number; e: number; n: number }) => void;
+  onClearScenario?: () => void;
   // Phase 2A — agent selection & playback
   selectedAgents?: string[];
   agentLoading?: boolean;
@@ -317,6 +321,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   onODFlows, onDensity, onClusters, onLinkDensity,
   selectedTrajectory, onClearSelectedTrajectory,
   zoneBBox, zoneTrips, onZoneResult, onClearZone,
+  scenarioActive = false, onPedestrianize, onClearScenario,
   selectedAgents = [], agentLoading = false,
   onAddAgent, onRemoveAgent, onClearAgents,
 }) => {
@@ -1297,6 +1302,30 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             {zoneError && (
               <div style={{ fontSize: 11, color: '#ff7676', marginBottom: 6 }}>
                 {zoneError}
+              </div>
+            )}
+            {/* Phase 4 — promote the queried zone into a pedestrianize scenario.
+                Query-time: excludes car trips entering this bbox everywhere. */}
+            {zoneBBox && onPedestrianize && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                {!scenarioActive ? (
+                  <button
+                    onClick={() => onPedestrianize(zoneBBox)}
+                    style={{
+                      ...styles.actionBtn,
+                      background: 'rgba(231,76,60,0.15)',
+                      borderColor: 'rgba(231,76,60,0.5)',
+                      color: '#ff8a80',
+                    }}
+                    title="Exclude car trips whose trajectories enter this zone (query-time; toggle off any time)"
+                  >
+                    🚫🚗 Pedestrianize this zone
+                  </button>
+                ) : (
+                  <button onClick={onClearScenario} style={styles.clearBtn}>
+                    Clear pedestrianize scenario
+                  </button>
+                )}
               </div>
             )}
             {zoneTrips && zoneTrips.length > 0 && (

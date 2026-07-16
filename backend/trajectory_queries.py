@@ -73,21 +73,28 @@ def build_trip_pair_subquery(
     city: Optional[str],
     simulation_day: Optional[int],
     transport_modes: Optional[list[int]] = None,
+    scenario_clause: Optional[str] = None,
 ) -> Optional[str]:
     """(vehicle_key, trip_id) subquery for TRIP-granular waypoint scoping.
 
-    REQUIRED whenever transport_modes is set: the per-vehicle
+    REQUIRED whenever transport_modes or a scenario is set: the per-vehicle
     build_trip_vehicle_keys_subquery over-selects — a vehicle with one
     matching trip would drag in ALL its trips. (vehicle_key, trip_id) is
     globally unique (bare vehicle_id collides across cities and source_ids)
     and both sides are indexed (idx_trips_vehicle_key, idx_waypoints_vehicle_key).
 
+    `scenario_clause` is a prebuilt trips-side condition from
+    filters.ScenarioFields.scenario_clause() (pedestrianize exclusion).
+
     Returns None when no filter dimension is set.
     """
-    if not vehicle_type and not city and simulation_day is None and not transport_modes:
+    if (not vehicle_type and not city and simulation_day is None
+            and not transport_modes and not scenario_clause):
         return None
     trip_where = build_trip_filter(
-        vehicle_type, city, simulation_day, transport_modes=transport_modes
+        vehicle_type, city, simulation_day,
+        transport_modes=transport_modes,
+        extra=[scenario_clause] if scenario_clause else None,
     )
     return f"(SELECT vehicle_key, trip_id FROM trips {trip_where})"
 
@@ -99,6 +106,7 @@ def sample_waypoint_rows(
     city: Optional[str] = None,
     simulation_day: Optional[int] = None,
     transport_modes: Optional[list[int]] = None,
+    scenario_clause: Optional[str] = None,
 ) -> list:
     """Sample n random trajectories and return all their waypoint rows
     (WAYPOINT_COLS_WITH_TRIP_MODE shape — trip transport_mode at index 14),
@@ -109,15 +117,16 @@ def sample_waypoint_rows(
     Caller inputs must already be pattern-validated (Pydantic) — values are
     inlined, matching build_trip_filter's contract.
 
-    With transport_modes set, sampling switches from the per-vehicle
-    vehicle_key subquery to the trip-granular (vehicle_key, trip_id) subquery
-    (see build_trip_pair_subquery). The vehicle_key path is kept for the
-    common no-mode case — identical behavior to before.
+    With transport_modes or a scenario set, sampling switches from the
+    per-vehicle vehicle_key subquery to the trip-granular
+    (vehicle_key, trip_id) subquery (see build_trip_pair_subquery) — both are
+    per-TRIP conditions. The vehicle_key path is kept for the common
+    unfiltered case — identical behavior to before.
     """
     vtype_filter = f"AND vehicle_type = '{vehicle_type}'" if vehicle_type else ""
-    if transport_modes:
+    if transport_modes or scenario_clause:
         pair_subq = build_trip_pair_subquery(
-            vehicle_type, city, simulation_day, transport_modes
+            vehicle_type, city, simulation_day, transport_modes, scenario_clause
         )
         scope_filter = f"AND (vehicle_key, trip_id) IN {pair_subq}"
     else:

@@ -24,6 +24,7 @@ type FilterState = {
   maxDetourRatio?: number;
   transportModes?: number[];
   colorBy?: 'source' | 'transportMode';
+  scenario?: { type: 'pedestrianize'; bbox: { w: number; s: number; e: number; n: number } };
 };
 
 const DEFAULT_FILTER: FilterState = {
@@ -54,7 +55,21 @@ function encodeHash(filter: FilterState): string {
   if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
   if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
   if (filter.colorBy === 'transportMode') parts.push('cb=tm');
+  if (filter.scenario) {
+    const b = filter.scenario.bbox;
+    parts.push(`sc=p:${b.w},${b.s},${b.e},${b.n}`);
+  }
   return parts.join('&');
+}
+
+function decodeScenario(params: URLSearchParams): FilterState['scenario'] {
+  const sc = params.get('sc');
+  if (!sc || !sc.startsWith('p:')) return undefined;
+  const nums = sc.slice(2).split(',').map(Number);
+  if (nums.length !== 4 || nums.some(v => !Number.isFinite(v))) return undefined;
+  const [w, s, e, n] = nums;
+  if (w >= e || s >= n) return undefined;
+  return { type: 'pedestrianize', bbox: { w, s, e, n } };
 }
 
 const TM_RE = /^\d{1,2}(,\d{1,2}){0,15}$/;
@@ -85,6 +100,7 @@ function decodeHash(hash: string): FilterState {
     maxDetourRatio: numParam(params, 'xr'),
     transportModes: decodeTransportModes(params),
     colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
+    scenario: decodeScenario(params),
   };
 }
 
@@ -219,6 +235,33 @@ describe('filter hash encoding', () => {
 
   it('dedupes repeated tm entries', () => {
     expect(decodeHash('#tm=0,0,3').transportModes).toEqual([0, 3]);
+  });
+
+  // ── Pedestrianize scenario (Phase 4) ───────────────────────────────────
+
+  it('round-trips the scenario', () => {
+    const original: FilterState = {
+      ...DEFAULT_FILTER,
+      scenario: { type: 'pedestrianize', bbox: { w: 139.575, s: 35.7, e: 139.585, n: 35.71 } },
+    };
+    const out = decodeHash(encodeHash(original));
+    expect(out.scenario).toEqual(original.scenario);
+  });
+
+  it('rejects malformed sc values', () => {
+    expect(decodeHash('#sc=p:1,2,3').scenario).toBeUndefined();          // 3 coords
+    expect(decodeHash('#sc=p:a,b,c,d').scenario).toBeUndefined();        // NaN
+    expect(decodeHash('#sc=p:140,36,139,35').scenario).toBeUndefined();  // w>=e, s>=n
+    expect(decodeHash('#sc=x:139,35,140,36').scenario).toBeUndefined();  // unknown type
+    expect(decodeHash('#vt=truck').scenario).toBeUndefined();            // absent
+  });
+
+  it('scenario coexists with other keys', () => {
+    const hash = '#vt=taxi&tm=3&sc=p:139.5,35.6,139.6,35.7';
+    const out = decodeHash(hash);
+    expect(out.vehicleType).toBe('taxi');
+    expect(out.transportModes).toEqual([3]);
+    expect(out.scenario?.bbox.e).toBe(139.6);
   });
 });
 

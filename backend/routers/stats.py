@@ -2,9 +2,11 @@
 Stats endpoint — dataset summary and derived insights for the frontend dashboard.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from ..db import get_table_stats, get_connection
-from ..filters import TripFilters, trip_filters
+from ..filters import (
+    SCENARIO_EXCLUDED_MODE, TripFilters, scenario_pair_subquery, trip_filters,
+)
 from ..models import StatsResponse
 from ..sources_schema import default_sources_path, load_sources
 
@@ -32,7 +34,29 @@ async def insights(
     that turn raw data into actionable understanding.
     """
     conn = get_connection()
-    where = f.where()
+
+    # Scenario contingency (200ms budget): insights runs ~6 filtered queries,
+    # and each would re-scan waypoints for the exclusion anti-join (~35ms per
+    # scan on 10M waypoints). Materialize the excluded pair set ONCE per
+    # request into a temp table and rewrite the clause against it. Safe on
+    # the singleton connection: this handler has no awaits between queries,
+    # so requests can't interleave mid-handler.
+    if f.scenario:
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE _scenario_excluded AS
+            SELECT vehicle_key, trip_id FROM waypoints
+            WHERE lon BETWEEN {float(f.sc_w)} AND {float(f.sc_e)}
+              AND lat BETWEEN {float(f.sc_s)} AND {float(f.sc_n)}
+        """)
+        base = f.model_copy(update={
+            "scenario": None, "sc_w": None, "sc_s": None, "sc_e": None, "sc_n": None,
+        })
+        where = base.where(extra=[
+            f"NOT (transport_mode = {SCENARIO_EXCLUDED_MODE} AND "
+            f"(vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM _scenario_excluded))"
+        ])
+    else:
+        where = f.where()
 
     # Core metrics
     core = conn.execute(f"""
@@ -199,6 +223,41 @@ async def insights(
             {"bucket_km": r[0], "count": r[1]} for r in dist_buckets
         ],
         "text_insights": text_insights,
+    }
+
+
+@router.get("/stats/scenario-impact")
+async def scenario_impact(f: TripFilters = Depends(trip_filters)):
+    """What the pedestrianize scenario removes: excluded-trip count + VKT.
+
+    Computed in INCLUSION form (count car trips entering the bbox) on the
+    scenario-stripped filters — the exact complement of the exclusion clause
+    every other endpoint applies, so `trips_without_scenario - trips_with ==
+    excluded_trips` by construction.
+    """
+    if not f.scenario:
+        raise HTTPException(
+            status_code=400,
+            detail="scenario=pedestrianize with sc_w/sc_s/sc_e/sc_n is required.",
+        )
+    base = f.model_copy(update={
+        "scenario": None, "sc_w": None, "sc_s": None, "sc_e": None, "sc_n": None,
+    })
+    inclusion = (
+        f"transport_mode = {SCENARIO_EXCLUDED_MODE} AND (vehicle_key, trip_id) IN "
+        f"{scenario_pair_subquery(f.sc_w, f.sc_s, f.sc_e, f.sc_n)}"
+    )
+    conn = get_connection()
+    row = conn.execute(f"""
+        SELECT COUNT(*), COALESCE(SUM(distance_km), 0)
+        FROM trips
+        {base.where(extra=[inclusion])}
+    """).fetchone()
+    return {
+        "excluded_trips": row[0],
+        "excluded_vkt_km": round(row[1], 1),
+        "excluded_mode": SCENARIO_EXCLUDED_MODE,
+        "bbox": {"w": f.sc_w, "s": f.sc_s, "e": f.sc_e, "n": f.sc_n},
     }
 
 

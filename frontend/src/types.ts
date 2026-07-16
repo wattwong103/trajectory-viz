@@ -193,6 +193,10 @@ export interface FilterState {
   // NAMING: "transportModes", never bare "mode" (taken by SourceStyle.mode).
   transportModes?: number[];
   colorBy?: 'source' | 'transportMode';
+  // Pedestrianization scenario (Phase 4): query-time exclusion of car trips
+  // whose trajectories enter the bbox. Every fetch carrying the filter
+  // reflects it — that IS the before/after toggle.
+  scenario?: { type: 'pedestrianize'; bbox: { w: number; s: number; e: number; n: number } };
 }
 
 // F1 metric distribution (Phase 2 Step 2.2b)

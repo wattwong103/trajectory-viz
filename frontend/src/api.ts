@@ -24,6 +24,29 @@ function transportModesParam(modes?: number[]): string | undefined {
   return modes && modes.length > 0 ? modes.join(',') : undefined;
 }
 
+// Pedestrianization scenario (Phase 4) — same field names on GET and POST.
+type Scenario = FilterState['scenario'];
+
+function appendScenarioParams(params: URLSearchParams, scenario?: Scenario): void {
+  if (!scenario) return;
+  params.set('scenario', scenario.type === 'pedestrianize' ? 'pedestrianize' : scenario.type);
+  params.set('sc_w', String(scenario.bbox.w));
+  params.set('sc_s', String(scenario.bbox.s));
+  params.set('sc_e', String(scenario.bbox.e));
+  params.set('sc_n', String(scenario.bbox.n));
+}
+
+function scenarioBody(scenario?: Scenario): Record<string, unknown> {
+  if (!scenario) return {};
+  return {
+    scenario: 'pedestrianize',
+    sc_w: scenario.bbox.w,
+    sc_s: scenario.bbox.s,
+    sc_e: scenario.bbox.e,
+    sc_n: scenario.bbox.n,
+  };
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -62,6 +85,7 @@ export async function fetchInsights(
   minHour?: number,
   maxHour?: number,
   transportModes?: number[],
+  scenario?: Scenario,
 ): Promise<InsightsResponse> {
   const params = new URLSearchParams();
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
@@ -72,7 +96,23 @@ export async function fetchInsights(
   if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   const tm = transportModesParam(transportModes);
   if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, scenario);
   return fetchJson(`/api/stats/insights?${params}`);
+}
+
+// Phase 4 — what the pedestrianize scenario removes (count + VKT).
+export async function fetchScenarioImpact(
+  scenario: NonNullable<Scenario>,
+  vehicleType?: string,
+  city?: string,
+  simulationDay?: number,
+): Promise<{ excluded_trips: number; excluded_vkt_km: number }> {
+  const params = new URLSearchParams();
+  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  if (city) params.set('city', city);
+  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
+  appendScenarioParams(params, scenario);
+  return fetchJson(`/api/stats/scenario-impact?${params}`);
 }
 
 // ─── Trips ─────────────────────────────────────────────
@@ -86,6 +126,7 @@ export async function fetchTripSample(
   minHour?: number,
   maxHour?: number,
   transportModes?: number[],
+  scenario?: Scenario,
 ): Promise<TripResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
@@ -96,6 +137,7 @@ export async function fetchTripSample(
   if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   const tm = transportModesParam(transportModes);
   if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, scenario);
   return fetchJson(`/api/trips/sample?${params}`);
 }
 
@@ -116,6 +158,7 @@ export async function queryTrips(filter: FilterState, limit: number = 2000): Pro
       min_detour_ratio: filter.minDetourRatio ?? null,
       max_detour_ratio: filter.maxDetourRatio ?? null,
       transport_modes: transportModesParam(filter.transportModes) ?? null,
+      ...scenarioBody(filter.scenario),
       limit,
     }),
   });
@@ -130,6 +173,7 @@ export async function fetchTrajectorySample(
   simulationDay?: number,
   includeSegments: boolean = false,
   transportModes?: number[],
+  scenario?: Scenario,
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
@@ -138,6 +182,7 @@ export async function fetchTrajectorySample(
   if (includeSegments) params.set('include_segments', 'true');
   const tm = transportModesParam(transportModes);
   if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, scenario);
   return fetchJson(`/api/trajectories/sample?${params}`);
 }
 
@@ -150,6 +195,7 @@ export async function queryTrajectoriesBBox(
   limit: number = 500,
   includeSegments: boolean = false,
   transportModes?: number[],
+  scenario?: Scenario,
 ): Promise<TrajectoryResponse> {
   return fetchJson('/api/trajectories/query-bbox', {
     method: 'POST',
@@ -160,6 +206,7 @@ export async function queryTrajectoriesBBox(
       city: city || null,
       simulation_day: simulationDay ?? null,
       transport_modes: transportModesParam(transportModes) ?? null,
+      ...scenarioBody(scenario),
       limit,
       include_segments: includeSegments,
     }),
@@ -175,6 +222,7 @@ export async function queryTrajectoriesPoint(
   limit: number = 200,
   includeSegments: boolean = false,
   transportModes?: number[],
+  scenario?: Scenario,
 ): Promise<TrajectoryResponse> {
   return fetchJson('/api/trajectories/query-point', {
     method: 'POST',
@@ -185,6 +233,7 @@ export async function queryTrajectoriesPoint(
       city: city || null,
       simulation_day: simulationDay ?? null,
       transport_modes: transportModesParam(transportModes) ?? null,
+      ...scenarioBody(scenario),
       limit,
       include_segments: includeSegments,
     }),

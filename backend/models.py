@@ -9,7 +9,7 @@ Response formats are designed for direct consumption by DeckGL layers:
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from .filters import TripFilters
+from .filters import ScenarioFields, TripFilters
 
 
 # ─── Request Models ────────────────────────────────────────────
@@ -29,8 +29,11 @@ class TripQuery(TripFilters):
     limit: int = Field(1000, ge=1, le=50000)
 
 
-class BBoxQuery(BaseModel):
-    """Bounding box spatial query for trajectories."""
+class BBoxQuery(ScenarioFields):
+    """Bounding box spatial query for trajectories.
+
+    Inherits the pedestrianize-scenario fields (scenario, sc_*) so the
+    scenario also drops excluded trips from trajectory renders."""
     min_lon: float
     min_lat: float
     max_lon: float
@@ -48,8 +51,10 @@ class BBoxQuery(BaseModel):
     include_segments: bool = False
 
 
-class PointQuery(BaseModel):
-    """Point proximity query — find trajectories near a point."""
+class PointQuery(ScenarioFields):
+    """Point proximity query — find trajectories near a point.
+
+    Inherits the pedestrianize-scenario fields (scenario, sc_*)."""
     lon: float
     lat: float
     radius_km: float = Field(1.0, ge=0.1, le=50.0)

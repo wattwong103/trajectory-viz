@@ -24,12 +24,73 @@ accepts it with no further changes.
 from typing import Optional
 
 from fastapi import Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .db import build_trip_filter
 
+# Phase 4 — pedestrianization scenario: the mode excluded from the interior
+# zone. Single source of truth; the frontend labels it "car".
+SCENARIO_EXCLUDED_MODE = 3
 
-class TripFilters(BaseModel):
+
+def scenario_pair_subquery(w: float, s: float, e: float, n: float) -> str:
+    """(vehicle_key, trip_id) pairs whose trajectories enter the bbox.
+
+    (vehicle_key, trip_id) — NOT bare vehicle_id, which collides across
+    source_ids and taxi cities. Mode-agnostic on the waypoints side
+    (INVARIANT: waypoint modes are uniform per source; the per-trip mode
+    guard belongs on the trips side)."""
+    return (
+        f"(SELECT vehicle_key, trip_id FROM waypoints "
+        f"WHERE lon BETWEEN {float(w)} AND {float(e)} "
+        f"AND lat BETWEEN {float(s)} AND {float(n)})"
+    )
+
+
+def scenario_exclusion_clause(w: float, s: float, e: float, n: float) -> str:
+    """Trips-side condition implementing the pedestrianize scenario:
+    drop car trips whose routed path enters the interior bbox.
+
+    The outer transport_mode guard spares every non-car trip the anti-join.
+    Trips-only sources (no waypoints) are conservatively never excluded."""
+    return (
+        f"NOT (transport_mode = {SCENARIO_EXCLUDED_MODE} "
+        f"AND (vehicle_key, trip_id) IN {scenario_pair_subquery(w, s, e, n)})"
+    )
+
+
+class ScenarioFields(BaseModel):
+    """Pedestrianization-scenario fields (Phase 4), shared by TripFilters and
+    the trajectory POST models. When scenario='pedestrianize' + a bbox, car
+    trips entering the bbox are excluded query-time — every endpoint riding
+    these fields reflects the scenario, which IS the before/after mechanism."""
+
+    scenario: Optional[str] = Field(None, pattern="^pedestrianize$")
+    sc_w: Optional[float] = Field(None, ge=-180, le=180)
+    sc_s: Optional[float] = Field(None, ge=-90, le=90)
+    sc_e: Optional[float] = Field(None, ge=-180, le=180)
+    sc_n: Optional[float] = Field(None, ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def _scenario_bbox_all_or_none(self):
+        coords = (self.sc_w, self.sc_s, self.sc_e, self.sc_n)
+        given = [c is not None for c in coords]
+        if self.scenario and not all(given):
+            raise ValueError("scenario requires all of sc_w, sc_s, sc_e, sc_n")
+        if any(given) and not all(given):
+            raise ValueError("sc_w/sc_s/sc_e/sc_n must be provided together")
+        if all(given) and (self.sc_w >= self.sc_e or self.sc_s >= self.sc_n):
+            raise ValueError("scenario bbox requires sc_w < sc_e and sc_s < sc_n")
+        return self
+
+    def scenario_clause(self) -> Optional[str]:
+        """The trips-side exclusion condition, or None when scenario unset."""
+        if not self.scenario:
+            return None
+        return scenario_exclusion_clause(self.sc_w, self.sc_s, self.sc_e, self.sc_n)
+
+
+class TripFilters(ScenarioFields):
     """Every shared trip-filter dimension, with the same validation patterns
     the individual routers used. Patterns are load-bearing: values are
     f-string'd into SQL by build_trip_filter."""
@@ -81,6 +142,9 @@ class TripFilters(BaseModel):
         `extra` carries endpoint-specific conditions (zone equality,
         IS NOT NULL guards, ...) — validated by the caller."""
         conds = self.extra_conds() + (extra or [])
+        sc = self.scenario_clause()
+        if sc:
+            conds.append(sc)
         return build_trip_filter(
             self.vehicle_type,
             self.city,
@@ -113,6 +177,13 @@ def trip_filters(
                                                description="minutes; dwell_minutes <= this"),
     min_detour_ratio: Optional[float] = Query(None, ge=1.0, le=20.0),
     max_detour_ratio: Optional[float] = Query(None, ge=1.0, le=20.0),
+    scenario: Optional[str] = Query(
+        None, pattern="^pedestrianize$",
+        description="Query-time scenario: 'pedestrianize' excludes car trips entering the sc_* bbox"),
+    sc_w: Optional[float] = Query(None, ge=-180, le=180),
+    sc_s: Optional[float] = Query(None, ge=-90, le=90),
+    sc_e: Optional[float] = Query(None, ge=-180, le=180),
+    sc_n: Optional[float] = Query(None, ge=-90, le=90),
 ) -> TripFilters:
     """FastAPI dependency: shared filters as GET query params.
 
@@ -131,4 +202,9 @@ def trip_filters(
         max_dwell_minutes=max_dwell_minutes,
         min_detour_ratio=min_detour_ratio,
         max_detour_ratio=max_detour_ratio,
+        scenario=scenario,
+        sc_w=sc_w,
+        sc_s=sc_s,
+        sc_e=sc_e,
+        sc_n=sc_n,
     )

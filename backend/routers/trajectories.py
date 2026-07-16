@@ -26,6 +26,7 @@ from ..trajectory_queries import (
     waypoint_rows_for_vehicles,
     _sql_str,
 )
+from ..filters import ScenarioFields
 from ..models import (
     BBoxQuery, PointQuery,
     Trajectory, TrajectoryMetadata, TrajectoryResponse,
@@ -160,6 +161,11 @@ async def sample_trajectories(
         description="Comma-separated transport-mode ids ('0,3'); filters by the trip's mode"),
     include_segments: bool = Query(False,
         description="Opt into per-segment link/speed/dwell (Phase 2 F3)"),
+    scenario: Optional[str] = Query(None, pattern="^pedestrianize$"),
+    sc_w: Optional[float] = Query(None, ge=-180, le=180),
+    sc_s: Optional[float] = Query(None, ge=-90, le=90),
+    sc_e: Optional[float] = Query(None, ge=-180, le=180),
+    sc_n: Optional[float] = Query(None, ge=-90, le=90),
 ):
     """Return n random trajectories (sampled by vehicle_key+trip_id).
 
@@ -171,7 +177,12 @@ async def sample_trajectories(
     """
     conn = get_connection()
     modes = [int(m) for m in transport_modes.split(",")] if transport_modes else None
-    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day, modes)
+    # Validates all-or-none + w<e/s<n and builds the trips-side exclusion.
+    sc_clause = ScenarioFields(
+        scenario=scenario, sc_w=sc_w, sc_s=sc_s, sc_e=sc_e, sc_n=sc_n,
+    ).scenario_clause()
+    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day, modes,
+                                scenario_clause=sc_clause)
     if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
     trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
@@ -262,15 +273,17 @@ async def query_trajectories_bbox(q: BBoxQuery):
 def _waypoint_scope_filter(q) -> str:
     """Trip-attribute scoping for waypoint step-1 queries (bbox/point).
 
-    Mode filtering REQUIRES trip granularity — the per-vehicle vehicle_key
-    subquery over-selects (any vehicle with one matching trip would return
-    all its trips). Without modes, keep the cheaper vehicle_key path.
+    Mode filtering and the pedestrianize scenario REQUIRE trip granularity —
+    the per-vehicle vehicle_key subquery over-selects (any vehicle with one
+    matching trip would return all its trips). Without either, keep the
+    cheaper vehicle_key path.
     """
     modes = ([int(m) for m in q.transport_modes.split(",")]
              if q.transport_modes else None)
-    if modes:
+    sc_clause = q.scenario_clause()
+    if modes or sc_clause:
         pair_subq = _build_trip_pair_subquery(
-            q.vehicle_type, q.city, q.simulation_day, modes)
+            q.vehicle_type, q.city, q.simulation_day, modes, sc_clause)
         return f"AND (vehicle_key, trip_id) IN {pair_subq}"
     key_subq = _build_trip_vehicle_keys_subquery(q.vehicle_type, q.city, q.simulation_day)
     return f"AND vehicle_key IN {key_subq}" if key_subq else ""
