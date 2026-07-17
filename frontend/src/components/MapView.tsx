@@ -197,7 +197,10 @@ export const MapView: React.FC<MapViewProps> = ({
     const cached = bakedCache.current.get(buildingSource.url);
     if (cached) { setBakedBuildings(cached); return; }
     let cancelled = false;
-    fetch(buildingSource.url)
+    // cache: 'no-cache' revalidates with the server even if the HTTP cache
+    // holds a "fresh" entry — rescues tabs that cached a bin under the old
+    // immutable policy, and picks up re-bakes on reload thereafter.
+    fetch(buildingSource.url, { cache: 'no-cache' })
       .then(r => {
         if (!r.ok) throw new Error(`buildings fetch: ${r.status}`);
         return r.arrayBuffer();

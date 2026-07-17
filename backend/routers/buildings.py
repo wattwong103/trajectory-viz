@@ -53,8 +53,12 @@ async def get_city_buildings(
     path = get_buildings_dir() / f"{city}.bin"
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"No baked buildings for '{city}'.")
+    # no-cache = always revalidate, NOT never-cache: FileResponse sends
+    # ETag/Last-Modified, so unchanged bins cost a 304. The previous
+    # "max-age=86400, immutable" pinned stale bins for a day across
+    # re-bakes — browsers skip revalidation entirely for immutable.
     return FileResponse(
         path,
         media_type="application/octet-stream",
-        headers={"Cache-Control": "public, max-age=86400, immutable"},
+        headers={"Cache-Control": "no-cache"},
     )
