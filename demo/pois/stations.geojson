@@ -1,0 +1,565 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.56887,
+     35.694075
+    ]
+   },
+   "properties": {
+    "name": "Kichijoji",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.580661,
+     35.701977
+    ]
+   },
+   "properties": {
+    "name": "Mitaka",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.585368,
+     35.70536
+    ]
+   },
+   "properties": {
+    "name": "Musashi-Sakai",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.589288,
+     35.701894
+    ]
+   },
+   "properties": {
+    "name": "Higashi-Koganei",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.597993,
+     35.702663
+    ]
+   },
+   "properties": {
+    "name": "Nishi-Ogikubo",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.576294,
+     35.692864
+    ]
+   },
+   "properties": {
+    "name": "Inokashira-Koen",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.56641,
+     35.700062
+    ]
+   },
+   "properties": {
+    "name": "Kugayama",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.590753,
+     35.701958
+    ]
+   },
+   "properties": {
+    "name": "Fujimigaoka",
+    "category": "station"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.56267,
+     35.697208
+    ]
+   },
+   "properties": {
+    "name": "Atre Kichijoji",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.58543,
+     35.697983
+    ]
+   },
+   "properties": {
+    "name": "Coppice Kichijoji",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.552811,
+     35.703466
+    ]
+   },
+   "properties": {
+    "name": "Sun Road Shotengai",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.556423,
+     35.69472
+    ]
+   },
+   "properties": {
+    "name": "Harmonica Yokocho",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.560048,
+     35.701516
+    ]
+   },
+   "properties": {
+    "name": "Kichijoji PARCO",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.556768,
+     35.696092
+    ]
+   },
+   "properties": {
+    "name": "Lumine Musashi",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.551593,
+     35.703829
+    ]
+   },
+   "properties": {
+    "name": "Marui Kichijoji",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.586916,
+     35.708641
+    ]
+   },
+   "properties": {
+    "name": "Daiya-gai Arcade",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.577877,
+     35.708312
+    ]
+   },
+   "properties": {
+    "name": "Musashino Place",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.595606,
+     35.705868
+    ]
+   },
+   "properties": {
+    "name": "Kichijoji Tokyu",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.580569,
+     35.693331
+    ]
+   },
+   "properties": {
+    "name": "Yodobashi Annex",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.556501,
+     35.70365
+    ]
+   },
+   "properties": {
+    "name": "Sunroad North",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.581154,
+     35.708263
+    ]
+   },
+   "properties": {
+    "name": "Inokashira-dori Shops",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.552341,
+     35.698473
+    ]
+   },
+   "properties": {
+    "name": "Zenpukuji Market",
+    "category": "mall"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.571,
+     35.701907
+    ]
+   },
+   "properties": {
+    "name": "Inokashira Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.597085,
+     35.696311
+    ]
+   },
+   "properties": {
+    "name": "Zenpukuji Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.56843,
+     35.69941
+    ]
+   },
+   "properties": {
+    "name": "Musashino Central Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.594992,
+     35.701922
+    ]
+   },
+   "properties": {
+    "name": "Koganei Green",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.562621,
+     35.702463
+    ]
+   },
+   "properties": {
+    "name": "Nogawa Riverside",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.575241,
+     35.705985
+    ]
+   },
+   "properties": {
+    "name": "Sengawa Green",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.562469,
+     35.708835
+    ]
+   },
+   "properties": {
+    "name": "Tamagawa Josui Path",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.564045,
+     35.698858
+    ]
+   },
+   "properties": {
+    "name": "Inokashira Pond West",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.570397,
+     35.703185
+    ]
+   },
+   "properties": {
+    "name": "Musashi-Sakai Pocket Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.55903,
+     35.698783
+    ]
+   },
+   "properties": {
+    "name": "Kichijoji Children Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.551047,
+     35.698262
+    ]
+   },
+   "properties": {
+    "name": "Osawa Community Green",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.592064,
+     35.706091
+    ]
+   },
+   "properties": {
+    "name": "Fujimigaoka Playground",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.58367,
+     35.701946
+    ]
+   },
+   "properties": {
+    "name": "Kugayama Shrine Grove",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.580043,
+     35.70659
+    ]
+   },
+   "properties": {
+    "name": "Igusa Hachiman Woods",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.558279,
+     35.705757
+    ]
+   },
+   "properties": {
+    "name": "Shinkawa Canal Walk",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.577232,
+     35.699091
+    ]
+   },
+   "properties": {
+    "name": "Myoshoji River Green",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.568657,
+     35.6981
+    ]
+   },
+   "properties": {
+    "name": "Matsunoki Park",
+    "category": "park"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     139.597606,
+     35.69557
+    ]
+   },
+   "properties": {
+    "name": "Sakuragaoka Court",
+    "category": "park"
+   }
+  }
+ ]
+}

@@ -1,0 +1,66 @@
+# Demo sources file for the committed synthetic dataset (see
+# demo/generate_demo_data.py). Globs resolve relative to PFLOW_VIZ_OUTPUT_ROOT,
+# which backend/demo.py sets to this demo/ directory.
+#
+# One simulated day around Kichijoji, Tokyo, anchored at 2024-03-01 JST.
+version: 1
+
+# Per-DB absolute-time anchor (stored in viz_meta on first ingest). Both
+# sources map their ISO timestamps against this anchor.
+time:
+  epoch_anchor: "2024-03-01T00:00:00+09:00"
+
+sources:
+  # Bike couriers — GPX tracks, no trip boundaries. Trips are synthesized at
+  # ingest via gap_split: each courier's >25 min lunch break yields 2 trips.
+  couriers:
+    label: "Bike Couriers (GPX)"
+    source_id: courier
+    discovery:
+      trajectories_glob: "gps/couriers/*.gpx"
+      latest_only: false
+    vehicle_key_template: "courier:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 20 }
+    render:
+      mode: trails
+      color: [255, 200, 60]
+    columns:
+      vehicle_id_col: _trk_name   # GPX <trk><name>; string ids hash-fallback
+      waypoints:
+        unix_time_ms: { csv: _time_ms, type: bigint }
+        lon:          { csv: _lon,     type: double }
+        lat:          { csv: _lat,     type: double }
+
+  # City buses — GeoJSON LineStrings with per-coordinate times in the
+  # 'coordTimes' property. One continuous run per bus → 1 trip each.
+  buses:
+    label: "City Buses (GeoJSON)"
+    source_id: bus
+    discovery:
+      trajectories_glob: "transit/buses.geojson"
+      latest_only: false
+    vehicle_key_template: "bus:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 20 }
+    time:
+      coord_times_prop: coordTimes
+    render:
+      mode: trails
+      color: [80, 170, 255]
+    columns:
+      vehicle_id_col: bus_id      # flattened GeoJSON property (string)
+      waypoints:
+        unix_time_ms: { csv: _time_ms, type: bigint }
+        lon:          { csv: _lon,     type: double }
+        lat:          { csv: _lat,     type: double }
+
+# Static POI layer — stations / malls / parks around Kichijoji.
+pois:
+  places:
+    label: "Kichijoji Places"
+    glob: "pois/stations.geojson"
+    color: [120, 220, 140]
+    columns:
+      name:     { csv: name,     type: varchar }
+      category: { csv: category, type: varchar }
+      lon:      { csv: _lon,     type: double }
+      lat:      { csv: _lat,     type: double }
