@@ -8,7 +8,7 @@ from ..filters import (
     SCENARIO_EXCLUDED_MODE, TripFilters, scenario_pair_subquery, trip_filters,
 )
 from ..models import StatsResponse
-from ..sources_schema import default_sources_path, load_sources
+from ..sources_schema import default_sources_path, load_sources_merged
 
 router = APIRouter()
 
@@ -340,7 +340,7 @@ def _source_styles(conn) -> list[dict]:
     when sources.yaml is absent (Docker standalone mode ships only the DB).
     """
     try:
-        sources_file = load_sources(default_sources_path())
+        sources_file = load_sources_merged(default_sources_path())
     except Exception:
         return []
 

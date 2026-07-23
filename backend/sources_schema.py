@@ -552,6 +552,42 @@ def load_sources(path: Path | str) -> SourcesFile:
     return SourcesFile.model_validate(raw)
 
 
+def load_sources_merged(
+    primary: Path | str, uploads: Path | str | None = None
+) -> SourcesFile:
+    """Load the primary sources.yaml merged with the uploads registry.
+
+    `uploads` defaults to config.uploads_registry_path(); when that path
+    cannot be resolved (standalone test envs without PFLOW_VIZ_DB/PFLOW_HOME)
+    or the file does not exist, the primary file alone is returned.
+
+    Upload entries win on key collision. Both files are validated individually
+    (upload blocks are validated at generation time and again here); the MERGED
+    document is constructed via model_construct to skip cross-file validators
+    (single-epoch-anchor) — this is a display-only read path (style/POI hints),
+    not an ingest path.
+    """
+    base = load_sources(primary)
+    if uploads is None:
+        try:
+            from backend.config import uploads_registry_path
+
+            uploads = uploads_registry_path()
+        except Exception:
+            uploads = None
+    if uploads is None or not Path(uploads).is_file():
+        return base
+    up = load_sources(uploads)
+    sources = {**base.sources, **up.sources}
+    pois = {**(base.pois or {}), **(up.pois or {})}
+    return SourcesFile.model_construct(
+        version=base.version,
+        sources=sources,
+        pois=pois or None,
+        time=base.time or up.time,
+    )
+
+
 def default_sources_path() -> Path:
     """Default location of sources.yaml.
 

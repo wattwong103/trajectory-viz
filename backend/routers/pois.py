@@ -35,9 +35,9 @@ def _poi_styles() -> dict[str, dict]:
     _source_styles elsewhere.
     """
     try:
-        from ..sources_schema import default_sources_path, load_sources
+        from ..sources_schema import default_sources_path, load_sources_merged
 
-        sources = load_sources(default_sources_path())
+        sources = load_sources_merged(default_sources_path())
         return {
             key: {
                 "label": cfg.label,

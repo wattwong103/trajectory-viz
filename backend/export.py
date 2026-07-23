@@ -225,8 +225,8 @@ def resolve_sources(conn) -> list[dict]:
     ).fetchall()]
     styles: dict[str, dict] = {}
     try:
-        from backend.sources_schema import default_sources_path, load_sources
-        for _key, src in load_sources(default_sources_path()).sources.items():
+        from backend.sources_schema import default_sources_path, load_sources_merged
+        for _key, src in load_sources_merged(default_sources_path()).sources.items():
             r = src.render
             styles[src.source_id] = {
                 "label": src.label,
