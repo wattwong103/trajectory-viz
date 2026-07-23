@@ -180,6 +180,8 @@ Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-
 
 **Stats** — `/api/stats`, `/api/stats/insights`, `/api/stats/filter-options`
 
+**Ingest (upload-and-go)** — `POST /api/ingest/upload` (multipart, ≤ 200 MB/file; drop a `.gpx`/`.geojson`/`.csv`/`.ndjson`/`.parquet` onto the map and it appears as a new source — no `sources.yaml` block), `/api/ingest/jobs`, `/api/ingest/jobs/{job_id}`
+
 **POIs** — **`/api/pois`**, **`/api/pois/categories`** (static POI layers)
 
 **Trips** — `/api/trips/sample`, `POST /api/trips/query` (with F1 dims)

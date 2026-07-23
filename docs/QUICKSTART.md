@@ -32,6 +32,39 @@ To point the tool at **your own** GPX/GeoJSON/NDJSON/Parquet/CSV data, see
 
 ---
 
+## Drop a file (upload-and-go)
+
+The fastest way to see **your own** data: drag any `.gpx`, `.geojson`, `.csv`,
+`.ndjson`, or `.parquet` file (up to **200 MB**) onto the map — or use the
+**⬆ Upload** button in the filter panel, or the drop area on the "No data yet"
+empty state. No `sources.yaml` block, no CLI, no reload.
+
+What happens:
+
+1. The format is sniffed automatically (from the extension; `.json` files are
+   content-sniffed as GeoJSON vs NDJSON).
+2. For CSV/NDJSON/Parquet, lon/lat/time/id columns are identified by name
+   heuristics; GeoJSON and GPX normalize automatically. If the columns can't
+   be identified, you get a 422 with the exact reasons — rename the columns or
+   write an explicit `sources.yaml` block instead (see below).
+3. Trips are synthesized from the points (30-minute gap split) and ingest runs
+   as a background job with a live progress card.
+4. When the job finishes, the new source simply appears — vehicle-type button,
+   legend entry, toast ("Added 'couriers.gpx': 412 trips, 2 vehicles").
+
+**Time anchoring on a fresh DB**: the first upload into an empty database pins
+absolute time to midnight UTC of the data's first day. Later uploads reuse that
+anchor, so mixed datasets stay on one clock.
+
+Uploaded files land in `uploads/` next to the DB, and the auto-generated source
+configs persist in **`sources.uploads.yaml` next to the DB** — your hand-written
+`sources.yaml` is never modified. Re-uploading the same filename replaces that
+source's data. For full control (custom column mappings, trip files, colors,
+POI layers), write a `sources.yaml` block per
+[`docs/DATA_FORMATS.md`](DATA_FORMATS.md).
+
+---
+
 ## Path A: Docker (recommended for first-time users)
 
 **Prerequisite**: Docker Desktop installed.

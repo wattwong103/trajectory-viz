@@ -276,9 +276,53 @@ time:
 
 ---
 
+## 7. Upload path — column heuristics (no YAML needed)
+
+> **This section applies ONLY to the upload-and-go path** (`POST /api/ingest/upload`
+> — drag-and-drop, the ⬆ Upload button, the empty-state drop area). It describes
+> how the backend *guesses* a source config when you don't write one. An explicit
+> `sources.yaml` mapping (section 6) always gives full control and is unaffected
+> by these heuristics.
+
+GeoJSON and GPX uploads need no guessing — they normalize to the canonical
+staging fields of section 1 (`_lon`/`_lat`/`_time_ms`/`_trk_name`/`_feature_id`).
+For **CSV, NDJSON, and Parquet** uploads, the first ~100 rows are sampled and
+columns are matched **case-insensitively** against these candidates (first match
+wins; the file's original casing is used downstream):
+
+| Role | Candidate names |
+|---|---|
+| Longitude | `lon`, `lng`, `longitude`, `x`, `gps_lon` |
+| Latitude | `lat`, `latitude`, `y`, `gps_lat` |
+| Timestamp | `timestamp`, `time`, `ts`, `datetime`, `epoch`, `created_at` |
+| Vehicle/device id | `vehicle_id`, `device_id`, `track_id`, `agent_id`, `objectid`, `id`, `mmsi`, `trip_id`, `entity_id`, `vehicle` |
+| Name (optional) | `vehicle_name`, `name`, `label` |
+
+Matches are validated against the sampled values:
+
+- **lon/lat** must look numeric (≥ half the samples parse as floats), else the
+  match is dropped.
+- **Timestamp kind** is inferred from samples: all ISO-8601 date strings →
+  `iso` (parsed as TIMESTAMPTZ); all-numeric within the 2000–2100 epoch range →
+  `epoch_s` or `epoch_ms` by magnitude. Anything else → the column is rejected.
+
+If lon/lat, time, or id can't be identified, the upload fails with **422 and a
+per-file list of reasons** naming exactly the candidates that were tried — fix
+by renaming the columns, or by writing an explicit YAML block (section 6).
+
+Generated defaults for accepted uploads: `source_id` slugified from the filename
+stem, `vehicle_key_template` `{source_id}:{vehicle_id}`, `gap_split` trip
+synthesis at 30 minutes, a deterministic palette color, and the epoch anchor of
+section 3 (existing DB anchor; midnight UTC of the data's first day on a fresh
+DB). The generated config is persisted in `sources.uploads.yaml` **next to the
+DB** — your hand-written `sources.yaml` is never modified.
+
+---
+
 ## Known limits (Phase 3+)
 
 - Geometry types beyond Point/LineString (polygons, zones) are rejected.
 - GeoJSON parsing uses whole-file `json.load` (staging keeps post-parse memory
   flat; a streaming parser is future work).
-- `.json` files always need an explicit `format:` declaration.
+- `.json` files always need an explicit `format:` declaration (the upload path
+  content-sniffs them instead — section 7).
