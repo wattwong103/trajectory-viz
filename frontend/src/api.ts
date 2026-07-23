@@ -14,6 +14,8 @@ import type {
   FilterOptions,
   MetricsDistribution,
   AgentInfo,
+  PoiListResponse,
+  PoiCategoriesResponse,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -734,4 +736,32 @@ export async function fetchCommodityPatterns(
   if (minHour !== undefined) params.set('min_hour', String(minHour));
   if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   return fetchJson(`/api/analysis/trip-chains/commodity-patterns?${params}`);
+}
+
+// ─── POIs (universal-trajectory-support Phase 2) ─────────
+// POI filters are independent of TripFilters — no vehicle/city/day params.
+
+export async function fetchPois(opts: {
+  category?: string;
+  bbox?: { w: number; s: number; e: number; n: number };
+  sourceKey?: string;
+  limit?: number;
+} = {}): Promise<PoiListResponse> {
+  const params = new URLSearchParams();
+  if (opts.category) params.set('category', opts.category);
+  if (opts.sourceKey) params.set('source_key', opts.sourceKey);
+  if (opts.bbox) {
+    const b = opts.bbox;
+    params.set('bbox', `${b.w},${b.s},${b.e},${b.n}`);
+  }
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  return fetchJson(`/api/pois${qs ? `?${qs}` : ''}`);
+}
+
+// One row per (source_key, category); color/label are null when the pois:
+// block in sources.yaml doesn't declare them (frontend falls back to the
+// deterministic hash palette in poiColors.ts).
+export async function fetchPoiCategories(): Promise<PoiCategoriesResponse> {
+  return fetchJson('/api/pois/categories');
 }

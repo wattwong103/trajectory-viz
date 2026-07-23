@@ -162,6 +162,38 @@ export interface FilterOptions {
   transport_modes?: Array<{ mode: number; count: number }>;
 }
 
+// ─── POIs (universal-trajectory-support Phase 2) ─────────
+// Static points of interest declared via the `pois:` block in sources.yaml.
+// Independent of TripFilters — POIs render as a context layer, not trips.
+
+export interface Poi {
+  poi_id: number;
+  source_key: string;              // key of the pois: block in sources.yaml
+  name: string | null;
+  category: string | null;
+  lon: number;
+  lat: number;
+  props: Record<string, unknown> | null;  // parsed props_json (geojson/gpx sources)
+}
+
+export interface PoiCategory {
+  category: string;
+  count: number;
+  color: [number, number, number] | null;  // null → hash-palette fallback (poiColors.ts)
+  label: string | null;                    // POI source label from sources.yaml
+  source_key: string;
+}
+
+export interface PoiListResponse {
+  pois: Poi[];
+  count: number;
+  truncated: boolean;
+}
+
+export interface PoiCategoriesResponse {
+  categories: PoiCategory[];      // one row per (source_key, category)
+}
+
 // ─── Agent selection (Phase 2A) ──────────────────────────
 
 export interface AgentInfo {

@@ -15,6 +15,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DeckGL from '@deck.gl/react';
 import {
   FlyToInterpolator, AmbientLight, DirectionalLight, LightingEffect,
+  WebMercatorViewport,
 } from '@deck.gl/core';
 import { TripsLayer, MVTLayer } from '@deck.gl/geo-layers';
 import { ScatterplotLayer, ArcLayer, PathLayer, PolygonLayer } from '@deck.gl/layers';
@@ -24,7 +25,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { DataFilterExtension } from '@deck.gl/extensions';
 
-import type { Trajectory, TripPoint, SourceStyle } from '../types';
+import type { Trajectory, TripPoint, SourceStyle, Poi } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
@@ -34,6 +35,8 @@ import {
 } from '../buildings';
 import { transportModeColor, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
+import { poiFallbackColor } from '../poiColors';
+import type { Bbox } from '../utils/bbox';
 
 // Night-scene lighting (Phase 2C): dim ambient + one directional from NW so
 // extruded walls shade instead of rendering flat. Module-level — shared by
@@ -116,6 +119,10 @@ interface MapViewProps {
   densityPoints: DensityPoint[];
   clusterResult: ClusterResult | null;
   cityCenter?: [number, number] | null;
+  // First-load auto-fit (Phase 2 UX fix): frozen union bbox of the dataset,
+  // computed once by App. MapView fits the camera to it exactly once, and
+  // never if the user has already panned/zoomed.
+  fitToBBox?: Bbox | null;
   linkDensityPoints?: LinkDensityItem[];
   drillTrajectories: Trajectory[];
   drillPoint: [number, number] | null;
@@ -141,6 +148,12 @@ interface MapViewProps {
   // Phase 1 (transport mode) — color scheme + per-source visibility
   colorBy?: 'source' | 'transportMode';
   hiddenSources?: string[];
+  // Universal-trajectory Phase 2 — POI context layer. `pois` is already
+  // restricted to enabled categories by usePois; the color map is category →
+  // [r,g,b] (YAML override or hash fallback, precomputed in App).
+  pois?: Poi[];
+  poiColorByCategory?: Record<string, [number, number, number]>;
+  poiSourceLabels?: Record<string, string>;   // source_key → sources.yaml label
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -149,6 +162,7 @@ interface MapViewProps {
 export const MapView: React.FC<MapViewProps> = ({
   trajectories, trips, currentTime, trailLength,
   odFlows, densityPoints, clusterResult, cityCenter,
+  fitToBBox = null,
   linkDensityPoints,
   drillTrajectories, drillPoint,
   zoneBBox,
@@ -163,10 +177,21 @@ export const MapView: React.FC<MapViewProps> = ({
   buildingExaggeration = 1,
   colorBy = 'source',
   hiddenSources = [],
+  pois = [],
+  poiColorByCategory = {},
+  poiSourceLabels = {},
   onMapClick,
   onTrajectoryClick,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
+
+  // First-load auto-fit guards. `userInteractedRef` latches on the first REAL
+  // gesture (drag/pan/zoom/rotate — not programmatic transitions, which deck
+  // reports with inTransition instead), so a late-arriving stats response can
+  // never yank the camera away from someone who already moved it.
+  // `autoFitDoneRef` makes the fit strictly one-shot per mount.
+  const userInteractedRef = useRef(false);
+  const autoFitDoneRef = useRef(false);
 
   // ── Phase 2C: 3D buildings ────────────────────────────────────────────
   // The buildings layer lives in its OWN memo, prepended below — an MVTLayer
@@ -281,6 +306,57 @@ export const MapView: React.FC<MapViewProps> = ({
       }));
     }
   }, [cityCenter]);
+
+  // First-load auto-fit to the data bbox (Phase 2 UX fix). Datasets without a
+  // city scope (cities: [], city_centers: {}) never trigger the cityCenter
+  // fly-to above, so without this the map opens at the hardcoded wide-Tokyo
+  // view and a Kichijōji-scale dataset renders as an invisible speck.
+  //
+  // Fires at most once (autoFitDoneRef), only before the first user gesture
+  // (userInteractedRef), and yields to an explicit hash-restored city
+  // selection (cityCenter non-null → that fly-to owns the camera instead).
+  // Padding 60px; zoom capped at 15 so a degenerate/tiny bbox doesn't dive
+  // to street level (fitBounds returns zoom=Infinity for a point bbox).
+  //
+  // The jump is INSTANT (transitionDuration: 0), not an animated transition:
+  // this fires during initial page load — frequently while the tab is still
+  // hidden (link opened in a background tab). deck.gl transitions run on
+  // requestAnimationFrame, which is paused in hidden tabs, and the frozen
+  // transition's start-state echo then clobbers the fitted camera in
+  // onViewStateChange, leaving the map stuck at the default view forever.
+  // An instant set is RAF-independent; the canvas simply paints the fitted
+  // view on the next frame. transitionDuration: 0 also cancels any
+  // transition bookkeeping inherited from prev (e.g. a prior fly-to).
+  useEffect(() => {
+    if (!fitToBBox || autoFitDoneRef.current || userInteractedRef.current) return;
+    if (cityCenter) return;
+    const vp = new WebMercatorViewport({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    const fitted = vp.fitBounds(
+      [
+        [fitToBBox.min_lon, fitToBBox.min_lat],
+        [fitToBBox.max_lon, fitToBBox.max_lat],
+      ],
+      { padding: 60 },
+    );
+    // deck.gl 9: fitBounds returns a fitted WebMercatorViewport, not a plain
+    // {longitude, latitude, zoom} object — read the fields off the viewport.
+    const { longitude, latitude, zoom } = fitted;
+    // Non-finite center (shouldn't happen — unionBboxes validates) → don't
+    // consume the one-shot; a later valid bbox may still apply.
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+    autoFitDoneRef.current = true;
+    setViewState((prev: any) => ({
+      ...prev,
+      longitude,
+      latitude,
+      zoom: Number.isFinite(zoom) ? Math.min(zoom, 15) : 15,
+      transitionDuration: 0,
+      transitionInterpolator: undefined,
+    }));
+  }, [fitToBBox, cityCenter]);
 
   const layers = useMemo(() => {
     const result: any[] = [];
@@ -555,6 +631,34 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
+    // Layer 3a-3 (universal-trajectory Phase 2): POI context dots. Sits below
+    // origins/destinations so trip endpoints stay visually dominant. Data is
+    // pre-filtered to enabled categories by usePois; colors come from the
+    // category map (YAML override → deterministic hash fallback).
+    if (layerVisibility.pois && pois.length > 0) {
+      result.push(
+        new ScatterplotLayer<Poi>({
+          id: 'pois',
+          data: pois,
+          getPosition: (d: Poi) => [d.lon, d.lat],
+          getFillColor: (d: Poi) => {
+            const key = d.category ?? '';
+            const c = poiColorByCategory[key] ?? poiFallbackColor(key);
+            return [c[0], c[1], c[2], 230];
+          },
+          updateTriggers: { getFillColor: [poiColorByCategory] },
+          getRadius: 60,
+          radiusMinPixels: 2,
+          radiusMaxPixels: 8,
+          opacity: 0.85,
+          stroked: true,
+          getLineColor: [255, 255, 255, 90],
+          lineWidthMinPixels: 1,
+          pickable: true,
+        }),
+      );
+    }
+
     // Layer 3b: Trip origins
     if (layerVisibility.origins && visibleTrips.length > 0) {
       result.push(
@@ -827,12 +931,22 @@ export const MapView: React.FC<MapViewProps> = ({
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
     pulseData, footfallPoints,
     colorBy, hidden,
+    pois, poiColorByCategory,
   ]);
 
   return (
     <DeckGL
       viewState={viewState}
-      onViewStateChange={(e: any) => setViewState(e.viewState)}
+      onViewStateChange={(e: any) => {
+        // Latch on genuine gestures only. Programmatic camera changes (deck
+        // transition echoes, maplibre init echoes) arrive with
+        // interactionState.inTransition / no gesture flags instead.
+        const s = e.interactionState;
+        if (s && (s.isDragging || s.isPanning || s.isZooming || s.isRotating)) {
+          userInteractedRef.current = true;
+        }
+        setViewState(e.viewState);
+      }}
       controller={true}
       // Phase 3 note: no preserveDrawingBuffer needed on DeckGL — deck.gl 9
       // defaults it to true (deviceProps.webgl); MapLibre needs it explicitly
@@ -850,6 +964,15 @@ export const MapView: React.FC<MapViewProps> = ({
       }}
       getTooltip={({ object }: any) => {
         if (!object) return null;
+        // POI tooltip (universal-trajectory Phase 2) — name (fallback '—'),
+        // category, and the POI source's label from sources.yaml.
+        if ('poi_id' in object) {
+          const p = object as Poi;
+          const srcLabel = poiSourceLabels[p.source_key] ?? p.source_key;
+          return {
+            text: `${p.name ?? '—'}\n${p.category ?? 'uncategorized'} · ${srcLabel}`,
+          };
+        }
         // Trip point tooltip
         if ('start_lon' in object) {
           const t = object as TripPoint;

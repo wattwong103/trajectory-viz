@@ -10,12 +10,13 @@
  *   AnalysisPanel → analysis APIs       → MapView overlay layers
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { MapView } from './components/MapView';
 import { FilterPanel } from './components/FilterPanel';
 import { TimeSlider } from './components/TimeSlider';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { SourceLegend } from './components/SourceLegend';
+import { EmptyState } from './components/EmptyState';
 import { PLATEAU_ATTRIBUTION } from './buildings';
 import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
@@ -23,8 +24,12 @@ import { useInsights } from './hooks/useInsights';
 import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { useFootfall } from './hooks/useFootfall';
 import { useScenarioImpact } from './hooks/useScenarioImpact';
-import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle } from './api';
+import { usePois } from './hooks/usePois';
+import { poiColor } from './poiColors';
+import { unionBboxes, type Bbox } from './utils/bbox';
+import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
 import { exportCompositePng } from './utils/exportPng';
+import type { LayerAvailabilityContext } from './layerCatalog';
 import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
@@ -136,6 +141,28 @@ function decodeHiddenSources(hash: string): string[] {
   return hs.split(',').map(s => s.trim()).filter(s => SOURCE_ID_RE.test(s));
 }
 
+// ─── Disabled-POI-categories hash encoding (universal-trajectory Phase 2) ──
+// `pc=` carries the DISABLED category list (default = all enabled), so clean
+// URLs stay clean — same convention as hs= for hidden sources. Category names
+// may contain spaces (backend pattern ^[A-Za-z0-9_ \-]{1,40}$), so the value
+// is percent-encoded; URLSearchParams.get() applies the single decode on the
+// way back (no double-decode — a literal '%' would throw).
+
+const POI_CATEGORY_RE = /^[A-Za-z0-9_ \-]{1,40}$/;
+
+function encodeDisabledPoiCategories(disabled: string[]): string {
+  if (disabled.length === 0) return '';
+  return `pc=${encodeURIComponent(disabled.join(','))}`;
+}
+
+function decodeDisabledPoiCategories(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const pc = new URLSearchParams(raw).get('pc');
+  if (!pc) return [];
+  return pc.split(',').map(s => s.trim()).filter(s => POI_CATEGORY_RE.test(s));
+}
+
 // ─── Agent-selection hash encoding (Phase 2A) ─────────────
 // Followed agents ride the same URL hash as filters under the `ag=` key so a
 // pasted link restores the whole scene. Kept separate from FilterState — the
@@ -187,6 +214,9 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   buildings: false,
   // Footfall — walk-trip waypoint density (opt-in; needs trajectory data)
   footfall: false,
+  // Universal-trajectory Phase 2 — POI context layer (default on; hidden
+  // automatically when the dataset declares no POI sources)
+  pois: true,
 };
 
 export default function App() {
@@ -224,6 +254,13 @@ export default function App() {
     );
   }, []);
 
+  // Universal-trajectory Phase 2 — disabled POI categories ride the hash
+  // under pc= (default = all enabled). usePois owns the live list and
+  // reports changes back through onDisabledChange for hash persistence.
+  const [disabledPoiCategories, setDisabledPoiCategories] = useState<string[]>(
+    () => decodeDisabledPoiCategories(window.location.hash),
+  );
+
   // Through-zone bbox state (Sprint A1b — F2 endpoint UI).
   // Once a query fires, App holds the bbox (rendered as yellow PolygonLayer
   // on the map) and the returned trip list (displayed in the Zone tab).
@@ -234,14 +271,33 @@ export default function App() {
     fetchFilterOptions().then(setFilterOptions).catch(console.error);
   }, []);
 
-  // Sync filter + agent-selection + hidden-source changes to URL hash
+  // Pulse availability probe (one-time, tiny): distinguishes "hourly-density
+  // aggregate not built" (toggle disabled with a fix-it tooltip) from a
+  // genuine fetch failure. Probes the exact resolution the pulse layer uses.
+  const [pulseProbe, setPulseProbe] = useState<{ built: boolean; detail?: string } | null>(null);
   useEffect(() => {
-    const encoded = [encodeHash(filter), encodeAgents(selectedAgents), encodeHiddenSources(hiddenSources)]
+    let cancelled = false;
+    fetchHourlyDensity(undefined, undefined, 0.005, 100)
+      .then(() => { if (!cancelled) setPulseProbe({ built: true }); })
+      .catch(e => {
+        if (!cancelled) setPulseProbe({ built: false, detail: String(e?.message ?? e) });
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Sync filter + agent-selection + hidden-source + POI-category changes to URL hash
+  useEffect(() => {
+    const encoded = [
+      encodeHash(filter),
+      encodeAgents(selectedAgents),
+      encodeHiddenSources(hiddenSources),
+      encodeDisabledPoiCategories(disabledPoiCategories),
+    ]
       .filter(Boolean)
       .join('&');
     const newHash = encoded ? '#' + encoded : ' ';
     window.history.replaceState(null, '', newHash || window.location.pathname);
-  }, [filter, selectedAgents, hiddenSources]);
+  }, [filter, selectedAgents, hiddenSources, disabledPoiCategories]);
 
   // Fetch full-day trajectory chains for followed agents (Phase 2A).
   useEffect(() => {
@@ -262,6 +318,24 @@ export default function App() {
     trajectories, trips, stats,
     loading, error, refetch,
   } = useTrajectories(filter);
+
+  // First-load auto-fit (universal-trajectory Phase 2 UX fix): freeze the
+  // union bbox across vehicle types from the FIRST stats response that
+  // carries per-source bboxes. The lock ref guarantees this fires once per
+  // page load — stats refetches on filter change must NOT re-fit the camera
+  // (that's why the frozen value, not stats, goes to MapView).
+  const [initialFitBBox, setInitialFitBBox] = useState<Bbox | null>(null);
+  const fitBBoxLockedRef = useRef(false);
+  useEffect(() => {
+    if (fitBBoxLockedRef.current) return;
+    const byType = stats?.trips?.by_vehicle_type;
+    if (!byType) return;
+    const bbox = unionBboxes(Object.values(byType).map(v => v.bbox));
+    if (bbox) {
+      fitBBoxLockedRef.current = true;
+      setInitialFitBBox(bbox);
+    }
+  }, [stats]);
 
   const animation = useAnimation();
 
@@ -301,6 +375,32 @@ export default function App() {
   const footfall = useFootfall(
     !!layerVisibility.footfall, filter.vehicleType, filter.city, filter.simulationDay,
   );
+
+  // Universal-trajectory Phase 2 — POI catalogue + points for the enabled
+  // categories. Independent of the trip filter; category set is the only dim.
+  const poi = usePois({
+    initialDisabled: disabledPoiCategories,
+    onDisabledChange: setDisabledPoiCategories,
+  });
+
+  // Category → color map (YAML color wins; deterministic hash fallback) and
+  // POI source_key → label map for MapView dots + tooltips. Categories arrive
+  // one row per (source_key, category) — first row wins for shared names.
+  const poiColorByCategory = useMemo(() => {
+    const m: Record<string, [number, number, number]> = {};
+    for (const c of poi.categories) {
+      if (!(c.category in m)) m[c.category] = poiColor(c);
+    }
+    return m;
+  }, [poi.categories]);
+
+  const poiSourceLabels = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of poi.categories) {
+      if (c.label && !(c.source_key in m)) m[c.source_key] = c.label;
+    }
+    return m;
+  }, [poi.categories]);
 
   // Phase 2/3 overlay state
   const [odFlows, setODFlows] = useState<ODFlow[]>([]);
@@ -399,6 +499,26 @@ export default function App() {
     exportCompositePng(mapContainerRef.current, `pflow-viz-${timestamp}.png`);
   }, []);
 
+  // Per-dataset layer availability for the FilterPanel's grouped toggles —
+  // everything the catalog needs, from state App already holds.
+  const layerAvailability = useMemo<LayerAvailabilityContext>(() => ({
+    hasTrajectories: stats?.has_trajectories ?? false,
+    transportModes: (filterOptions?.transport_modes ?? []).map(m => m.mode),
+    sourceModes: (filterOptions?.sources ?? []).map(s => s.mode),
+    pulseBuilt: pulseProbe?.built ?? null,
+    pulseDetail: pulseProbe?.detail,
+    hasClusterResult: clusterResult !== null,
+    hasDrillResult: drillTrajectories.length > 0,
+    hasODFlows: odFlows.length > 0,
+    hasDensity: densityPoints.length > 0,
+    hasLinkDensity: linkDensity.length > 0,
+    hasFollowedAgents: selectedAgents.length > 0,
+    hasPois: poi.categories.length > 0,
+  }), [
+    stats, filterOptions, pulseProbe, clusterResult, drillTrajectories,
+    odFlows, densityPoints, linkDensity, selectedAgents, poi.categories,
+  ]);
+
   return (
     <div ref={mapContainerRef} style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <MapView
@@ -410,6 +530,7 @@ export default function App() {
         densityPoints={densityPoints}
         clusterResult={clusterResult}
         cityCenter={cityCenter}
+        fitToBBox={initialFitBBox}
         linkDensityPoints={linkDensity}
         drillTrajectories={drillTrajectories}
         drillPoint={drillPoint}
@@ -425,6 +546,9 @@ export default function App() {
         buildingExaggeration={buildingExaggeration}
         colorBy={filter.colorBy ?? 'source'}
         hiddenSources={hiddenSources}
+        pois={poi.pois}
+        poiColorByCategory={poiColorByCategory}
+        poiSourceLabels={poiSourceLabels}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
       />
@@ -437,6 +561,12 @@ export default function App() {
         hiddenSources={hiddenSources}
         onToggleSource={toggleSource}
       />
+
+      {/* Universal-trajectory Phase 2 — only when loading FINISHED with zero
+          trips; the FilterPanel skeleton covers the in-flight state. */}
+      {!loading && stats !== null && (stats.trips?.row_count ?? 0) === 0 && (
+        <EmptyState />
+      )}
 
       {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
       {layerVisibility.pulse && pulse.error && (
@@ -478,8 +608,13 @@ export default function App() {
         drillPoint={drillPoint}
         drillLoading={drillLoading}
         layerVisibility={layerVisibility}
+        layerAvailability={layerAvailability}
         buildingExaggeration={buildingExaggeration}
         scenarioImpact={scenarioImpact}
+        poiCategories={poi.categories}
+        enabledPoiCategories={poi.enabledCategories}
+        onTogglePoiCategory={poi.toggleCategory}
+        onSetAllPoiCategories={poi.setAll}
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
