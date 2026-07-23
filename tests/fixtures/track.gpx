@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="trajectory-viz-fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>morning-run</name>
+    <trkseg>
+      <trkpt lat="35.680" lon="139.700">
+        <ele>12.5</ele>
+        <time>2024-05-01T08:00:00Z</time>
+      </trkpt>
+      <trkpt lat="35.685" lon="139.710">
+        <ele>13.0</ele>
+        <time>2024-05-01T08:01:00Z</time>
+        <extensions>
+          <hr>132</hr>
+        </extensions>
+      </trkpt>
+    </trkseg>
+  </trk>
+  <trk>
+    <trkseg>
+      <trkpt lat="35.690" lon="139.720">
+        <time>2024-05-01T17:00:00+09:00</time>
+      </trkpt>
+      <trkpt lat="35.695" lon="139.730">
+        <time>2024-05-01T17:01:00+09:00</time>
+      </trkpt>
+    </trkseg>
+    <trkseg>
+      <trkpt lat="35.700" lon="139.740">
+        <time>2024-05-01 18:00:00</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

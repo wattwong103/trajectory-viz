@@ -11,32 +11,44 @@ for the 24h animation loop (matching traj-mining's 86400-second cycle).
 
 import math
 import re
-
-from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
+from fastapi import APIRouter, HTTPException, Query
+
 from ..config import BASE_EPOCH_SEC
-from ..db import get_connection
-from ..trajectory_queries import (
-    WAYPOINT_COLS_WITH_TRIP_MODE as _WAYPOINT_COLS_WITH_TRIP_MODE,
-    TRIPS_JOIN as _TRIPS_JOIN,
-    build_trip_pair_subquery as _build_trip_pair_subquery,
-    build_trip_vehicle_keys_subquery as _build_trip_vehicle_keys_subquery,
-    sample_waypoint_rows,
-    waypoint_rows_for_vehicles,
-    _sql_str,
-)
+from ..db import get_connection, get_epoch_anchor
 from ..filters import ScenarioFields
 from ..models import (
-    BBoxQuery, PointQuery,
-    Trajectory, TrajectoryMetadata, TrajectoryResponse,
+    BBoxQuery,
+    PointQuery,
+    Trajectory,
+    TrajectoryMetadata,
+    TrajectoryResponse,
     TrajectorySegment,
+)
+from ..trajectory_queries import (
+    TRIPS_JOIN as _TRIPS_JOIN,
+)
+from ..trajectory_queries import (
+    WAYPOINT_COLS_WITH_TRIP_MODE as _WAYPOINT_COLS_WITH_TRIP_MODE,
+)
+from ..trajectory_queries import (
+    _sql_str,
+    sample_waypoint_rows,
+    waypoint_rows_for_vehicles,
+)
+from ..trajectory_queries import (
+    build_trip_pair_subquery as _build_trip_pair_subquery,
+)
+from ..trajectory_queries import (
+    build_trip_vehicle_keys_subquery as _build_trip_vehicle_keys_subquery,
 )
 
 router = APIRouter()
 
-# BASE_EPOCH_SEC (timestamp anchor) now lives in backend/config.py — shared
-# with ingest.build_density_hourly so trails and pulse use identical hour math.
+# The epoch anchor is read per-DB via db.get_epoch_anchor (viz_meta, falling
+# back to config.BASE_EPOCH_SEC) — shared with ingest.build_density_hourly so
+# trails and pulse use identical hour math on any anchor.
 
 # Idle-speed threshold for F3 dwell markers. Same scale as DETOUR_MIN_HAVERSINE_KM
 # in ingest.py — < 1 km/h means the vehicle moved less than the GPS-noise floor
@@ -83,6 +95,7 @@ def _rows_to_trajectories(
     rows: list,
     vehicle_type_hint: str | None = None,
     include_segments: bool = False,
+    anchor_sec: int | None = None,
 ) -> list[Trajectory]:
     """Group waypoint rows by (vehicle_key, trip_id) into Trajectory objects.
 
@@ -102,6 +115,10 @@ def _rows_to_trajectories(
     """
     # Group by (vehicle_key, trip_id) — bare vehicle_id collides across
     # cities and source_ids.
+    # anchor_sec=None means "no DB context" (unit tests, offline callers) →
+    # the historical default. Endpoints always pass get_epoch_anchor(conn).
+    if anchor_sec is None:
+        anchor_sec = int(BASE_EPOCH_SEC)
     trips: dict[tuple, list] = {}
     for r in rows:
         key = (r[12], r[1])
@@ -116,7 +133,7 @@ def _rows_to_trajectories(
 
         path = [[w[3], w[4]] for w in waypoints]
         # Convert unix_time_ms → seconds from midnight for 24h animation loop
-        timestamps = [int((w[2] // 1000 - BASE_EPOCH_SEC) % 86400) for w in waypoints]
+        timestamps = [int((w[2] // 1000 - anchor_sec) % 86400) for w in waypoints]
 
         vid = waypoints[0][0]
         vtype = waypoints[0][5] or vehicle_type_hint or "unknown"
@@ -185,7 +202,10 @@ async def sample_trajectories(
                                 scenario_clause=sc_clause)
     if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
-    trajectories = _rows_to_trajectories(rows, vehicle_type, include_segments=include_segments)
+    trajectories = _rows_to_trajectories(
+        rows, vehicle_type, include_segments=include_segments,
+        anchor_sec=get_epoch_anchor(conn),
+    )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -232,7 +252,9 @@ async def trajectories_by_vehicle(
 
     conn = get_connection()
     rows = waypoint_rows_for_vehicles(conn, keys, simulation_day)
-    trajectories = _rows_to_trajectories(rows, include_segments=include_segments)
+    trajectories = _rows_to_trajectories(
+        rows, include_segments=include_segments, anchor_sec=get_epoch_anchor(conn)
+    )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -266,7 +288,10 @@ async def query_trajectories_bbox(q: BBoxQuery):
         return TrajectoryResponse(trajectories=[], count=0)
 
     rows = _fetch_full_trajectories(conn, matched)
-    trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
+    trajectories = _rows_to_trajectories(
+        rows, q.vehicle_type, include_segments=q.include_segments,
+        anchor_sec=get_epoch_anchor(conn),
+    )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -334,7 +359,10 @@ async def query_trajectories_point(q: PointQuery):
         return TrajectoryResponse(trajectories=[], count=0)
 
     rows = _fetch_full_trajectories(conn, matched)
-    trajectories = _rows_to_trajectories(rows, q.vehicle_type, include_segments=q.include_segments)
+    trajectories = _rows_to_trajectories(
+        rows, q.vehicle_type, include_segments=q.include_segments,
+        anchor_sec=get_epoch_anchor(conn),
+    )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
 
 
@@ -365,7 +393,7 @@ async def random_sample_compat(n: int = Query(500)):
         ORDER BY vehicle_id, trip_id, unix_time_ms
     """).fetchall()
 
-    trajectories = _rows_to_trajectories(rows)
+    trajectories = _rows_to_trajectories(rows, anchor_sec=get_epoch_anchor(conn))
     # Return in traj-mining format: [{path: [...], timestamps: [...]}, ...]
     return [
         {"path": t.path, "timestamps": t.timestamps}

@@ -22,9 +22,25 @@ from typing import Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-
 # DuckDB types we accept in column specs.
 ColumnType = Literal["int", "bigint", "double", "varchar", "bool"]
+
+# Universal trajectory support: ingest formats. `csv` is the original format;
+# the others are normalized by backend/formats.py (or read natively by DuckDB
+# for parquet) before flowing through the same ColumnSpec pipeline.
+FormatType = Literal["csv", "geojson", "gpx", "ndjson", "parquet"]
+
+# Extension → format auto-detection map. `.json` is deliberately absent: it is
+# ambiguous between geojson and ndjson and requires an explicit `format:`.
+_FORMAT_BY_EXT: dict[str, str] = {
+    ".csv": "csv",
+    ".geojson": "geojson",
+    ".gpx": "gpx",
+    ".ndjson": "ndjson",
+    ".jsonl": "ndjson",
+    ".parquet": "parquet",
+    ".pq": "parquet",
+}
 
 
 # Core required trip columns. Every source must map something to each of these
@@ -137,19 +153,38 @@ class ScopeConfig(BaseModel):
 
 
 class DiscoveryConfig(BaseModel):
-    """How to discover CSVs on disk for this source."""
+    """How to discover data files on disk for this source."""
 
     model_config = ConfigDict(extra="forbid")
 
-    trips_glob: str = Field(
+    trips_glob: Optional[str] = Field(
+        default=None,
         description=(
             "Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching this source's "
-            "trip CSVs. Example: 'trips/truck/run_*/trips_pseudo_pflow.csv'."
-        )
+            "trip files. Example: 'trips/truck/run_*/trips_pseudo_pflow.csv'. "
+            "Optional for points-only sources — when omitted, trips are "
+            "synthesized from waypoints at ingest (see trips_synthesis)."
+        ),
     )
     trajectories_glob: Optional[str] = Field(
         default=None,
-        description="Glob for trajectory/waypoint CSVs. Optional.",
+        description="Glob for trajectory/waypoint files. Optional.",
+    )
+    format: Optional[FormatType] = Field(
+        default=None,
+        description=(
+            "Ingest format applied to both trips and trajectories files "
+            "(csv|geojson|gpx|ndjson|parquet). Auto-detected from the file "
+            "extension when omitted; `.json` files require an explicit format."
+        ),
+    )
+    trips_format: Optional[FormatType] = Field(
+        default=None,
+        description="Per-side format override for trips files (wins over `format`).",
+    )
+    trajectories_format: Optional[FormatType] = Field(
+        default=None,
+        description="Per-side format override for trajectory files (wins over `format`).",
     )
     latest_only: bool = Field(
         default=True,
@@ -173,19 +208,87 @@ class ColumnsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    trip_id_col: str = Field(
-        description="CSV column whose value becomes trips.trip_id."
+    trip_id_col: Optional[str] = Field(
+        default=None,
+        description=(
+            "Column whose value becomes trips.trip_id. Required unless "
+            "trips_synthesis is set (synthesized trips get ordinals)."
+        ),
     )
     vehicle_id_col: str = Field(
-        description="CSV column whose value becomes trips.vehicle_id."
+        description="Column whose value becomes trips.vehicle_id."
     )
     trips: dict[str, ColumnSpec] = Field(
-        description="Map of DB column name -> ColumnSpec for the `trips` table."
+        default_factory=dict,
+        description="Map of DB column name -> ColumnSpec for the `trips` table.",
     )
     waypoints: Optional[dict[str, ColumnSpec]] = Field(
         default=None,
         description="Map of DB column name -> ColumnSpec for the `waypoints` table.",
     )
+
+
+class TripsSynthesisConfig(BaseModel):
+    """How to synthesize trips from raw waypoints for points-only sources.
+
+    gap_split: a new trip starts whenever consecutive pings of one vehicle are
+        more than `gap_minutes` apart.
+    day: a new trip starts on every simulation-day boundary (anchor-relative).
+    single: every vehicle gets exactly one trip.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["gap_split", "day", "single"] = Field(
+        default="gap_split",
+        description="Trip boundary strategy: gap_split | day | single.",
+    )
+    gap_minutes: float = Field(
+        default=30.0,
+        gt=0,
+        le=1440,
+        description="Gap threshold in minutes for the gap_split strategy.",
+    )
+
+
+class TimeConfig(BaseModel):
+    """Absolute-time handling for universal (non-PFLOW) sources."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    epoch_anchor: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO-8601 timestamp (must be timezone-aware) anchoring unix_time_ms "
+            "values to absolute time, e.g. '2024-05-01T00:00:00+09:00'. At most "
+            "one distinct anchor across the whole file; stored in viz_meta."
+        ),
+    )
+    coord_times_prop: Optional[str] = Field(
+        default=None,
+        description=(
+            "GeoJSON LineString property holding the per-coordinate time array "
+            "(e.g. 'coordTimes'). Each entry maps to the coordinate at the same "
+            "index; entries are ISO-8601 strings or epoch numbers."
+        ),
+    )
+
+
+def _validate_epoch_anchor(value: str) -> None:
+    """Parse an epoch_anchor ISO string; raises ValueError on naive/bad input."""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(
+            f"epoch_anchor {value!r} is not a valid ISO-8601 timestamp: {e}"
+        ) from e
+    if dt.tzinfo is None:
+        raise ValueError(
+            f"epoch_anchor {value!r} must be timezone-aware "
+            f"(e.g. '2024-05-01T00:00:00+09:00' or '...Z')."
+        )
 
 
 class SourceConfig(BaseModel):
@@ -219,6 +322,17 @@ class SourceConfig(BaseModel):
         default=None,
         description="Optional frontend rendering hints (mode + color).",
     )
+    trips_synthesis: Optional[TripsSynthesisConfig] = Field(
+        default=None,
+        description=(
+            "Points-only source: synthesize trips from waypoints at ingest. "
+            "Mutually exclusive with discovery.trips_glob."
+        ),
+    )
+    time: Optional[TimeConfig] = Field(
+        default=None,
+        description="Optional absolute-time handling (epoch anchor, coord-times prop).",
+    )
 
     @model_validator(mode="after")
     def _validate_template(self) -> "SourceConfig":
@@ -242,13 +356,77 @@ class SourceConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_required_columns(self) -> "SourceConfig":
-        missing = REQUIRED_TRIP_COLUMNS - set(self.columns.trips.keys())
-        if missing:
+    def _validate_discovery_and_synthesis(self) -> "SourceConfig":
+        """Points-only sources: trips_glob omitted ⇒ trips synthesized at ingest."""
+        d = self.discovery
+        if d.trips_glob is None and d.trajectories_glob is None:
             raise ValueError(
-                f"Missing required trip columns: {sorted(missing)}. "
-                f"Every source must map: {sorted(REQUIRED_TRIP_COLUMNS)}."
+                "At least one of discovery.trips_glob / discovery.trajectories_glob "
+                "is required."
             )
+        if d.trips_glob is not None and self.trips_synthesis is not None:
+            raise ValueError(
+                "trips_synthesis and discovery.trips_glob are mutually exclusive — "
+                "a source either ingests trip files or synthesizes trips from "
+                "waypoints, never both."
+            )
+        if d.trips_glob is None and self.trips_synthesis is None:
+            # Points-only source: default to gap_split synthesis.
+            self.trips_synthesis = TripsSynthesisConfig()
+        if d.trips_glob is not None and self.columns.trip_id_col is None:
+            raise ValueError(
+                "columns.trip_id_col is required when discovery.trips_glob is set."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_formats(self) -> "SourceConfig":
+        """Every globbed side must resolve to a format without ambiguity.
+
+        `.json` files cannot be auto-detected (geojson vs ndjson) — an
+        explicit `format:` / `trips_format:` / `trajectories_format:` is
+        required. This mirrors backend/formats.detect_format but runs at
+        schema-validation time so typos fail at --validate, not mid-ingest.
+        """
+        d = self.discovery
+        sides = (
+            ("trips_glob", d.trips_glob, d.trips_format or d.format),
+            ("trajectories_glob", d.trajectories_glob, d.trajectories_format or d.format),
+        )
+        for side_name, glob_pattern, declared in sides:
+            if glob_pattern is None or declared is not None:
+                continue
+            # The glob's filename suffix decides auto-detection (same rule as
+            # backend/formats.detect_format applies per matched file).
+            ext = Path(glob_pattern).suffix.lower()
+            if ext == ".json":
+                raise ValueError(
+                    f"discovery.{side_name} {glob_pattern!r} has a `.json` "
+                    f"extension, which is ambiguous (geojson vs ndjson). "
+                    f"Set an explicit `format:` (or {side_name.removesuffix('_glob')}"
+                    f"_format:)."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_time(self) -> "SourceConfig":
+        if self.time is not None and self.time.epoch_anchor is not None:
+            _validate_epoch_anchor(self.time.epoch_anchor)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_required_columns(self) -> "SourceConfig":
+        if self.trips_synthesis is not None:
+            # Synthesized trips derive starttime/endpoints from waypoints at
+            # ingest — no trip column mapping required (empty allowed).
+            pass
+        else:
+            missing = REQUIRED_TRIP_COLUMNS - set(self.columns.trips.keys())
+            if missing:
+                raise ValueError(
+                    f"Missing required trip columns: {sorted(missing)}. "
+                    f"Every source must map: {sorted(REQUIRED_TRIP_COLUMNS)}."
+                )
         if self.discovery.trajectories_glob and self.columns.waypoints is not None:
             wp_missing = REQUIRED_WAYPOINT_COLUMNS - set(self.columns.waypoints.keys())
             if wp_missing:
@@ -257,6 +435,61 @@ class SourceConfig(BaseModel):
                     f"When trajectories_glob is set, waypoints must map: "
                     f"{sorted(REQUIRED_WAYPOINT_COLUMNS)}."
                 )
+        return self
+
+
+class PoiColumnsConfig(BaseModel):
+    """Column mapping for a POI layer. lon/lat are required; name/category
+    are optional display attributes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[ColumnSpec] = Field(default=None)
+    category: Optional[ColumnSpec] = Field(default=None)
+    lon: ColumnSpec
+    lat: ColumnSpec
+
+
+class PoiConfig(BaseModel):
+    """One static POI layer (restaurants, stations, chargers, ...).
+
+    Ingested into the `pois` table under the `pois:` block key (source_key);
+    served via /api/pois and /api/pois/categories.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(description="Human-readable label shown in the dashboard.")
+    glob: str = Field(
+        description="Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching POI files."
+    )
+    format: Optional[FormatType] = Field(
+        default=None,
+        description="Ingest format; auto-detected from extension when omitted.",
+    )
+    columns: PoiColumnsConfig
+    color: Optional[tuple[int, int, int]] = Field(
+        default=None,
+        description="RGB color triple (0-255 each). Omit for palette fallback.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_color_range(self) -> "PoiConfig":
+        if self.color is not None:
+            for c in self.color:
+                if not (0 <= c <= 255):
+                    raise ValueError(
+                        f"pois color components must be 0-255, got {self.color}."
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_format_unambiguous(self) -> "PoiConfig":
+        if self.format is None and Path(self.glob).suffix.lower() == ".json":
+            raise ValueError(
+                f"pois glob {self.glob!r} has a `.json` extension, which is "
+                f"ambiguous (geojson vs ndjson). Set an explicit `format:`."
+            )
         return self
 
 
@@ -269,6 +502,14 @@ class SourcesFile(BaseModel):
     sources: dict[str, SourceConfig] = Field(
         description="Map of source key (e.g. 'pflow-truck') -> SourceConfig."
     )
+    pois: Optional[dict[str, PoiConfig]] = Field(
+        default=None,
+        description="Optional map of POI layer key -> PoiConfig.",
+    )
+    time: Optional[TimeConfig] = Field(
+        default=None,
+        description="Optional top-level default epoch anchor for all sources.",
+    )
 
     @model_validator(mode="after")
     def _validate_version(self) -> "SourcesFile":
@@ -276,6 +517,27 @@ class SourcesFile(BaseModel):
             raise ValueError(
                 f"Unsupported sources.yaml schema version {self.version}. "
                 f"This build expects version 1."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_single_epoch_anchor(self) -> "SourcesFile":
+        """At most one distinct epoch_anchor across the whole file.
+
+        The anchor is per-DB (viz_meta), not per-source — mixing anchors would
+        make mod-86400 animation math inconsistent between sources.
+        """
+        anchors: set[str] = set()
+        if self.time is not None and self.time.epoch_anchor is not None:
+            _validate_epoch_anchor(self.time.epoch_anchor)
+            anchors.add(self.time.epoch_anchor)
+        for src in self.sources.values():
+            if src.time is not None and src.time.epoch_anchor is not None:
+                anchors.add(src.time.epoch_anchor)
+        if len(anchors) > 1:
+            raise ValueError(
+                f"Multiple distinct epoch_anchor values {sorted(anchors)} — at most "
+                f"one anchor per sources.yaml (per database) is allowed."
             )
         return self
 
@@ -304,17 +566,24 @@ def default_sources_path() -> Path:
 
 
 def dryrun_discovery(sources: SourcesFile, output_root: Path) -> dict[str, int]:
-    """For each source, count matching trip CSVs under output_root.
+    """Count matching files per source (and POI layer) under output_root.
 
-    Returns {source_key: matched_csv_count}. Zero counts indicate the source's
-    `trips_glob` matches no files on disk — usually a sign of a misconfigured
-    PFLOW_VIZ_OUTPUT_ROOT or stale glob pattern.
+    Returns {source_key: matched_file_count}. For each source the count covers
+    both the trips glob and the trajectories glob (any format). POI layers are
+    reported under a `poi:<key>` key. Zero counts indicate the glob matches no
+    files on disk — usually a sign of a misconfigured PFLOW_VIZ_OUTPUT_ROOT or
+    stale glob pattern.
     """
     counts: dict[str, int] = {}
     for key, src in sources.sources.items():
-        pattern = str(output_root / src.discovery.trips_glob)
-        matches = glob(pattern)
-        counts[key] = len(matches)
+        n = 0
+        if src.discovery.trips_glob:
+            n += len(glob(str(output_root / src.discovery.trips_glob)))
+        if src.discovery.trajectories_glob:
+            n += len(glob(str(output_root / src.discovery.trajectories_glob)))
+        counts[key] = n
+    for key, poi in (sources.pois or {}).items():
+        counts[f"poi:{key}"] = len(glob(str(output_root / poi.glob)))
     return counts
 
 
@@ -397,6 +666,39 @@ sources:
         passenger_in:    { csv: passenger_in,   type: varchar }
         fare_yen:        { csv: fare_yen,       type: double }
         is_night_trip:   { csv: is_night_trip,  type: varchar }
+
+  # ── Universal source: GPX courier tracks, no trip boundaries ──────────────
+  # Points-only source (no trips_glob): trips are synthesized from waypoints
+  # at ingest via gap_split (a new trip after each >30 min gap).
+  couriers:
+    label: "Bike Couriers (GPX)"
+    source_id: courier
+    discovery:
+      trajectories_glob: "couriers/**/*.gpx"
+      latest_only: false
+    vehicle_key_template: "courier:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 30 }
+    render:
+      mode: trails
+      color: [255, 200, 60]
+    columns:
+      vehicle_id_col: _trk_name
+      waypoints:
+        unix_time_ms:    { csv: _time_ms, type: bigint }
+        lon:             { csv: _lon,     type: double }
+        lat:             { csv: _lat,     type: double }
+
+# Static POI layers (restaurants, stations, ...) served via /api/pois.
+pois:
+  stations:
+    label: "Train Stations"
+    glob: "pois/stations.geojson"
+    color: [90, 120, 255]
+    columns:
+      name:     { csv: name,     type: varchar }
+      category: { derived: "'station'" }
+      lon:      { csv: _lon,     type: double }
+      lat:      { csv: _lat,     type: double }
 """
 
 
@@ -422,7 +724,12 @@ def _cli_validate(path: str) -> int:
     print(f"Sources ({len(sources.sources)}):")
     for key, src in sources.sources.items():
         scope = f", scope={src.discovery.scope.value}" if src.discovery.scope else ""
-        print(f"  {key:25} source_id={src.source_id:8}  {src.label!r}{scope}")
+        synth = ", trips=synthesized" if src.trips_synthesis else ""
+        print(f"  {key:25} source_id={src.source_id:8}  {src.label!r}{scope}{synth}")
+    if sources.pois:
+        print(f"POI layers ({len(sources.pois)}):")
+        for key, poi in sources.pois.items():
+            print(f"  {key:25} {poi.label!r}")
     return 0
 
 

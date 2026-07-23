@@ -16,8 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routers import stats, trips, trajectories, buildings
-from .analysis import temporal, od_flows, spatial, clustering, trip_chains
+from .analysis import clustering, od_flows, spatial, temporal, trip_chains
+from .routers import buildings, pois, stats, trajectories, trips
 
 app = FastAPI(
     title="trajectory-viz API",
@@ -39,6 +39,8 @@ app.include_router(trips.router, prefix="/api", tags=["trips"])
 app.include_router(trajectories.router, prefix="/api", tags=["trajectories"])
 # Phase 2C: baked 3D buildings
 app.include_router(buildings.router, prefix="/api", tags=["buildings"])
+# Universal-trajectory-support Phase 1: static POI layers
+app.include_router(pois.router, prefix="/api", tags=["pois"])
 
 # Phase 2: Analysis
 app.include_router(temporal.router, prefix="/api", tags=["analysis"])
@@ -96,6 +98,7 @@ def serve():
     directly for dev; this wrapper is the production-style single-command start.
     """
     import os
+
     import uvicorn
 
     host = os.environ.get("TRAJECTORY_VIZ_HOST", "127.0.0.1")

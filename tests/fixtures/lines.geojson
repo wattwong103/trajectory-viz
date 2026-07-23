@@ -1,0 +1,59 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.700, 35.680],
+          [139.710, 35.685],
+          [139.720, 35.690]
+        ]
+      },
+      "properties": {
+        "vehicle": "bus-1",
+        "coordTimes": [
+          "2024-05-01T08:00:00+09:00",
+          "2024-05-01T08:01:00+09:00",
+          "2024-05-01T08:02:00+09:00"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.705, 35.681],
+          [139.715, 35.686]
+        ]
+      },
+      "properties": {
+        "vehicle": "bus-2",
+        "time": "2024-05-01T09:00:00+09:00"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.730, 35.700],
+          [139.731, 35.701],
+          [139.740, 35.710],
+          [139.741, 35.711]
+        ]
+      },
+      "properties": {
+        "vehicle": "courier-7",
+        "coordTimes": [
+          "2024-05-01T08:00:00+09:00",
+          "2024-05-01T08:05:00+09:00",
+          "2024-05-01T08:30:00+09:00",
+          "2024-05-01T08:35:00+09:00"
+        ]
+      }
+    }
+  ]
+}

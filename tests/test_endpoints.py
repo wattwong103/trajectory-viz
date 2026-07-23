@@ -34,7 +34,6 @@ from backend.ingest import (  # noqa: E402
 )
 from backend.sources_schema import load_sources  # noqa: E402
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 
@@ -476,6 +475,45 @@ def test_density_hourly_source_filter(client):
     }).json()
     assert all(len(h["points"]) == 0 for h in body["hours"])
     assert body["global_max_weight"] == 0
+
+
+# --- Trajectories: non-default epoch anchor (universal-trajectory-support) ---
+
+
+def test_trajectories_respect_viz_meta_anchor(client, _populated_db):
+    """viz_meta['epoch_anchor'] must shift animation timestamps through the
+    single read path (db.get_epoch_anchor), replacing the hardcoded constant.
+
+    Shifting the anchor by +1h must shift every timestamp by -3600 (mod 86400).
+    The session DB is restored afterwards (other tests expect the default).
+    """
+    from backend.config import BASE_EPOCH_SEC
+
+    params = {"vehicle_keys": "truck:1001"}
+    default_body = client.get("/api/trajectories/by-vehicle", params=params).json()
+    assert default_body["count"] > 0
+
+    shifted_anchor = BASE_EPOCH_SEC + 3600
+    _populated_db.execute(
+        "INSERT OR REPLACE INTO viz_meta (key, value) VALUES ('epoch_anchor', ?)",
+        [str(shifted_anchor)],
+    )
+    try:
+        shifted_body = client.get("/api/trajectories/by-vehicle", params=params).json()
+        assert shifted_body["count"] == default_body["count"]
+        for t_def, t_shift in zip(
+            default_body["trajectories"], shifted_body["trajectories"], strict=True
+        ):
+            assert t_def["metadata"]["trip_id"] == t_shift["metadata"]["trip_id"]
+            for ts_def, ts_shift in zip(t_def["timestamps"], t_shift["timestamps"], strict=True):
+                assert ts_shift == (ts_def - 3600) % 86400
+    finally:
+        _populated_db.execute("DELETE FROM viz_meta WHERE key = 'epoch_anchor'")
+
+    # Back on the default anchor, timestamps match the original response.
+    restored = client.get("/api/trajectories/by-vehicle", params=params).json()
+    assert restored["trajectories"][0]["timestamps"] == \
+        default_body["trajectories"][0]["timestamps"]
 
 
 # --- Analysis: OD flows -----------------------------------------------------

@@ -6,10 +6,11 @@ Schema mirrors the exact CSV column formats from TruckTrajectoryWriter.java
 and TaxiTrajectoryWriter.java.
 """
 
-import duckdb
 from pathlib import Path
-from .config import get_viz_db_path
 
+import duckdb
+
+from .config import get_viz_db_path
 
 _connection: duckdb.DuckDBPyConnection | None = None
 
@@ -145,6 +146,32 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    # Universal-trajectory-support (Phase 1) — static POI layers. One row per
+    # point of interest; poi_id is unique within (source_key) only — the pair
+    # (source_key, poi_id) is the full identity. props_json carries any
+    # remaining source properties as a JSON object string (NULL for csv/parquet).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pois (
+            poi_id     BIGINT  NOT NULL,
+            source_key VARCHAR NOT NULL,
+            name       VARCHAR,
+            category   VARCHAR,
+            lon        DOUBLE  NOT NULL,
+            lat        DOUBLE  NOT NULL,
+            props_json VARCHAR
+        )
+    """)
+
+    # Per-DB visualization metadata. Currently one key: 'epoch_anchor' — the
+    # absolute-time anchor (epoch seconds) that unix_time_ms values are
+    # relative to. Written on first ingest; read via get_epoch_anchor().
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS viz_meta (
+            key   VARCHAR PRIMARY KEY,
+            value VARCHAR NOT NULL
+        )
+    """)
+
     # Indexes — without these, filter scans on 4.43M trips / 233M waypoints
     # become full table scans and blow past the p99 budgets (200ms/1s/500ms).
     # DuckDB uses ART for VARCHAR and min-max zone-maps for numeric cols.
@@ -174,6 +201,9 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_validation_run_id ON validation_runs(run_id)",
         # pulse heatmap aggregate (Phase 2B)
         "CREATE INDEX IF NOT EXISTS idx_density_hourly ON density_hourly(source_id, city, hour)",
+        # POI layers (universal-trajectory-support Phase 1)
+        "CREATE INDEX IF NOT EXISTS idx_pois_category ON pois(category)",
+        "CREATE INDEX IF NOT EXISTS idx_pois_lonlat    ON pois(lon, lat)",
     ]
     for stmt in _index_statements:
         conn.execute(stmt)
@@ -187,7 +217,35 @@ def reset_db() -> None:
     conn.execute("DROP TABLE IF EXISTS validation_runs")
     conn.execute("DROP TABLE IF EXISTS ingest_log")
     conn.execute("DROP TABLE IF EXISTS density_hourly")
+    conn.execute("DROP TABLE IF EXISTS pois")
+    conn.execute("DROP TABLE IF EXISTS viz_meta")
     _init_schema(conn)
+
+
+def get_epoch_anchor(conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    """The DB's epoch anchor in seconds — the single read path for absolute
+    time conversion.
+
+    Returns viz_meta['epoch_anchor'] when the DB was ingested by a build that
+    declared an anchor (top-level or per-source `time.epoch_anchor` in
+    sources.yaml); otherwise the historical default `config.BASE_EPOCH_SEC`.
+    Every mod-86400 timestamp conversion (trajectory animation timestamps,
+    density_hourly hour buckets, HTML export) MUST go through this function so
+    trails and pulse can never drift apart on non-default anchors.
+    """
+    from .config import BASE_EPOCH_SEC
+
+    c = conn if conn is not None else get_connection()
+    try:
+        row = c.execute(
+            "SELECT value FROM viz_meta WHERE key = 'epoch_anchor'"
+        ).fetchone()
+    except Exception:
+        # Pre-universal-support DB without viz_meta — the constant is correct.
+        return int(BASE_EPOCH_SEC)
+    if row is None:
+        return int(BASE_EPOCH_SEC)
+    return int(row[0])
 
 
 def get_table_stats() -> dict:

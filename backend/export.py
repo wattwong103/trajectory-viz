@@ -33,7 +33,8 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.config import BASE_EPOCH_SEC, get_viz_db_path  # noqa: E402
+from backend.config import get_viz_db_path  # noqa: E402
+from backend.db import get_epoch_anchor  # noqa: E402
 from backend.trajectory_queries import (  # noqa: E402
     sample_waypoint_rows,
     waypoint_rows_for_vehicles,
@@ -62,8 +63,14 @@ def _b64(fmt: str, values: list) -> str:
 # --- Row grouping --------------------------------------------------------------
 
 
-def rows_to_simple_trajectories(rows: list, is_agent: bool = False) -> list[dict]:
-    """Group waypoint rows (WAYPOINT_COLS order) into plain dicts for packing."""
+def rows_to_simple_trajectories(rows: list, is_agent: bool = False,
+                                anchor_sec: int | None = None) -> list[dict]:
+    """Group waypoint rows (WAYPOINT_COLS order) into plain dicts for packing.
+
+    anchor_sec is the DB epoch anchor (viz_meta) for the mod-86400 conversion;
+    callers with a connection should pass get_epoch_anchor(conn)."""
+    if anchor_sec is None:
+        anchor_sec = get_epoch_anchor()
     trips: dict[tuple, list] = {}
     for r in rows:
         trips.setdefault((r[0], r[1]), []).append(r)
@@ -74,7 +81,7 @@ def rows_to_simple_trajectories(rows: list, is_agent: bool = False) -> list[dict
             continue
         out.append({
             "path": [(w[3], w[4]) for w in wps],
-            "timestamps": [int((w[2] // 1000 - BASE_EPOCH_SEC) % 86400) for w in wps],
+            "timestamps": [int((w[2] // 1000 - anchor_sec) % 86400) for w in wps],
             "source_id": wps[0][5] or "unknown",
             "vehicle_key": wps[0][12] or "",
             "agent": is_agent,
@@ -261,11 +268,14 @@ def export_html(
     """Assemble the export HTML string. Raises ValueError when nothing matches."""
     notes: list[str] = []
 
+    anchor_sec = get_epoch_anchor(conn)
     rows = sample_waypoint_rows(conn, sample_n, vehicle_type, city, simulation_day)
-    trajectories = rows_to_simple_trajectories(rows)
+    trajectories = rows_to_simple_trajectories(rows, anchor_sec=anchor_sec)
     if agents:
         agent_rows = waypoint_rows_for_vehicles(conn, agents, simulation_day)
-        trajectories += rows_to_simple_trajectories(agent_rows, is_agent=True)
+        trajectories += rows_to_simple_trajectories(
+            agent_rows, is_agent=True, anchor_sec=anchor_sec
+        )
 
     sources = resolve_sources(conn)
     traj_block, traj_meta = pack_trajectories(trajectories, sources)

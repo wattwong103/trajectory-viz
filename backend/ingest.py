@@ -31,16 +31,17 @@ from typing import Optional
 # Allow running as `python -m backend.ingest` from trajectory-viz/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.config import BASE_EPOCH_SEC, get_pflow_home, get_viz_db_path, get_output_root
-from backend.db import get_connection, reset_db
+from backend import formats as _formats
+from backend.config import BASE_EPOCH_SEC, get_output_root, get_pflow_home, get_viz_db_path
+from backend.db import get_connection, get_epoch_anchor, reset_db
 from backend.sources_schema import (
     ColumnSpec,
+    PoiConfig,
     SourceConfig,
     SourcesFile,
     default_sources_path,
     load_sources,
 )
-
 
 # Map the YAML `type` field to DuckDB's CAST type names.
 _DUCKDB_TYPE_MAP: dict[str, str] = {
@@ -208,10 +209,19 @@ def _vehicle_key_sql(
     return " || ".join(out)
 
 
-def _column_expr(db_col: str, spec: ColumnSpec) -> str:
-    """Build one SELECT expression for a declared column spec."""
+def _column_expr(db_col: str, spec: ColumnSpec, epoch_anchor: Optional[int] = None) -> str:
+    """Build one SELECT expression for a declared column spec.
+
+    Derived SQL may contain the `{epoch_anchor}` placeholder, substituted with
+    the resolved DB anchor (seconds). Example:
+        CAST((_time_ms // 1000 - {epoch_anchor}) % 86400 AS INTEGER)
+    """
     if spec.derived is not None:
-        return f"({spec.derived}) AS {db_col}"
+        derived = spec.derived
+        if "{epoch_anchor}" in derived:
+            anchor = int(epoch_anchor) if epoch_anchor is not None else int(BASE_EPOCH_SEC)
+            derived = derived.replace("{epoch_anchor}", str(anchor))
+        return f"({derived}) AS {db_col}"
     csv_col = spec.csv
     assert csv_col is not None  # schema validator guarantees one of {csv, derived}
     duck_type = _DUCKDB_TYPE_MAP[spec.type]  # type: ignore[index]
@@ -225,11 +235,33 @@ def _column_expr(db_col: str, spec: ColumnSpec) -> str:
     return f'CAST("{csv_col}" AS {duck_type}) AS {db_col}'
 
 
+def _int_or_hash_sql(col: str, duck_type: str) -> str:
+    """Numeric-cast with a deterministic hash fallback for string IDs.
+
+    PFLOW CSVs carry numeric vehicle/trip IDs, but universal sources (GPX
+    track names, NDJSON string ids) don't. TRY_CAST handles the numeric case
+    exactly as before; non-numeric values fall back to a stable DuckDB hash()
+    mod the type's value space (+1 keeps 0 free for 'unset'). `vehicle_key`
+    remains the authoritative cross-source identity — this fallback only feeds
+    the display/legacy integer columns. Verified on DuckDB 1.5.x: hash() →
+    UBIGINT, modulo stays UBIGINT, CAST is safe below 2^31 / 2^63.
+    """
+    if duck_type == "INTEGER":
+        space = 2_000_000_000
+    else:  # BIGINT
+        space = 9_000_000_000_000_000_000
+    return (
+        f'COALESCE(TRY_CAST("{col}" AS {duck_type}), '
+        f'CAST(hash(CAST("{col}" AS VARCHAR)) % {space} AS {duck_type}) + 1)'
+    )
+
+
 def _select_clause(
     src: SourceConfig,
     scope_value: Optional[str],
     db_columns: tuple[str, ...],
     declared: dict[str, ColumnSpec],
+    epoch_anchor: Optional[int] = None,
 ) -> str:
     """Assemble the SELECT clause for one source's INSERT.
 
@@ -245,10 +277,18 @@ def _select_clause(
     is_waypoints = db_columns is WAYPOINT_COLUMNS
     for col in db_columns:
         if col == "vehicle_id":
-            parts.append(f'CAST("{src.columns.vehicle_id_col}" AS INTEGER) AS vehicle_id')
+            parts.append(
+                f'{_int_or_hash_sql(src.columns.vehicle_id_col, "INTEGER")} AS vehicle_id'
+            )
         elif col == "trip_id":
-            trip_csv_col = "trip_id" if is_waypoints else src.columns.trip_id_col
-            parts.append(f'CAST("{trip_csv_col}" AS BIGINT) AS trip_id')
+            if is_waypoints and src.trips_synthesis is not None:
+                # Points-only source: raw pings have no trip id. Ingest a 0
+                # placeholder; synthesize_trips rewrites it to the 1-based
+                # trip ordinal afterwards (rowid-exact UPDATE).
+                parts.append("CAST(0 AS BIGINT) AS trip_id")
+            else:
+                trip_csv_col = "trip_id" if is_waypoints else src.columns.trip_id_col
+                parts.append(f'{_int_or_hash_sql(trip_csv_col, "BIGINT")} AS trip_id')
         elif col == "source_id":
             parts.append(f"{_sql_string_literal(src.source_id)} AS source_id")
         elif col == "vehicle_type":
@@ -266,10 +306,134 @@ def _select_clause(
             else:
                 parts.append("NULL AS city")
         elif col in declared:
-            parts.append(_column_expr(col, declared[col]))
+            parts.append(_column_expr(col, declared[col], epoch_anchor))
         else:
             parts.append(f"NULL AS {col}")
     return ",\n            ".join(parts)
+
+
+# --- Universal format dispatch + staging (universal-trajectory-support) -------
+
+
+def _stage_rows(conn, table_name: str, rows) -> int:
+    """Stage normalizer row dicts into a TEMP DuckDB table. Returns row count.
+
+    The column union is inferred lazily in 10k-row batches: new keys appearing
+    mid-file trigger ALTER TABLE ADD COLUMN. Light type inference maps Python
+    int → BIGINT, float → DOUBLE, bool → BOOLEAN, everything else → VARCHAR —
+    the ColumnSpec CASTs do the final typing on the way into trips/waypoints.
+    Batches are inserted with executemany as they fill, so memory stays flat
+    regardless of file size.
+    """
+    col_types: dict[str, str] = {}  # insertion-ordered column union
+    created = False
+    batch: list[dict] = []
+    total = 0
+
+    def _infer_type(value) -> str:
+        if isinstance(value, bool):
+            return "BOOLEAN"
+        if isinstance(value, int):
+            return "BIGINT"
+        if isinstance(value, float):
+            return "DOUBLE"
+        return "VARCHAR"
+
+    def _apply_schema() -> None:
+        nonlocal created
+        new_cols: list[str] = []
+        for row in batch:
+            for k, v in row.items():
+                if k not in col_types:
+                    col_types[k] = _infer_type(v) if v is not None else "VARCHAR"
+                    new_cols.append(k)
+        if not created:
+            cols_sql = ", ".join(f'"{k}" {col_types[k]}' for k in new_cols)
+            conn.execute(f'CREATE TEMPORARY TABLE "{table_name}" ({cols_sql})')
+            created = True
+        else:
+            for k in new_cols:
+                conn.execute(
+                    f'ALTER TABLE "{table_name}" ADD COLUMN "{k}" {col_types[k]}'
+                )
+
+    def _flush() -> None:
+        nonlocal batch
+        if not batch:
+            return
+        _apply_schema()
+        cols = list(col_types.keys())
+        cols_sql = ", ".join(f'"{c}"' for c in cols)
+        placeholders = ", ".join("?" for _ in cols)
+        values = [[row.get(c) for c in cols] for row in batch]
+        try:
+            conn.executemany(
+                f'INSERT INTO "{table_name}" ({cols_sql}) VALUES ({placeholders})',
+                values,
+            )
+        except Exception as e:
+            raise ValueError(
+                f"staging failed at record {total} (batch of {len(batch)}): {e}"
+            ) from e
+        batch = []
+
+    for row in rows:
+        batch.append(row)
+        total += 1
+        if len(batch) >= 10_000:
+            _flush()
+    _flush()
+    if not created:
+        # Empty file — create a zero-column stand-in so the SELECT still runs.
+        conn.execute(f'CREATE TEMPORARY TABLE "{table_name}" (_empty VARCHAR)')
+    return total
+
+
+def _table_source(
+    conn,
+    path: Path,
+    fmt: str,
+    **normalizer_kwargs,
+) -> tuple[str, int]:
+    """Return (sql_table_expression, staged_row_count) for one input file.
+
+    csv/parquet are read natively by DuckDB (staged count 0); geojson/gpx/
+    ndjson are normalized in Python and staged into a per-file TEMP table,
+    which the caller must drop when done.
+    """
+    if fmt == "csv":
+        return (
+            f"read_csv('{path.as_posix()}', header=true, auto_detect=true)",
+            0,
+        )
+    if fmt == "parquet":
+        return (f"read_parquet('{path.as_posix()}')", 0)
+
+    normalizers = {
+        "geojson": _formats.normalize_geojson,
+        "gpx": _formats.normalize_gpx,
+        "ndjson": _formats.normalize_ndjson,
+    }
+    normalizer = normalizers.get(fmt)
+    if normalizer is None:
+        raise ValueError(f"Unsupported ingest format {fmt!r} for {path}.")
+
+    table_name = f"_stage_{path.stem.replace('-', '_')}_{abs(hash(path.as_posix())) % 10**8}"
+    kwargs = {k: v for k, v in normalizer_kwargs.items() if v is not None}
+    if fmt == "geojson":
+        rows = normalizer(path, **kwargs)
+    else:
+        rows = normalizer(path)
+    n = _stage_rows(conn, table_name, rows)
+    return (f'"{table_name}"', n)
+
+
+def _source_format(src: SourceConfig, side: str, path: Path) -> str:
+    """Resolve the ingest format for one file of one source side
+    ('trips' | 'trajectories'): per-side override > discovery.format > ext."""
+    d = src.discovery
+    declared = (d.trips_format if side == "trips" else d.trajectories_format) or d.format
+    return _formats.detect_format(path, declared)
 
 
 # --- Per-source ingest --------------------------------------------------------
@@ -280,21 +444,31 @@ def ingest_source_trips(
     csv_path: Path,
     source_key: str,
     src: SourceConfig,
+    epoch_anchor: Optional[int] = None,
 ) -> int:
-    """Ingest one source's trip CSV. Returns the number of rows inserted."""
+    """Ingest one source's trip file (any format). Returns rows inserted."""
     scope_value = src.discovery.scope.value if src.discovery.scope else None
-    select_clause = _select_clause(src, scope_value, TRIP_COLUMNS, src.columns.trips)
+    select_clause = _select_clause(
+        src, scope_value, TRIP_COLUMNS, src.columns.trips, epoch_anchor
+    )
     columns_list = ", ".join(TRIP_COLUMNS)
+
+    fmt = _source_format(src, "trips", csv_path)
+    table_expr, _ = _table_source(conn, csv_path, fmt)
 
     sql = f"""
         INSERT INTO trips ({columns_list})
         SELECT
             {select_clause}
-        FROM read_csv('{csv_path.as_posix()}', header=true, auto_detect=true)
+        FROM {table_expr}
     """
 
     before = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
-    conn.execute(sql)
+    try:
+        conn.execute(sql)
+    finally:
+        if table_expr.startswith('"'):
+            conn.execute(f"DROP TABLE IF EXISTS {table_expr}")
     after = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
     return after - before
 
@@ -304,23 +478,36 @@ def ingest_source_trajectories(
     csv_path: Path,
     source_key: str,
     src: SourceConfig,
+    epoch_anchor: Optional[int] = None,
 ) -> int:
-    """Ingest one source's trajectory CSV. Returns the number of rows inserted."""
+    """Ingest one source's trajectory file (any format). Returns rows inserted."""
     if src.columns.waypoints is None:
         return 0
     scope_value = src.discovery.scope.value if src.discovery.scope else None
-    select_clause = _select_clause(src, scope_value, WAYPOINT_COLUMNS, src.columns.waypoints)
+    select_clause = _select_clause(
+        src, scope_value, WAYPOINT_COLUMNS, src.columns.waypoints, epoch_anchor
+    )
     columns_list = ", ".join(WAYPOINT_COLUMNS)
+
+    fmt = _source_format(src, "trajectories", csv_path)
+    coord_times_prop = src.time.coord_times_prop if src.time else None
+    table_expr, _ = _table_source(
+        conn, csv_path, fmt, coord_times_prop=coord_times_prop
+    )
 
     sql = f"""
         INSERT INTO waypoints ({columns_list})
         SELECT
             {select_clause}
-        FROM read_csv('{csv_path.as_posix()}', header=true, auto_detect=true)
+        FROM {table_expr}
     """
 
     before = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
-    conn.execute(sql)
+    try:
+        conn.execute(sql)
+    finally:
+        if table_expr.startswith('"'):
+            conn.execute(f"DROP TABLE IF EXISTS {table_expr}")
     after = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
     return after - before
 
@@ -380,6 +567,244 @@ def ingest_validation(
         "SELECT COUNT(*) FROM validation_runs WHERE run_id = ?", [run_id]
     ).fetchone()
     return row[0] if row else 0
+
+
+# --- Trip synthesis for points-only sources -------------------------------------
+
+
+def synthesize_trips(conn, src: SourceConfig, anchor_sec: int) -> int:
+    """Synthesize trips from this source's waypoints (points-only sources).
+
+    Pure SQL over `waypoints WHERE source_id = ?`. Each vehicle's pings are
+    ordered by time; a new trip ordinal starts per the source's
+    trips_synthesis strategy (gap > gap_minutes for gap_split, day change for
+    day, a single ordinal for single). trip_id is the 1-based cumulative
+    ordinal; starttime/simulation_day use the same anchor-relative mod-86400
+    math as the trajectory endpoints. Waypoints are ingested with a 0 trip_id
+    placeholder and backfilled with the same ordinals here (rowid-exact), so
+    the (vehicle_key, trip_id) join identity holds for synthesized sources.
+    Idempotent: existing trips rows for this source are replaced and waypoint
+    ordinals recomputed. Returns the number of trips created.
+    """
+    if src.trips_synthesis is None:
+        return 0
+    synth = src.trips_synthesis
+    scope_value = src.discovery.scope.value if src.discovery.scope else None
+    anchor = int(anchor_sec)
+    gap_ms = int(synth.gap_minutes * 60 * 1000)
+    src_lit = _sql_string_literal(src.source_id)
+    city_sql = _sql_string_literal(scope_value) if scope_value else "NULL"
+
+    if synth.strategy == "single":
+        new_trip_expr = "0"
+    elif synth.strategy == "day":
+        new_trip_expr = (
+            "CASE WHEN LAG(day_idx) OVER w IS NULL THEN 0 "
+            "WHEN day_idx <> LAG(day_idx) OVER w THEN 1 ELSE 0 END"
+        )
+    else:  # gap_split
+        new_trip_expr = (
+            f"CASE WHEN LAG(unix_time_ms) OVER w IS NULL THEN 0 "
+            f"WHEN unix_time_ms - LAG(unix_time_ms) OVER w > {gap_ms} "
+            f"THEN 1 ELSE 0 END"
+        )
+
+    conn.execute("DELETE FROM trips WHERE source_id = ?", [src.source_id])
+    conn.execute(f"""
+        INSERT INTO trips (
+            vehicle_id, trip_id, starttime,
+            start_lon, start_lat, end_lon, end_lat,
+            transport_mode, purpose, vehicle_type, distance_km, dep_hour,
+            simulation_day, goods_type, city, vehicle_key, source_id
+        )
+        WITH marked AS (
+            SELECT
+                rowid AS rid,
+                vehicle_key, vehicle_id, unix_time_ms, lon, lat,
+                transport_mode, purpose, goods_type,
+                CAST((unix_time_ms // 1000 - {anchor}) // 86400 AS BIGINT) AS day_idx,
+                {new_trip_expr} AS new_trip
+            FROM waypoints
+            WHERE source_id = {src_lit}
+            WINDOW w AS (PARTITION BY vehicle_key ORDER BY unix_time_ms)
+        ),
+        numbered AS (
+            SELECT *,
+                SUM(new_trip) OVER (
+                    PARTITION BY vehicle_key ORDER BY unix_time_ms
+                    ROWS UNBOUNDED PRECEDING
+                ) AS ordinal
+            FROM marked
+        ),
+        with_seg AS (
+            SELECT *,
+                111.32 * SQRT(
+                    POWER(lon - LAG(lon) OVER t, 2)
+                        * POWER(COS(RADIANS(LAG(lat) OVER t)), 2)
+                    + POWER(lat - LAG(lat) OVER t, 2)
+                ) AS seg_km
+            FROM numbered
+            WINDOW t AS (
+                PARTITION BY vehicle_key, ordinal ORDER BY unix_time_ms
+            )
+        )
+        SELECT
+            ANY_VALUE(vehicle_id) AS vehicle_id,
+            ordinal + 1 AS trip_id,
+            CAST((MIN(unix_time_ms) // 1000 - {anchor}) % 86400 AS INTEGER) AS starttime,
+            arg_min(lon, unix_time_ms) AS start_lon,
+            arg_min(lat, unix_time_ms) AS start_lat,
+            arg_max(lon, unix_time_ms) AS end_lon,
+            arg_max(lat, unix_time_ms) AS end_lat,
+            ANY_VALUE(transport_mode) AS transport_mode,
+            ANY_VALUE(purpose) AS purpose,
+            {src_lit} AS vehicle_type,
+            SUM(seg_km) AS distance_km,
+            CAST(((MIN(unix_time_ms) // 1000 - {anchor}) % 86400) // 3600 AS INTEGER)
+                AS dep_hour,
+            CAST((MIN(unix_time_ms) // 1000 - {anchor}) // 86400 AS INTEGER)
+                AS simulation_day,
+            ANY_VALUE(goods_type) AS goods_type,
+            {city_sql} AS city,
+            vehicle_key,
+            {src_lit} AS source_id
+        FROM with_seg
+        GROUP BY vehicle_key, ordinal
+    """)
+    # Backfill waypoints.trip_id (ingested as a 0 placeholder) with the same
+    # 1-based ordinals so the (vehicle_key, trip_id) join identity holds for
+    # synthesized sources too — rowid-exact, no timestamp-collision risk.
+    conn.execute(f"""
+        WITH marked AS (
+            SELECT
+                rowid AS rid, vehicle_key, unix_time_ms,
+                CAST((unix_time_ms // 1000 - {anchor}) // 86400 AS BIGINT) AS day_idx,
+                {new_trip_expr} AS new_trip
+            FROM waypoints
+            WHERE source_id = {src_lit}
+            WINDOW w AS (PARTITION BY vehicle_key ORDER BY unix_time_ms)
+        ),
+        numbered AS (
+            SELECT rid,
+                SUM(new_trip) OVER (
+                    PARTITION BY vehicle_key ORDER BY unix_time_ms
+                    ROWS UNBOUNDED PRECEDING
+                ) AS ordinal
+            FROM marked
+        )
+        UPDATE waypoints
+        SET trip_id = numbered.ordinal + 1
+        FROM numbered
+        WHERE waypoints.rowid = numbered.rid
+    """)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE source_id = ?", [src.source_id]
+    ).fetchone()
+    return row[0] if row else 0
+
+
+# --- Epoch-anchor resolution + persistence ---------------------------------------
+
+
+def resolve_epoch_anchor(sources: SourcesFile) -> int:
+    """Resolve the DB's epoch anchor (seconds) from a sources file.
+
+    Priority: top-level `time.epoch_anchor` → per-source `time.epoch_anchor`
+    (the schema validator guarantees at most one distinct value) →
+    `config.BASE_EPOCH_SEC` (the historical PFLOW default).
+    """
+    from datetime import datetime
+
+    iso: Optional[str] = None
+    if sources.time is not None and sources.time.epoch_anchor is not None:
+        iso = sources.time.epoch_anchor
+    else:
+        for src in sources.sources.values():
+            if src.time is not None and src.time.epoch_anchor is not None:
+                iso = src.time.epoch_anchor
+                break
+    if iso is None:
+        return int(BASE_EPOCH_SEC)
+    return int(datetime.fromisoformat(iso).timestamp())
+
+
+def ensure_epoch_anchor(conn, anchor_sec: int) -> None:
+    """Persist the epoch anchor into viz_meta; hard-error on mismatch.
+
+    First ingest writes viz_meta['epoch_anchor']. A later ingest with a
+    different anchor (without --reset, which drops viz_meta) would silently
+    corrupt mod-86400 animation math — so it is rejected here.
+    """
+    row = conn.execute(
+        "SELECT value FROM viz_meta WHERE key = 'epoch_anchor'"
+    ).fetchone()
+    if row is not None:
+        existing = int(row[0])
+        if existing != int(anchor_sec):
+            raise ValueError(
+                f"Epoch-anchor mismatch: DB is anchored at {existing} but this "
+                f"sources.yaml resolves to {int(anchor_sec)}. Mixed-anchor DBs "
+                f"are not supported — re-run with --reset to rebuild."
+            )
+        return
+    conn.execute(
+        "INSERT INTO viz_meta (key, value) VALUES ('epoch_anchor', ?)",
+        [str(int(anchor_sec))],
+    )
+
+
+# --- POI ingest --------------------------------------------------------------------
+
+
+def ingest_pois(conn, poi_key: str, cfg: PoiConfig, path: Path,
+                replace: bool = True) -> int:
+    """Ingest one POI file into the `pois` table. Returns rows inserted.
+
+    Same `_table_source` dispatch as trajectories; columns map via the shared
+    `_column_expr` machinery. `props_json` carries the staging `_props_json`
+    (geojson/gpx/ndjson) or NULL (csv/parquet). Idempotent when `replace` is
+    True (the default): existing rows for this source_key are deleted first —
+    pass replace=False for subsequent files of a multi-file layer.
+    poi_id is unique within a source_key — offset by the current max so
+    multi-file layers never collide.
+    """
+    if replace:
+        conn.execute("DELETE FROM pois WHERE source_key = ?", [poi_key])
+    fmt = _formats.detect_format(path, cfg.format)
+    table_expr, _ = _table_source(conn, path, fmt)
+    staged = table_expr.startswith('"')
+
+    exprs: list[str] = []
+    for col in ("name", "category", "lon", "lat"):
+        spec = getattr(cfg.columns, col)
+        if spec is None:
+            exprs.append(f"NULL AS {col}")
+        else:
+            exprs.append(_column_expr(col, spec))
+    props_expr = '"_props_json" AS props_json' if staged else "NULL AS props_json"
+
+    offset_row = conn.execute(
+        "SELECT COALESCE(MAX(poi_id), 0) FROM pois WHERE source_key = ?",
+        [poi_key],
+    ).fetchone()
+    offset = int(offset_row[0]) if offset_row else 0
+
+    before = conn.execute("SELECT COUNT(*) FROM pois").fetchone()[0]
+    try:
+        conn.execute(f"""
+            INSERT INTO pois (poi_id, source_key, name, category, lon, lat, props_json)
+            SELECT
+                {offset} + row_number() OVER () AS poi_id,
+                {_sql_string_literal(poi_key)} AS source_key,
+                {", ".join(exprs)},
+                {props_expr}
+            FROM {table_expr}
+        """)
+    finally:
+        if staged:
+            conn.execute(f"DROP TABLE IF EXISTS {table_expr}")
+    after = conn.execute("SELECT COUNT(*) FROM pois").fetchone()[0]
+    return after - before
 
 
 # --- F1 derived metrics (Phase 2) -------------------------------------------
@@ -512,14 +937,16 @@ def build_density_hourly(conn, resolution: float = DENSITY_HOURLY_RESOLUTION) ->
     design (minutes on 233M rows), so /api/analysis/spatial/density-hourly
     never touches raw waypoints at request time.
 
-    The hour bucket uses the same BASE_EPOCH_SEC mod-86400 math as the
-    trajectory endpoints, so the pulse breathes in sync with the trails.
+    The hour bucket uses the same epoch-anchor mod-86400 math as the
+    trajectory endpoints (read from viz_meta via db.get_epoch_anchor — the
+    single read path), so the pulse breathes in sync with the trails.
     city comes from trips (waypoints don't carry it) via a DISTINCT join on
     vehicle_key.
 
     Idempotent per resolution: existing rows at this resolution are replaced.
     Returns the number of aggregate rows built.
     """
+    anchor = get_epoch_anchor(conn)
     r = float(resolution)
     conn.execute("DELETE FROM density_hourly WHERE resolution = ?", [r])
     conn.execute(f"""
@@ -528,7 +955,7 @@ def build_density_hourly(conn, resolution: float = DENSITY_HOURLY_RESOLUTION) ->
         SELECT
             w.source_id,
             t.city,
-            CAST(((w.unix_time_ms // 1000 - {int(BASE_EPOCH_SEC)}) % 86400) // 3600 AS INTEGER) AS hour,
+            CAST(((w.unix_time_ms // 1000 - {anchor}) % 86400) // 3600 AS INTEGER) AS hour,
             ROUND(w.lon / {r}) * {r} AS grid_lon,
             ROUND(w.lat / {r}) * {r} AS grid_lat,
             COUNT(*) AS weight,
@@ -652,6 +1079,14 @@ def main() -> None:
         except Exception:
             pass  # never let log-write failures mask the original error
 
+    # ------- Epoch anchor (universal sources) -------
+    anchor_sec = resolve_epoch_anchor(sources)
+    try:
+        ensure_epoch_anchor(conn, anchor_sec)
+    except ValueError as e:
+        print(f"\n[ERROR] {e}")
+        sys.exit(1)
+
     # ------- Per-source ingest -------
     for source_key, src in sources.sources.items():
         scope = src.discovery.scope.value if src.discovery.scope else None
@@ -659,20 +1094,31 @@ def main() -> None:
             f", scope={scope})" if scope else ")"
         )
         print(f"\n[SOURCE] {label}")
+        src_trip_files = 0
+        src_traj_files = 0
+        src_waypoints = 0
+        src_trips_ingested = 0
+        src_trips_synthesized = 0
 
         # Trips + co-located validation
-        trip_csvs = discover_csvs(
-            src.discovery.trips_glob, output_dir,
-            latest_only=src.discovery.latest_only,
+        trip_csvs = (
+            discover_csvs(
+                src.discovery.trips_glob, output_dir,
+                latest_only=src.discovery.latest_only,
+            )
+            if src.discovery.trips_glob
+            else []
         )
-        if not trip_csvs:
+        if not trip_csvs and src.discovery.trips_glob:
             print(f"  [TRIPS] no matches for glob: {src.discovery.trips_glob}")
         for csv_path in trip_csvs:
             print(f"  [trips] {csv_path}", end=" ... ", flush=True)
             t = time.time()
             try:
-                n = ingest_source_trips(conn, csv_path, source_key, src)
+                n = ingest_source_trips(conn, csv_path, source_key, src, anchor_sec)
                 total_trips += n
+                src_trips_ingested += n
+                src_trip_files += 1
                 print(f"{n:,} rows ({time.time()-t:.1f}s)")
                 conn.execute(
                     "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'trips', ?)",
@@ -710,8 +1156,12 @@ def main() -> None:
                 print(f"  [traj]  {csv_path}", end=" ... ", flush=True)
                 t = time.time()
                 try:
-                    n = ingest_source_trajectories(conn, csv_path, source_key, src)
+                    n = ingest_source_trajectories(
+                        conn, csv_path, source_key, src, anchor_sec
+                    )
                     total_waypoints += n
+                    src_waypoints += n
+                    src_traj_files += 1
                     print(f"{n:,} rows ({time.time()-t:.1f}s)")
                     conn.execute(
                         "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'waypoints', ?)",
@@ -720,6 +1170,51 @@ def main() -> None:
                 except Exception as e:
                     print(f"ERROR: {type(e).__name__}: {e}")
                     _log_failure(csv_path, "waypoints", e)
+
+        # Trip synthesis for points-only sources
+        if src.trips_synthesis is not None and src_waypoints > 0:
+            try:
+                ns = synthesize_trips(conn, src, anchor_sec)
+                total_trips += ns
+                src_trips_synthesized = ns
+                if ns > 0:
+                    print(f"  [synth] {ns:,} trips synthesized "
+                          f"(strategy={src.trips_synthesis.strategy})")
+            except Exception as e:
+                print(f"  [synth] ERROR: {type(e).__name__}: {e}")
+                _log_failure(Path(f"(synthesize:{source_key})"), "trips", e)
+
+        # Per-source summary line
+        print(
+            f"  [summary] {source_key}: {src_trip_files} trip file(s), "
+            f"{src_traj_files} traj file(s), {src_waypoints:,} waypoints, "
+            f"{src_trips_ingested:,} trips ingested, "
+            f"{src_trips_synthesized:,} trips synthesized"
+        )
+
+    # ------- POI layers -------
+    total_pois = 0
+    for poi_key, poi_cfg in (sources.pois or {}).items():
+        print(f"\n[POI] {poi_key} ({poi_cfg.label})")
+        poi_files = sorted(
+            Path(p) for p in glob(str((output_dir / poi_cfg.glob).as_posix()), recursive=True)
+        )
+        if not poi_files:
+            print(f"  [poi] no matches for glob: {poi_cfg.glob}")
+        for i, poi_path in enumerate(poi_files):
+            print(f"  [poi]   {poi_path}", end=" ... ", flush=True)
+            t = time.time()
+            try:
+                n = ingest_pois(conn, poi_key, poi_cfg, poi_path, replace=(i == 0))
+                total_pois += n
+                print(f"{n:,} rows ({time.time()-t:.1f}s)")
+                conn.execute(
+                    "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'pois', ?)",
+                    [str(poi_path), n],
+                )
+            except Exception as e:
+                print(f"ERROR: {type(e).__name__}: {e}")
+                _log_failure(poi_path, "pois", e)
 
     # ------- F1 derived metrics (post-ingest pass) -------
     derived_counts: dict[str, int] = {}
@@ -753,6 +1248,7 @@ def main() -> None:
     print(f"  Trips:       {total_trips:>12,}")
     print(f"  Waypoints:   {total_waypoints:>12,}")
     print(f"  Validation:  {total_validation:>12,}")
+    print(f"  POIs:        {total_pois:>12,}")
     print(f"  Database:    {db_path}")
     if db_path.is_file():
         print(f"  Size:        {db_path.stat().st_size / 1024 / 1024:.1f} MB")

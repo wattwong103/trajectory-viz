@@ -6,11 +6,11 @@ Response formats are designed for direct consumption by DeckGL layers:
 - ScatterplotLayer expects {position: [lon, lat], ...}
 """
 
-from pydantic import BaseModel, Field
 from typing import Optional
 
-from .filters import ScenarioFields, TripFilters
+from pydantic import BaseModel, Field
 
+from .filters import ScenarioFields, TripFilters
 
 # ─── Request Models ────────────────────────────────────────────
 
@@ -146,3 +146,37 @@ class StatsResponse(BaseModel):
     trips: dict
     waypoints: dict
     has_trajectories: bool
+
+
+# ─── POI Models (universal-trajectory-support Phase 1) ──────────
+
+class Poi(BaseModel):
+    """One point of interest for ScatterplotLayer."""
+    poi_id: int
+    source_key: str
+    name: Optional[str] = None
+    category: Optional[str] = None
+    lon: float
+    lat: float
+    props: Optional[dict] = None
+
+
+class PoiListResponse(BaseModel):
+    """POI query response. `truncated` is True when `limit` cut the result."""
+    pois: list[Poi]
+    count: int
+    truncated: bool
+
+
+class PoiCategory(BaseModel):
+    """One POI category summary, with the layer's render hints joined in."""
+    category: Optional[str] = None
+    count: int
+    color: Optional[list[int]] = None
+    label: Optional[str] = None
+    source_key: str
+
+
+class PoiCategoriesResponse(BaseModel):
+    """POI category counts across all layers."""
+    categories: list[PoiCategory]
