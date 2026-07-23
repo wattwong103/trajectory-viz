@@ -25,8 +25,10 @@ import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { useFootfall } from './hooks/useFootfall';
 import { useScenarioImpact } from './hooks/useScenarioImpact';
 import { usePois } from './hooks/usePois';
+import { useUpload } from './hooks/useUpload';
 import { poiColor } from './poiColors';
 import { unionBboxes, type Bbox } from './utils/bbox';
+import { UploadDropzone } from './components/UploadDropzone';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
 import { exportCompositePng } from './utils/exportPng';
 import type { LayerAvailabilityContext } from './layerCatalog';
@@ -267,9 +269,13 @@ export default function App() {
   const [zoneBBox, setZoneBBox] = useState<{ w: number; s: number; e: number; n: number } | null>(null);
   const [zoneTrips, setZoneTrips] = useState<TripPoint[]>([]);
 
-  useEffect(() => {
+  const reloadFilterOptions = useCallback(() => {
     fetchFilterOptions().then(setFilterOptions).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    reloadFilterOptions();
+  }, [reloadFilterOptions]);
 
   // Pulse availability probe (one-time, tiny): distinguishes "hourly-density
   // aggregate not built" (toggle disabled with a fix-it tooltip) from a
@@ -338,6 +344,16 @@ export default function App() {
   }, [stats]);
 
   const animation = useAnimation();
+
+  // Upload-and-go: on ingest completion, re-run exactly what Refresh does
+  // (useTrajectories refetch) plus filter-options, so the new source appears
+  // as a vehicle-type button + legend entry without a reload.
+  const handleUploaded = useCallback(() => {
+    refetch();
+    reloadFilterOptions();
+  }, [refetch, reloadFilterOptions]);
+
+  const uploader = useUpload({ onDone: handleUploaded });
 
   const hasData = (stats?.trips?.row_count ?? 0) > 0;
   const { insights, loading: insightsLoading } = useInsights(
@@ -563,9 +579,11 @@ export default function App() {
       />
 
       {/* Universal-trajectory Phase 2 — only when loading FINISHED with zero
-          trips; the FilterPanel skeleton covers the in-flight state. */}
+          trips; the FilterPanel skeleton covers the in-flight state. The drop
+          area shares App's uploader; a successful ingest refetches stats and
+          this overlay swaps itself out as soon as trips exist. */}
       {!loading && stats !== null && (stats.trips?.row_count ?? 0) === 0 && (
-        <EmptyState />
+        <EmptyState onUploadFiles={uploader.upload} />
       )}
 
       {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
@@ -615,6 +633,7 @@ export default function App() {
         enabledPoiCategories={poi.enabledCategories}
         onTogglePoiCategory={poi.toggleCategory}
         onSetAllPoiCategories={poi.setAll}
+        onUploadFiles={uploader.upload}
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
@@ -665,6 +684,9 @@ export default function App() {
         onSetTime={animation.setTime}
         onSetTrailLength={animation.setTrailLength}
       />
+
+      {/* Upload-and-go — global drop overlay, ingest status card, toasts */}
+      <UploadDropzone uploader={uploader} />
     </div>
   );
 }

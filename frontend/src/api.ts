@@ -16,6 +16,8 @@ import type {
   AgentInfo,
   PoiListResponse,
   PoiCategoriesResponse,
+  UploadAccepted,
+  IngestJob,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -764,4 +766,48 @@ export async function fetchPois(opts: {
 // deterministic hash palette in poiColors.ts).
 export async function fetchPoiCategories(): Promise<PoiCategoriesResponse> {
   return fetchJson('/api/pois/categories');
+}
+
+// ─── Upload-and-go ingest ────────────────────────────────
+// NOT fetchJson-based: the upload is multipart (the browser must set the
+// Content-Type boundary itself) and the 422 detail is a {reasons[]} object,
+// which fetchJson would flatten into a string.
+
+export class UploadRejectedError extends Error {
+  reasons: string[];
+  constructor(reasons: string[]) {
+    super(reasons.join('\n'));
+    this.name = 'UploadRejectedError';
+    this.reasons = reasons;
+  }
+}
+
+export async function uploadFiles(files: File[]): Promise<UploadAccepted> {
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  const res = await fetch(`${API_BASE}/api/ingest/upload`, {
+    method: 'POST',
+    body: form,
+  });
+  if (res.status === 202) return res.json();
+  if (res.status === 422) {
+    let reasons: string[] | null = null;
+    try {
+      const body = await res.json();
+      if (Array.isArray(body?.detail?.reasons)) {
+        reasons = body.detail.reasons.map(String);
+      } else if (typeof body?.detail === 'string') {
+        reasons = [body.detail];
+      }
+    } catch { /* non-JSON error body */ }
+    throw new UploadRejectedError(reasons ?? ['Upload rejected (422)']);
+  }
+  if (res.status === 413) {
+    throw new Error('File too large — 200 MB upload cap.');
+  }
+  throw new Error(`API error: ${res.status} ${res.statusText}`);
+}
+
+export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
+  return fetchJson(`/api/ingest/jobs/${jobId}`);
 }

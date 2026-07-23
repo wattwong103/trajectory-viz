@@ -162,6 +162,60 @@ export interface FilterOptions {
   transport_modes?: Array<{ mode: number; count: number }>;
 }
 
+// ─── Upload-and-go ingest (frontend half) ───────────────
+// Matches backend/routers/ingest_api.py: POST /api/ingest/upload (202) and
+// GET /api/ingest/jobs/{job_id}. POI uploads are not part of the contract.
+
+export interface UploadFileInfo {
+  filename: string;
+  source_id: string;
+  format: string;
+}
+
+/** 202 response from POST /api/ingest/upload. */
+export interface UploadAccepted {
+  job_id: string;
+  status: 'queued';
+  files: UploadFileInfo[];
+}
+
+export type IngestPhase =
+  'ingest' | 'synthesize' | 'derived' | 'density' | 'registry' | 'done';
+
+export interface IngestJobProgress {
+  phase: IngestPhase;
+  file: string | null;
+  done_files: number;
+  total_files: number;
+}
+
+export interface IngestJobResultFile {
+  filename: string;
+  source_id: string;
+  label: string;
+  trips: number;
+  waypoints: number;
+  vehicles: number;
+}
+
+export interface IngestJobResult {
+  trips: number;
+  waypoints: number;
+  source_ids: string[];
+  files: IngestJobResultFile[];
+}
+
+export type IngestJobStatus = 'queued' | 'running' | 'done' | 'error';
+
+export interface IngestJob {
+  job_id: string;
+  status: IngestJobStatus;
+  progress: IngestJobProgress | null;
+  result: IngestJobResult | null;
+  error: string | null;
+  created_at: string;
+}
+
 // ─── POIs (universal-trajectory-support Phase 2) ─────────
 // Static points of interest declared via the `pois:` block in sources.yaml.
 // Independent of TripFilters — POIs render as a context layer, not trips.

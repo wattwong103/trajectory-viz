@@ -5,7 +5,7 @@
  * Also hosts: drill status indicator, layer toggles, and screenshot export button.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import type { FilterState, StatsResponse, FilterOptions, Trajectory, PoiCategory } from '../types';
 import type { LayerVisibility } from '../App';
 import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
@@ -13,6 +13,7 @@ import { sourceFallbackColor } from '../sourceColors';
 import { poiColor } from '../poiColors';
 import { LAYER_GROUPS, type LayerAvailabilityContext } from '../layerCatalog';
 import { friendlyFetchError } from '../friendlyError';
+import { ACCEPT_ATTR } from '../uploadUtils';
 import type { ScenarioImpact } from '../hooks/useScenarioImpact';
 
 interface FilterPanelProps {
@@ -40,6 +41,9 @@ interface FilterPanelProps {
   enabledPoiCategories?: string[];
   onTogglePoiCategory?: (category: string) => void;
   onSetAllPoiCategories?: (enabled: boolean) => void;
+  // Upload-and-go — shared uploader owned by App; the button opens a hidden
+  // file input (drag-and-drop alone is undiscoverable).
+  onUploadFiles?: (files: File[]) => void;
   onChange: (f: FilterState) => void;
   onRefetch: () => void;
   onClearDrill: () => void;
@@ -74,11 +78,13 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   enabledPoiCategories,
   onTogglePoiCategory,
   onSetAllPoiCategories,
+  onUploadFiles,
   onChange, onRefetch, onClearDrill, onLayerToggle,
   onBuildingExaggeration, onScreenshot,
 }) => {
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Per-group expansion inside the Layers section (Core/Scene open first).
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>(
     () => Object.fromEntries(LAYER_GROUPS.map(g => [g.key, g.defaultExpanded])),
@@ -652,9 +658,34 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         )}
       </div>
 
-      <button onClick={onRefetch} style={styles.refreshBtn} disabled={loading}>
-        Refresh
-      </button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={onRefetch} style={{ ...styles.refreshBtn, flex: 1 }} disabled={loading}>
+          Refresh
+        </button>
+        {onUploadFiles && (
+          <>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{ ...styles.refreshBtn, flex: 1 }}
+              title="Upload trajectory files to visualize (.gpx, .geojson, .csv, .ndjson, .parquet)"
+            >
+              ⬆ Upload
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPT_ATTR}
+              style={{ display: 'none' }}
+              onChange={e => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) onUploadFiles(files);
+                e.target.value = '';   // allow re-picking the same file
+              }}
+            />
+          </>
+        )}
+      </div>
 
       {/* Inline keyframe for skeleton pulse */}
       <style>{`
