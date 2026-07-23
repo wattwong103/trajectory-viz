@@ -52,6 +52,7 @@ dev = [
 [project.scripts]
 trajectory-viz-ingest = "backend.ingest:main"
 trajectory-viz-serve = "backend.app:serve"
+trajectory-viz-demo = "backend.demo:main"
 viz-export = "backend.export:main"
 
 [project.urls]
@@ -78,6 +79,9 @@ exclude = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --strict-markers"
+markers = [
+    "slow: end-to-end tests that run a full demo ingest (seconds each)",
+]
 
 [tool.ruff]
 line-length = 100

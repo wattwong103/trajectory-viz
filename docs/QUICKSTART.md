@@ -1,6 +1,34 @@
 # QUICKSTART — trajectory-viz
 
-Two paths: **Docker** (fastest, one command) or **native** (Mac/Windows dev, with Vite HMR for frontend changes).
+The fastest way to see the dashboard is the **2-minute demo** below — no data
+of your own required. Then: **Docker** (one command), **native** (Mac/Windows
+dev with Vite HMR), or **standalone** (serve an existing DuckDB file).
+
+---
+
+## Path 0: 2-minute demo (no data needed)
+
+A small synthetic day of bike couriers, city buses, and POIs around Kichijōji,
+Tokyo is committed under [`demo/`](../demo) — GPX tracks, a GeoJSON bus
+LineString file, and a GeoJSON POI layer, wired by `demo/sources.demo.yaml`.
+
+```bash
+pip install -e .
+trajectory-viz-demo --serve
+```
+
+The first run ingests the demo dataset into `demo/demo.duckdb` (subsequent
+runs reuse it; `--reset` forces a fresh ingest; `--db-path` redirects it).
+Then open **<http://127.0.0.1:9999>**.
+
+> The API is fully functional on :9999 immediately (`/api/stats`, `/docs`).
+> For the full map UI either build the frontend once
+> (`cd frontend && npm install && npm run build`) or run the dev server
+> (`npm run dev`, <http://localhost:5173>).
+
+To regenerate the dataset deterministically: `python demo/generate_demo_data.py`.
+To point the tool at **your own** GPX/GeoJSON/NDJSON/Parquet/CSV data, see
+[`docs/DATA_FORMATS.md`](DATA_FORMATS.md).
 
 ---
 
@@ -110,7 +138,7 @@ In this mode `PFLOW_HOME` is never resolved, so the dashboard runs anywhere the 
 
 ## Adding a new ABM source
 
-The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change. See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step. A sample MATSim-style config lives at [docs/examples/sources-matsim.yaml](examples/sources-matsim.yaml).
+The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step, [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook, and [docs/examples/sources-matsim.yaml](examples/sources-matsim.yaml) for a worked MATSim config.
 
 ---
 

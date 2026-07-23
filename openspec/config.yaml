@@ -1,0 +1,17 @@
+schema: spec-driven
+
+context: |
+  trajectory-viz (v0.2.0a1) — interactive dashboard for agent-based mobility-model outputs; ABM-generic (add a model via a sources.yaml block, not backend edits). Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs).
+  Stack: FastAPI + DuckDB backend (Python 3.11+, port 9999) and React 18 + DeckGL + MapLibre + recharts frontend (Node 20+, Vite port 5173, /api proxy). DB at output/viz/pflow.duckdb (~8.4 GB, not in git; regenerable via ingest).
+  Conventions: routes namespaced under /api/ (stats/trips/trajectories); build_trip_filter() in db.py is the canonical filter-builder; Pydantic models.py is the API contract; DuckDB connection is per-request (no pool).
+  Hard performance budgets: /api/stats p99 < 200ms, /api/trips p99 < 1s for <=10K trips (else paginate), single-trip trajectory < 500ms (sample multi-trip to <=500). Trajectory schema is PFLOW-style (trip_id, lon/lat, datetime).
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

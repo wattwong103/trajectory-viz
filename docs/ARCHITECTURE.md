@@ -4,19 +4,29 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  sources.yaml  — declarative ABM source registry                         │
-│    pflow-truck:       trips_glob, vehicle_key_template, columns map      │
-│    pflow-taxi-tokyo:  ... (one block per ABM × scope)                    │
+│  sources.yaml  — declarative source registry (any trajectory dataset)    │
+│    sources:  trips/waypoint globs, per-format discovery (csv | geojson | │
+│              gpx | ndjson | parquet), columns map, vehicle_key_template, │
+│              trips_synthesis for points-only sources                     │
+│    pois:     static POI layers (name/category/lon/lat)                   │
+│    time:     per-DB epoch_anchor (absolute time)                         │
 └──────────────────────────────────────────────────────────────────────────┘
                                   │
-                                  ▼  (backend/ingest.py reads sources.yaml,
-                                  │   builds INSERT...SELECT from each
-                                  │   source's columns map)
+                                  ▼  (backend/ingest.py reads sources.yaml;
+                                  │   geojson/gpx/ndjson normalized in Python
+                                  │   (formats.py) → canonical TEMP staging
+                                  │   table; csv/parquet read natively; then
+                                  │   one shared INSERT...SELECT pipeline.
+                                  │   Points-only sources: synthesize_trips.
+                                  │   Anchor persisted to viz_meta, mixed-
+                                  │   anchor re-ingest rejected w/o --reset.)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  DuckDB  (output/viz/pflow.duckdb, ≈ 8 GB at PFLOW scale)                │
 │    trips         — one row per trip, 26 cols + 3 F1 derived              │
 │    waypoints     — one row per GPS-like sample, 16 cols                  │
+│    pois          — static POI layers (/api/pois)                         │
+│    viz_meta      — per-DB metadata (epoch_anchor)                        │
 │    validation_runs — per-metric calibration evidence                     │
 │    ingest_log    — file-level row counts + error rows (row_count=-1)     │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -59,11 +69,15 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 | Field | Purpose |
 |---|---|
 | `source_id` | Short label (e.g. `truck`, `taxi`) that goes into `trips.source_id` and `trips.vehicle_type` (back-compat alias). Multiple source keys may share the same `source_id`. |
-| `discovery.trips_glob` | Glob pattern relative to `PFLOW_VIZ_OUTPUT_ROOT` matching this source's trip CSVs. |
-| `discovery.trajectories_glob` | Optional — matches waypoint CSVs. When absent, F3 segment features stay NULL. |
+| `discovery.trips_glob` | Glob pattern relative to `PFLOW_VIZ_OUTPUT_ROOT` matching this source's trip files. Optional for points-only sources (see `trips_synthesis`). |
+| `discovery.trajectories_glob` | Optional — matches waypoint files (any format). When absent, F3 segment features stay NULL. |
+| `discovery.format` (+ per-side overrides) | Optional ingest format (`csv`/`geojson`/`gpx`/`ndjson`/`parquet`); auto-detected from the extension when omitted. Non-CSV formats are normalized to a canonical staging shape (`_lon`/`_lat`/`_time_ms`/`_seq`/`_feature_id`/`_trk_name`/`_props_json`) — see [DATA_FORMATS.md](DATA_FORMATS.md). |
 | `discovery.scope.value` | Optional scope qualifier (e.g. city name). Drives the `city` column and the `{scope}` placeholder in `vehicle_key_template`. |
 | `vehicle_key_template` | String template producing each row's cross-source-unique `vehicle_key`. Supports `{vehicle_id}` and `{scope}` placeholders. Examples: `truck:{vehicle_id}`, `taxi:{scope}:{vehicle_id}`. |
-| `columns.trips` / `columns.waypoints` | Map from DB column name → spec. Spec is one of: `{csv: <csv_col>, type: <duckdb_type>}` (with optional `transform: <SQL>`), or `{derived: <SQL_expr>}`. |
+| `columns.trips` / `columns.waypoints` | Map from DB column name → spec. Spec is one of: `{csv: <col>, type: <duckdb_type>}` (with optional `transform: <SQL>`), or `{derived: <SQL_expr>}`. String vehicle/trip IDs hash-fallback to integers; `vehicle_key` stays authoritative. |
+| `trips_synthesis` | Points-only sources: synthesize trips from waypoints at ingest — `gap_split` (gap_minutes), `day`, or `single`. Mutually exclusive with `trips_glob`. |
+| `time.epoch_anchor` / `time.coord_times_prop` | Absolute-time handling: anchor ISO timestamp (one per DB, persisted in `viz_meta`) / GeoJSON property holding per-coordinate times. |
+| `pois:` (top-level) | Static POI layers — glob, `columns` (name/category/lon/lat), optional color → `pois` table, served via `/api/pois*`. |
 
 Required trip columns (validated): `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat`. Required waypoint columns when trajectories_glob is set: `unix_time_ms`, `lon`, `lat`. Everything else is optional.
 
@@ -110,10 +124,12 @@ trajectory-viz/
 │   ├── app.py              FastAPI app + router registration
 │   ├── config.py           PFLOW_HOME / PFLOW_VIZ_DB resolution
 │   ├── db.py               DuckDB schema + connection + build_trip_filter
-│   ├── ingest.py           sources.yaml → DuckDB INSERT...SELECT
+│   ├── demo.py             trajectory-viz-demo: bundled demo ingest + serve
+│   ├── formats.py          geojson/gpx/ndjson normalizers (staging shape)
+│   ├── ingest.py           sources.yaml → staging → DuckDB INSERT...SELECT
 │   ├── models.py           Pydantic request/response models
 │   ├── sources_schema.py   Pydantic models + loader for sources.yaml
-│   ├── routers/            stats.py, trips.py, trajectories.py
+│   ├── routers/            stats.py, trips.py, trajectories.py, pois.py
 │   └── analysis/           temporal, spatial, trip_chains, od_flows, clustering
 ├── frontend/
 │   ├── package.json        Vite + React + DeckGL + recharts + maplibre
@@ -126,11 +142,13 @@ trajectory-viz/
 ├── tests/
 │   └── test_v0_2_parity.py F1/F2/F3 unit tests + cross-version DB parity
 ├── docs/
-│   ├── QUICKSTART.md       This getting-started guide
+│   ├── QUICKSTART.md       Getting-started guide (leads with the demo)
+│   ├── DATA_FORMATS.md     Universal ingest formats + YAML cookbook
 │   ├── ARCHITECTURE.md     This file
 │   ├── CONTRIBUTING.md     Adding a new ABM source, code style
 │   └── examples/
 │       └── sources-matsim.yaml  Example schema-driven config
+├── demo/                   Committed synthetic demo dataset + sources.demo.yaml
 ├── sources.yaml            Live source registry
 ├── pyproject.toml          Project metadata + deps + entry points
 ├── Dockerfile              Multi-stage Docker build

@@ -7,7 +7,7 @@
 [![Node 20+](https://img.shields.io/badge/node-20+-green.svg)](https://nodejs.org/)
 [![Status: alpha](https://img.shields.io/badge/status-v0.2.0a1-orange.svg)](#whats-new-in-v02)
 
-Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the University of Tokyo Sekimoto Lab / CSIS. As of **v0.2**, the dashboard is **ABM-generic**: a new mobility model is added by writing a `sources.yaml` config block, not by editing backend code.
+Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the University of Tokyo Sekimoto Lab / CSIS, the dashboard now visualizes **any trajectory dataset** — GPX tracks, GeoJSON lines/points, NDJSON pings, Parquet extracts, or ABM trip CSVs — plus static **POI layers**. New sources are added by writing a `sources.yaml` config block, not by editing backend code; raw timestamped pings get trips synthesized at ingest. A committed demo dataset makes it runnable in minutes with no data of your own.
 
 ---
 
@@ -31,6 +31,16 @@ Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full releas
 ---
 
 ## Quick start
+
+### Demo (2 minutes, no data needed)
+
+```bash
+pip install -e .
+trajectory-viz-demo --serve   # first run ingests the bundled demo dataset
+# Open http://127.0.0.1:9999  (map UI: cd frontend && npm install && npm run dev)
+```
+
+A synthetic day of couriers (GPX), buses (GeoJSON `coordTimes`), and POIs around Kichijōji, Tokyo — details in [`docs/QUICKSTART.md`](docs/QUICKSTART.md) and [`docs/DATA_FORMATS.md`](docs/DATA_FORMATS.md).
 
 ### Docker (recommended for first-timers)
 
@@ -64,9 +74,23 @@ See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for prereqs, troubleshooting, and
 
 ## Architecture (one paragraph)
 
-A declarative source registry (`sources.yaml`) drives ingest from any ABM whose output is trip + waypoint CSVs. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~28 endpoints under `/api/*`. The React frontend dynamically discovers vehicle types from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
+A declarative source registry (`sources.yaml`) drives ingest from trajectory files in five formats (CSV, GeoJSON, GPX, NDJSON, Parquet) plus static POI layers. Points-only sources get trips synthesized at ingest; absolute time is anchored per-DB via `viz_meta`. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~30 endpoints under `/api/*`. The React frontend dynamically discovers vehicle types from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
 
 Full diagram: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Supported data formats
+
+| Format | Points (pings) | Lines | POI | Timestamp conventions |
+|---|:---:|:---:|:---:|---|
+| CSV | ✅ | — | ✅ | epoch s/ms columns, or derived SQL |
+| GeoJSON | ✅ Point features | ✅ LineString | ✅ | ISO-8601 (naive → assumed UTC), epoch s/ms; per-coordinate `coordTimes` property |
+| GPX 1.1 | ✅ trkpts | ✅ trksegs | — | `<time>` per trkpt; `Z` and `±hh:mm` offsets both honored |
+| NDJSON | ✅ one object/line | — | ✅ | producer-defined fields → epoch ms via derived SQL |
+| Parquet | ✅ | — | ✅ | native DuckDB read; same column mapping as CSV |
+
+Points-only sources (no trip file) get **trips synthesized at ingest** — `gap_split`, `day`, or `single` strategies. Absolute time is anchored once per DB (`time.epoch_anchor` → `viz_meta`). Full field conventions and YAML cookbook: [`docs/DATA_FORMATS.md`](docs/DATA_FORMATS.md).
 
 ---
 
@@ -77,7 +101,8 @@ trajectory-viz/
 ├── backend/             FastAPI + DuckDB
 ├── frontend/            React + DeckGL + MapLibre
 ├── tests/               pytest unit tests
-├── docs/                QUICKSTART, ARCHITECTURE, CONTRIBUTING, examples/
+├── demo/                Committed synthetic demo dataset + sources.demo.yaml
+├── docs/                QUICKSTART, DATA_FORMATS, ARCHITECTURE, CONTRIBUTING, examples/
 ├── sources.yaml         Declarative source registry
 ├── pyproject.toml       Project metadata + deps + entry points
 ├── Dockerfile           Multi-stage build
@@ -154,6 +179,8 @@ Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-
 ## Endpoints reference (summary)
 
 **Stats** — `/api/stats`, `/api/stats/insights`, `/api/stats/filter-options`
+
+**POIs** — **`/api/pois`**, **`/api/pois/categories`** (static POI layers)
 
 **Trips** — `/api/trips/sample`, `POST /api/trips/query` (with F1 dims)
 
