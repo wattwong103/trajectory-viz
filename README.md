@@ -195,6 +195,7 @@ Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-
 - Temporal: `/departures`, `/peaks`, `/duration`, **`/metrics-distribution`** (F1 histogram)
 - Spatial: `/density-grid`, `/waypoint-density`, `/hotspots`, `/link-density`, **`/density-hourly`** (pulse heatmap)
 - Trip chains: `/length-distribution`, `/dwell-times`, `/round-trips`, `/commodity-patterns`, **`/through-zone-bbox`** (F2), **`/multi-stop`** (F2)
+- Fleet comparison: **`/analysis/compare`** — A/B report for two sources (fleet summaries, mode-share Δpp, hourly + distance overlays, matched-person deltas); drives the Analysis panel's ⇄ Compare tab
 - OD: `/od-flows`, `/od-flows/zones`
 - Clustering: `/clustering/status`, `POST /clustering/run`, **`POST /clustering/route-similarity`** (F3)
 
