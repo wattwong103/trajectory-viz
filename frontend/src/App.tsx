@@ -672,6 +672,9 @@ export default function App() {
         onAddAgent={addAgent}
         onRemoveAgent={removeAgent}
         onClearAgents={clearAgents}
+        sources={filterOptions?.sources ?? []}
+        transportModes={filter.transportModes}
+        scenario={filter.scenario}
       />
 
       <TimeSlider

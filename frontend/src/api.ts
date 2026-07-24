@@ -18,6 +18,7 @@ import type {
   PoiCategoriesResponse,
   UploadAccepted,
   IngestJob,
+  CompareResponse,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -810,4 +811,41 @@ export async function uploadFiles(files: File[]): Promise<UploadAccepted> {
 
 export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
   return fetchJson(`/api/ingest/jobs/${jobId}`);
+}
+
+// ─── Fleet comparison (fleet-comparison) ──────────────
+// GET /api/analysis/compare — two sources under otherwise-identical shared
+// filters. vehicle_type is deliberately NOT a parameter: the router ignores
+// it and overrides with source_a/source_b.
+
+export interface CompareFilters {
+  city?: string;
+  simulationDay?: number;
+  goodsType?: string;
+  minHour?: number;
+  maxHour?: number;
+  transportModes?: number[];
+  scenario?: Scenario;
+}
+
+export async function fetchComparison(
+  sourceA: string,
+  sourceB: string,
+  filters: CompareFilters = {},
+  topN: number = 10,
+): Promise<CompareResponse> {
+  const params = new URLSearchParams({
+    source_a: sourceA,
+    source_b: sourceB,
+    top_n: String(topN),
+  });
+  if (filters.city) params.set('city', filters.city);
+  if (filters.simulationDay !== undefined) params.set('simulation_day', String(filters.simulationDay));
+  if (filters.goodsType) params.set('goods_type', filters.goodsType);
+  if (filters.minHour !== undefined) params.set('min_hour', String(filters.minHour));
+  if (filters.maxHour !== undefined) params.set('max_hour', String(filters.maxHour));
+  const tm = transportModesParam(filters.transportModes);
+  if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, filters.scenario);
+  return fetchJson(`/api/analysis/compare?${params}`);
 }

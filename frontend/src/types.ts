@@ -308,3 +308,74 @@ export interface AnimationState {
   playing: boolean;
   trailLength: number;             // seconds of visible trail
 }
+
+// ─── Fleet comparison (fleet-comparison) ───────────────
+// Matches backend/analysis/compare.py: GET /api/analysis/compare.
+// Both fleets share every TripFilters dimension except vehicle_type, which
+// the router overrides with source_a/source_b. Aggregates are null when a
+// fleet has no rows under the filter (render '—').
+
+export interface CompareFleetSummary {
+  trips: number;
+  vehicles: number;
+  vkt_km: number | null;
+  avg_distance_km: number | null;
+  median_distance_km: number | null;
+  max_distance_km: number | null;
+  min_starttime: number | null;      // seconds-of-day first departure
+  max_starttime: number | null;      // seconds-of-day last departure
+}
+
+export interface CompareModeShare {
+  mode: number;                      // PFLOW transport_mode id
+  a_trips: number;
+  a_share: number;                   // 0..1, normalized within fleet A
+  b_trips: number;
+  b_share: number;
+  delta_pp: number;                  // (share_b − share_a) × 100
+}
+
+export interface CompareHourly {
+  hour: number;                      // 0..23 (24 entries, always)
+  a: number;
+  b: number;
+}
+
+export interface CompareDistanceBucket {
+  bucket_lo: number;
+  bucket_hi: number;                 // shared edges across both fleets
+  a: number;
+  b: number;
+}
+
+export interface CompareMatchedTop {
+  vehicle_id: number;                // shared integer id across both sources
+  trips_a: number;
+  trips_b: number;
+  delta: number;                     // trips_b − trips_a
+}
+
+export interface CompareMatched {
+  matched_persons: number;
+  trips_per_person_a: number | null;
+  trips_per_person_b: number | null;
+  delta: {
+    mean: number | null;
+    median: number | null;
+    p90_abs: number | null;
+    max_abs: number | null;
+  };
+  top: CompareMatchedTop[];
+}
+
+export interface CompareResponse {
+  source_a: string;
+  source_b: string;
+  fleet_a: CompareFleetSummary;
+  fleet_b: CompareFleetSummary;
+  mode_shares: CompareModeShare[];
+  hourly: CompareHourly[];
+  out_of_range: { a: number; b: number };
+  distance_hist: CompareDistanceBucket[];   // [] when both fleets lack distances
+  matched: CompareMatched | null;           // null = no shared vehicle ids
+}

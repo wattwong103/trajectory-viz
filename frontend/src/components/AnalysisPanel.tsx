@@ -15,7 +15,7 @@ import {
   BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
-import type { InsightsResponse, MetricsDistribution, Trajectory, TripPoint } from '../types';
+import type { InsightsResponse, MetricsDistribution, Trajectory, TripPoint, FilterState, SourceStyle } from '../types';
 import {
   fetchHourlyDepartures, fetchODFlows, fetchSpatialDensity,
   runClustering, fetchChainLengths,
@@ -32,8 +32,9 @@ import {
   type RouteSimilarityResponse,
 } from '../api';
 import { AgentTab } from './AgentTab';
+import { CompareTab } from './CompareTab';
 
-type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone' | 'agents';
+type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone' | 'agents' | 'compare';
 
 const TAB_LABELS: Record<Tab, string> = {
   summary: '\u03A3',
@@ -47,6 +48,7 @@ const TAB_LABELS: Record<Tab, string> = {
   detail: '\uD83D\uDCCD',     // Sprint A1a \u2014 Trajectory Details (visible only when one selected)
   zone: '\u25AD',        // Sprint A1b \u2014 Through-zone bbox query
   agents: '\u2691',      // Phase 2A \u2014 agent search & follow
+  compare: '⇄',      // fleet-comparison — A⇄B fleet comparison
 };
 
 function formatCompact(n: number): string {
@@ -87,6 +89,11 @@ interface AnalysisPanelProps {
   onAddAgent?: (key: string) => void;
   onRemoveAgent?: (key: string) => void;
   onClearAgents?: () => void;
+  // fleet-comparison — sources list + shared filters the ⇄ tab applies
+  // symmetrically to both fleets (vehicle_type is overridden server-side).
+  sources?: SourceStyle[];
+  transportModes?: number[];
+  scenario?: FilterState['scenario'];
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -324,6 +331,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   scenarioActive = false, onPedestrianize, onClearScenario,
   selectedAgents = [], agentLoading = false,
   onAddAgent, onRemoveAgent, onClearAgents,
+  sources = [], transportModes, scenario,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -1240,6 +1248,21 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             onAddAgent={onAddAgent}
             onRemoveAgent={onRemoveAgent}
             onClearAgents={onClearAgents}
+          />
+        )}
+
+        {/* ── Compare Tab (fleet-comparison — A⇄B fleets) ── */}
+        {tab === 'compare' && (
+          <CompareTab
+            sources={sources}
+            city={city}
+            simulationDay={simulationDay}
+            goodsType={goodsType}
+            minHour={minHour}
+            maxHour={maxHour}
+            transportModes={transportModes}
+            scenario={scenario}
+            onAddAgent={onAddAgent}
           />
         )}
 
