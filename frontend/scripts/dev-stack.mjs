@@ -19,18 +19,26 @@ const python = existsSync(venvPython) ? venvPython : 'python'
 
 // Demo defaults — only applied when the caller hasn't pointed the backend
 // at real data via the environment.
+const userSetDb = Boolean(process.env.PFLOW_VIZ_DB)
 const env = { ...process.env }
 env.PFLOW_VIZ_DB ??= path.join(repoRoot, 'demo', 'demo.duckdb')
 env.PFLOW_VIZ_SOURCES ??= path.join(repoRoot, 'demo', 'sources.demo.yaml')
 env.PFLOW_VIZ_OUTPUT_ROOT ??= path.join(repoRoot, 'demo')
 
-// First run: ingest the demo dataset if the DB doesn't exist yet.
+// First run: ingest the demo dataset if the DB doesn't exist yet — but only
+// in demo mode. When the caller pointed at their own (missing) DB, demo
+// ingest would write the wrong file; print the right command instead.
 if (!existsSync(env.PFLOW_VIZ_DB)) {
-  console.log('[dev-stack] no database found — ingesting demo dataset…')
-  const r = spawnSync(python, ['-m', 'backend.demo'], { cwd: repoRoot, env, stdio: 'inherit' })
-  if (r.status !== 0) {
-    console.error('[dev-stack] demo ingest failed')
-    process.exit(r.status ?? 1)
+  if (userSetDb) {
+    console.warn(`[dev-stack] database not found: ${env.PFLOW_VIZ_DB}`)
+    console.warn('[dev-stack] run "trajectory-viz-ingest --reset" (with your PFLOW_VIZ_* env) first; starting with an empty DB')
+  } else {
+    console.log('[dev-stack] no database found — ingesting demo dataset…')
+    const r = spawnSync(python, ['-m', 'backend.demo'], { cwd: repoRoot, env, stdio: 'inherit' })
+    if (r.status !== 0) {
+      console.error('[dev-stack] demo ingest failed')
+      process.exit(r.status ?? 1)
+    }
   }
 }
 
