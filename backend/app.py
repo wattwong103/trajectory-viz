@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .analysis import clustering, od_flows, spatial, temporal, trip_chains
+from .analysis import clustering, compare, od_flows, spatial, temporal, trip_chains
 from .routers import buildings, ingest_api, pois, stats, trajectories, trips
 
 app = FastAPI(
@@ -48,6 +48,8 @@ app.include_router(ingest_api.router, prefix="/api/ingest", tags=["ingest"])
 app.include_router(temporal.router, prefix="/api", tags=["analysis"])
 app.include_router(od_flows.router, prefix="/api", tags=["analysis"])
 app.include_router(spatial.router, prefix="/api", tags=["analysis"])
+# Fleet-comparison: A/B fleet report
+app.include_router(compare.router, prefix="/api", tags=["analysis"])
 
 # Phase 3: Mining
 app.include_router(clustering.router, prefix="/api", tags=["mining"])
