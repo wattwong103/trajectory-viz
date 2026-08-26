@@ -1,0 +1,146 @@
+# Isolated source registry for the Kichijoji pedestrian-superblock snapshot.
+# Ingest into a dedicated DB (does NOT touch the main 8.4GB pflow.duckdb):
+#   trajectory-viz-ingest --reset \
+#     --sources sources.kichijoji.yaml \
+#     --output-root /Users/north-mac/Dropbox/PFLOW/output \
+#     --db-path /Users/north-mac/Dropbox/PFLOW/output/viz/kichijoji.duckdb
+version: 1
+
+sources:
+  # BASELINE — real Pseudo-PFLOW synthetic person-flow around Kichijoji Station
+  # (all modes; routed on DRM pref 13). NOT an intervention result.
+  pflow-person-kichijoji-baseline:
+    label: "Kichijoji — Baseline (real person-flow)"
+    source_id: kjbaseline
+    discovery:
+      trips_glob: "trips/person/kichijoji_baseline/trips_pseudo_pflow.csv"
+      trajectories_glob: "trajectory/person/kichijoji_baseline/trajectory_*.csv"
+      latest_only: false
+    vehicle_key_template: "kjbase:{vehicle_id}"
+    render:
+      mode: trails
+      color: [43, 160, 220]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: taxi_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day, type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+
+  # WALK — pedestrian trips only (real transport_mode==0). Footfall = people on foot.
+  pflow-person-kichijoji-walk:
+    label: "Kichijoji — Pedestrians (walk)"
+    source_id: kjwalk
+    discovery:
+      trips_glob: "trips/person/kichijoji_walk/trips_pseudo_pflow.csv"
+      trajectories_glob: "trajectory/person/kichijoji_walk/trajectory_*.csv"
+      latest_only: false
+    vehicle_key_template: "kjwalk:{vehicle_id}"
+    render:
+      mode: points
+      color: [43, 200, 120]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: taxi_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day, type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+
+  # CAR — car trips only (real transport_mode==3). The traffic the superblock removes.
+  pflow-person-kichijoji-car:
+    label: "Kichijoji — Car traffic"
+    source_id: kjcar
+    discovery:
+      trips_glob: "trips/person/kichijoji_car/trips_pseudo_pflow.csv"
+      trajectories_glob: "trajectory/person/kichijoji_car/trajectory_*.csv"
+      latest_only: false
+    vehicle_key_template: "kjcar:{vehicle_id}"
+    render:
+      mode: trails
+      color: [235, 130, 95]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: taxi_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day, type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+
+  # AFTER (ILLUSTRATIVE) — same baseline flow with interior through-CAR trajectories
+  # removed (pedestrianization). Hand-constructed illustration, not a model outcome.
+  pflow-person-kichijoji-after:
+    label: "Kichijoji — Pedestrianized (illustrative)"
+    source_id: kjafter
+    discovery:
+      trips_glob: "trips/person/kichijoji_after/trips_pseudo_pflow.csv"
+      trajectories_glob: "trajectory/person/kichijoji_after/trajectory_*.csv"
+      latest_only: false
+    vehicle_key_template: "kjaft:{vehicle_id}"
+    render:
+      mode: trails
+      color: [43, 200, 120]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: taxi_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day, type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
