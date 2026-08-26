@@ -6,20 +6,21 @@ Response formats are designed for direct consumption by DeckGL layers:
 - ScatterplotLayer expects {position: [lon, lat], ...}
 """
 
-from pydantic import BaseModel, Field
 from typing import Optional
 
+from pydantic import BaseModel, Field
+
+from .filters import ScenarioFields, TripFilters
 
 # ─── Request Models ────────────────────────────────────────────
 
-class TripQuery(BaseModel):
-    """Filter criteria for trip queries."""
-    vehicle_type: Optional[str] = Field(None, pattern="^(truck|taxi)$")
-    min_hour: Optional[int] = Field(None, ge=0, le=23)
-    max_hour: Optional[int] = Field(None, ge=0, le=23)
-    goods_type: Optional[str] = Field(None, pattern="^[a-z_]+$")
-    city: Optional[str] = Field(None, pattern="^[a-z_]+$")
-    simulation_day: Optional[int] = Field(None, ge=0)
+class TripQuery(TripFilters):
+    """Filter criteria for trip queries.
+
+    Inherits every shared dimension (vehicle_type, city, simulation_day,
+    goods_type, min/max_hour, F1 metrics) from filters.TripFilters — same
+    field names and validation patterns as before the Phase-0 refactor.
+    Only the trip-query-specific fields live here."""
     # Zone codes are alphanumeric + _/- (e.g. MFS01, PRF47, OSK30). The pattern
     # here is load-bearing: origin_zone/dest_zone are f-string'd into SQL at
     # routers/trips.py, so unvalidated input would be a SQL injection vector.
@@ -28,29 +29,43 @@ class TripQuery(BaseModel):
     limit: int = Field(1000, ge=1, le=50000)
 
 
-class BBoxQuery(BaseModel):
-    """Bounding box spatial query for trajectories."""
+class BBoxQuery(ScenarioFields):
+    """Bounding box spatial query for trajectories.
+
+    Inherits the pedestrianize-scenario fields (scenario, sc_*) so the
+    scenario also drops excluded trips from trajectory renders."""
     min_lon: float
     min_lat: float
     max_lon: float
     max_lat: float
-    vehicle_type: Optional[str] = Field(None, pattern="^(truck|taxi)$")
+    vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: Optional[str] = Field(None, pattern="^[a-z_]+$")
     simulation_day: Optional[int] = Field(None, ge=0)
+    # Comma-separated transport-mode ids ("0,3"). Filters by the TRIP's mode
+    # via the (vehicle_key, trip_id) subquery — see filters.TripFilters.
+    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     min_hour: Optional[int] = None
     max_hour: Optional[int] = None
     limit: int = Field(500, ge=1, le=5000)
+    # Phase 2 Step 2.5 — opt into per-segment metrics (link_id/speed/dwell)
+    include_segments: bool = False
 
 
-class PointQuery(BaseModel):
-    """Point proximity query — find trajectories near a point."""
+class PointQuery(ScenarioFields):
+    """Point proximity query — find trajectories near a point.
+
+    Inherits the pedestrianize-scenario fields (scenario, sc_*)."""
     lon: float
     lat: float
     radius_km: float = Field(1.0, ge=0.1, le=50.0)
-    vehicle_type: Optional[str] = Field(None, pattern="^(truck|taxi)$")
+    vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: Optional[str] = Field(None, pattern="^[a-z_]+$")
     simulation_day: Optional[int] = Field(None, ge=0)
+    # Comma-separated transport-mode ids ("0,3") — trip-granular filter.
+    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     limit: int = Field(200, ge=1, le=5000)
+    # Phase 2 Step 2.5 — opt into per-segment metrics
+    include_segments: bool = False
 
 
 # ─── Response Models ───────────────────────────────────────────
@@ -61,11 +76,27 @@ class TrajectoryMetadata(BaseModel):
     vehicle_id: int
     vehicle_key: str
     trip_id: int
+    # The TRIP's transport mode (trips.transport_mode, joined at
+    # (vehicle_key, trip_id)). NOT the waypoint's — router-generated waypoints
+    # carry a uniform per-source value (taxi writer stamps 8 on everything),
+    # verified empirically. 0=walk 1=bike 2=bus 3=car 4=train 8=taxi.
+    transport_mode: Optional[int] = None
     goods_type: Optional[str] = None
     vehicle_size: Optional[str] = None
     passenger_in: Optional[str] = None
     fare_yen: Optional[float] = None
     purpose: Optional[int] = None
+
+
+class TrajectorySegment(BaseModel):
+    """Per-segment metrics between two consecutive waypoints (Phase 2 Step 2.5).
+
+    A trajectory of N waypoints has N-1 segments. Returned only when the
+    endpoint is called with `include_segments=true` — heavy payload otherwise.
+    """
+    link_id: Optional[str] = None         # DRM link the second waypoint sits on
+    speed_kmh: Optional[float] = None     # haversine distance / dt; None if dt<=0
+    dwell_sec: Optional[float] = None     # populated when speed < 1 km/h (idle marker)
 
 
 class Trajectory(BaseModel):
@@ -74,6 +105,9 @@ class Trajectory(BaseModel):
     path: list[list[float]]                     # [[lon, lat], [lon, lat], ...]
     timestamps: list[int]                       # seconds from midnight (for 24h animation loop)
     metadata: TrajectoryMetadata
+    # Phase 2 Step 2.5 — populated only when include_segments=true on the call.
+    # len(segments) == len(path) - 1 when present.
+    segments: Optional[list[TrajectorySegment]] = None
 
 
 class TrajectoryResponse(BaseModel):
@@ -96,6 +130,8 @@ class TripPoint(BaseModel):
     distance_km: Optional[float] = None
     goods_type: Optional[str] = None
     city: Optional[str] = None
+    # 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (trips.transport_mode)
+    transport_mode: Optional[int] = None
 
 
 class TripResponse(BaseModel):
@@ -110,3 +146,37 @@ class StatsResponse(BaseModel):
     trips: dict
     waypoints: dict
     has_trajectories: bool
+
+
+# ─── POI Models (universal-trajectory-support Phase 1) ──────────
+
+class Poi(BaseModel):
+    """One point of interest for ScatterplotLayer."""
+    poi_id: int
+    source_key: str
+    name: Optional[str] = None
+    category: Optional[str] = None
+    lon: float
+    lat: float
+    props: Optional[dict] = None
+
+
+class PoiListResponse(BaseModel):
+    """POI query response. `truncated` is True when `limit` cut the result."""
+    pois: list[Poi]
+    count: int
+    truncated: bool
+
+
+class PoiCategory(BaseModel):
+    """One POI category summary, with the layer's render hints joined in."""
+    category: Optional[str] = None
+    count: int
+    color: Optional[list[int]] = None
+    label: Optional[str] = None
+    source_key: str
+
+
+class PoiCategoriesResponse(BaseModel):
+    """POI category counts across all layers."""
+    categories: list[PoiCategory]

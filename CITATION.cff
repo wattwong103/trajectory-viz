@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use trajectory-viz in academic work, please cite it as below."
+title: "trajectory-viz: Interactive visualization dashboard for agent-based mobility models"
+abstract: >-
+  A FastAPI + DuckDB + React + DeckGL + MapLibre dashboard for exploring
+  trip and trajectory data emitted by agent-based mobility models. Designed
+  around a declarative source registry (sources.yaml) so any ABM whose output
+  can be expressed as trip and waypoint CSVs is supported via configuration,
+  not code. Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs)
+  outputs (4.43M trips, 233M waypoints) at the University of Tokyo
+  Sekimoto Lab / CSIS.
+type: software
+version: "0.2.0a1"
+date-released: "2026-05-16"
+authors:
+  - family-names: Wongkaew
+    given-names: Watcharapong
+    affiliation: "Center for Spatial Information Science, The University of Tokyo"
+license: MIT
+repository-code: "https://github.com/wattwong103/trajectory-viz"
+url: "https://github.com/wattwong103/trajectory-viz"
+keywords:
+  - agent-based-model
+  - mobility
+  - trajectory
+  - visualization
+  - duckdb
+  - deckgl
+  - PFLOW
+  - urban-mobility
+# Optional fields populated when a Zenodo / Software Heritage DOI is minted:
+# doi: 10.5281/zenodo.XXXXXXX
+# identifiers:
+#   - type: swh
+#     value: "swh:1:dir:..."

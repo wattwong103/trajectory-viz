@@ -5,9 +5,16 @@
  * Also hosts: drill status indicator, layer toggles, and screenshot export button.
  */
 
-import React, { useState } from 'react';
-import type { FilterState, StatsResponse, FilterOptions, Trajectory } from '../types';
+import React, { useState, useRef } from 'react';
+import type { FilterState, StatsResponse, FilterOptions, Trajectory, PoiCategory } from '../types';
 import type { LayerVisibility } from '../App';
+import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
+import { sourceFallbackColor } from '../sourceColors';
+import { poiColor } from '../poiColors';
+import { LAYER_GROUPS, type LayerAvailabilityContext } from '../layerCatalog';
+import { friendlyFetchError } from '../friendlyError';
+import { ACCEPT_ATTR } from '../uploadUtils';
+import type { ScenarioImpact } from '../hooks/useScenarioImpact';
 
 interface FilterPanelProps {
   filter: FilterState;
@@ -21,23 +28,29 @@ interface FilterPanelProps {
   drillPoint: [number, number] | null;
   drillLoading: boolean;
   layerVisibility: LayerVisibility;
+  // Per-dataset layer applicability (layerCatalog) — grouped toggles render
+  // disabled with a reason tooltip instead of silently doing nothing.
+  layerAvailability: LayerAvailabilityContext;
+  // Phase 3 — building height multiplier (shown under the 3D Buildings row)
+  buildingExaggeration: number;
+  // Phase 4 — impact numbers for the active-scenario badge (null = inactive)
+  scenarioImpact: ScenarioImpact | null;
+  // Universal-trajectory Phase 2 — POI category chips (one row per category
+  // name, aggregated across POI sources). Hidden when poiCategories is empty.
+  poiCategories?: PoiCategory[];
+  enabledPoiCategories?: string[];
+  onTogglePoiCategory?: (category: string) => void;
+  onSetAllPoiCategories?: (enabled: boolean) => void;
+  // Upload-and-go — shared uploader owned by App; the button opens a hidden
+  // file input (drag-and-drop alone is undiscoverable).
+  onUploadFiles?: (files: File[]) => void;
   onChange: (f: FilterState) => void;
   onRefetch: () => void;
   onClearDrill: () => void;
   onLayerToggle: (key: string) => void;
+  onBuildingExaggeration: (v: number) => void;
   onScreenshot: () => void;
 }
-
-const LAYER_LABELS: Array<{ key: string; label: string }> = [
-  { key: 'origins',      label: 'Origins' },
-  { key: 'destinations', label: 'Destinations' },
-  { key: 'trajectories', label: 'Trajectories' },
-  { key: 'odFlows',      label: 'OD flows' },
-  { key: 'density',      label: 'Heatmap' },
-  { key: 'linkDensity',  label: 'Link density' },
-  { key: 'clusters',     label: 'Cluster arcs' },
-  { key: 'drill',        label: 'Drill results' },
-];
 
 /** Relabel EMPTY goods type for display; sort EMPTY last */
 function formatGoodsType(g: string): string {
@@ -58,14 +71,97 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   filterOptions,
   drillTrajectories, drillPoint, drillLoading,
   layerVisibility,
-  onChange, onRefetch, onClearDrill, onLayerToggle, onScreenshot,
+  layerAvailability,
+  buildingExaggeration,
+  scenarioImpact,
+  poiCategories = [],
+  enabledPoiCategories,
+  onTogglePoiCategory,
+  onSetAllPoiCategories,
+  onUploadFiles,
+  onChange, onRefetch, onClearDrill, onLayerToggle,
+  onBuildingExaggeration, onScreenshot,
 }) => {
   const [layersExpanded, setLayersExpanded] = useState(false);
+  const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Per-group expansion inside the Layers section (Core/Scene open first).
+  const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(LAYER_GROUPS.map(g => [g.key, g.defaultExpanded])),
+  );
+
+  // F1 slider bounds (per Phase 2 Step 2.2 design choice: Conservative).
+  // Adjust these constants to widen/narrow the slider input range.
+  const SPEED_BOUND = 80;
+  const DWELL_BOUND = 240;
+  const DETOUR_MIN_BOUND = 1.0;
+  const DETOUR_MAX_BOUND = 3.0;
+
+  // Display-only values; default to bound when filter is undefined (= inactive).
+  const minSpeedVal = filter.minSpeed ?? 0;
+  const maxSpeedVal = filter.maxSpeed ?? SPEED_BOUND;
+  const maxDwellVal = filter.maxDwellMinutes ?? DWELL_BOUND;
+  const minDetourVal = filter.minDetourRatio ?? DETOUR_MIN_BOUND;
+  const maxDetourVal = filter.maxDetourRatio ?? DETOUR_MAX_BOUND;
+
+  const advancedActive = (
+    filter.minSpeed !== undefined ||
+    filter.maxSpeed !== undefined ||
+    filter.maxDwellMinutes !== undefined ||
+    filter.minDetourRatio !== undefined ||
+    filter.maxDetourRatio !== undefined
+  );
+
+  const resetAdvanced = () => onChange({
+    ...filter,
+    minSpeed: undefined,
+    maxSpeed: undefined,
+    maxDwellMinutes: undefined,
+    minDetourRatio: undefined,
+    maxDetourRatio: undefined,
+  });
+
+  // Sprint B5 — per-source F1 availability. When vehicleType is '' (All),
+  // assume any source MIGHT have data → enable all sliders. When a specific
+  // source is selected, consult metrics_available; disabled sliders show
+  // a tooltip explaining why.
+  const metricsForSource = filter.vehicleType
+    ? filterOptions?.metrics_available?.[filter.vehicleType]
+    : undefined;
+  const speedEnabled  = !filter.vehicleType || !metricsForSource || metricsForSource.speed;
+  const dwellEnabled  = !filter.vehicleType || !metricsForSource || metricsForSource.dwell;
+  const detourEnabled = !filter.vehicleType || !metricsForSource || metricsForSource.detour;
+  const disabledTip = (kind: 'speed' | 'dwell' | 'detour') => {
+    const why = {
+      speed:  'Requires trajectory data (waypoints) — not ingested for this source.',
+      dwell:  'Requires ≥ 2 trips per vehicle on the same day — none in this source.',
+      detour: 'All trips are < 100m OD distance (haversine NULL-guard).',
+    }[kind];
+    return `${kind}_avg not populated for "${filter.vehicleType}". ${why}`;
+  };
+  // Visual treatment for a disabled slider row.
+  const disabledStyle: React.CSSProperties = { opacity: 0.4, pointerEvents: 'none' };
 
   const totalTrips = stats?.trips?.row_count ?? 0;
   const totalWaypoints = stats?.waypoints?.row_count ?? 0;
   const noData = !loading && totalTrips === 0;
   const allFilteredOut = !loading && totalTrips > 0 && tripCount === 0 && trajectoryCount === 0;
+
+  // POI chips (universal-trajectory Phase 2): aggregate the per-(source_key,
+  // category) catalogue rows into one chip per category NAME — duplicate
+  // names across POI sources share a chip and toggle together (same keying
+  // as usePois' enabled set).
+  const poiChips = (() => {
+    const m = new Map<string, { count: number; color: [number, number, number] }>();
+    for (const c of poiCategories) {
+      const cur = m.get(c.category);
+      if (cur) { cur.count += c.count; continue; }
+      m.set(c.category, { count: c.count, color: poiColor(c) });
+    }
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+  })();
+  const allPoisEnabled = poiChips.length > 0 &&
+    (enabledPoiCategories?.length ?? 0) === poiChips.length;
 
   return (
     <div style={styles.container}>
@@ -93,11 +189,17 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             <div>{totalTrips.toLocaleString()} trips</div>
             {stats?.trips?.by_vehicle_type && (
               <div style={{ fontSize: 11, marginTop: 1 }}>
-                {Object.entries(stats.trips.by_vehicle_type).map(([type, info]) => (
-                  <div key={type} style={{ color: type === 'truck' ? '#fd805d' : '#17b8be' }}>
-                    {info.count.toLocaleString()} {type}
-                  </div>
-                ))}
+                {Object.entries(stats.trips.by_vehicle_type).map(([type, info]) => {
+                  // Source-style color (sources.yaml) with the shared hash
+                  // fallback — was hardcoded truck/taxi hex before Phase 1.
+                  const c = filterOptions?.sources?.find(s => s.source_id === type)?.color
+                    ?? sourceFallbackColor(type);
+                  return (
+                    <div key={type} style={{ color: `rgb(${c[0]},${c[1]},${c[2]})` }}>
+                      {info.count.toLocaleString()} {type}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div>{totalWaypoints.toLocaleString()} waypoints</div>
@@ -111,13 +213,13 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         )}
       </div>
 
-      {/* Vehicle type toggle */}
+      {/* Vehicle type toggle — populated from /api/stats/filter-options (sources.yaml) */}
       <div style={styles.section}>
         <label style={styles.sectionLabel}>Vehicle Type</label>
         <div style={styles.btnGroup}>
-          {(['all', 'truck', 'taxi'] as const).map(vt => (
+          {['', ...(filterOptions?.vehicle_types ?? [])].map(vt => (
             <button
-              key={vt}
+              key={vt || 'all'}
               style={{
                 ...styles.toggleBtn,
                 ...(filter.vehicleType === vt ? styles.toggleActive : {}),
@@ -125,15 +227,135 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               onClick={() => onChange({
                 ...filter,
                 vehicleType: vt,
-                // Clear goods type when switching to taxi (taxis have no goods)
-                goodsType: vt === 'taxi' ? undefined : filter.goodsType,
+                // Clear goods type when switching to a non-truck source (only
+                // truck-like sources currently declare goods_type in sources.yaml).
+                goodsType: vt && vt !== 'truck' ? undefined : filter.goodsType,
               })}
             >
-              {vt === 'all' ? 'All' : vt === 'truck' ? 'Truck' : 'Taxi'}
+              {vt === '' ? 'All' : vt.charAt(0).toUpperCase() + vt.slice(1)}
             </button>
           ))}
         </div>
       </div>
+
+      {/* Transport mode multi-select chips + color-by toggle (Phase 1).
+          Filters by the TRIP's mode (trips.transport_mode). Hidden for
+          single-mode datasets — nothing to filter. */}
+      {filterOptions?.transport_modes && filterOptions.transport_modes.length >= 2 && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>Transport Mode</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            <button
+              key="all-modes"
+              style={{
+                ...styles.modeChip,
+                ...(!filter.transportModes?.length ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, transportModes: undefined })}
+            >
+              All
+            </button>
+            {filterOptions.transport_modes.map(({ mode, count }) => {
+              const active = filter.transportModes?.includes(mode) ?? false;
+              const c = TRANSPORT_MODE_META[mode]?.color ?? [128, 128, 128];
+              return (
+                <button
+                  key={mode}
+                  style={{
+                    ...styles.modeChip,
+                    ...(active ? styles.toggleActive : {}),
+                    borderLeft: `3px solid rgb(${c[0]},${c[1]},${c[2]})`,
+                  }}
+                  title={`${count.toLocaleString()} trips`}
+                  onClick={() => {
+                    const cur = filter.transportModes ?? [];
+                    const next = cur.includes(mode)
+                      ? cur.filter(m => m !== mode)
+                      : [...cur, mode].sort((a, b) => a - b);
+                    onChange({ ...filter, transportModes: next.length ? next : undefined });
+                  }}
+                >
+                  {transportModeLabel(mode)}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ ...styles.row, marginTop: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: '#999' }}>Color by</span>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...(filter.colorBy !== 'transportMode' ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, colorBy: undefined })}
+            >
+              Source
+            </button>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...(filter.colorBy === 'transportMode' ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, colorBy: 'transportMode' })}
+            >
+              Mode
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* POI category chips (universal-trajectory Phase 2) — colored dot +
+          name + count, click toggles the category on the map. Hidden when
+          the dataset declares no POI sources. */}
+      {poiChips.length > 0 && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>POI</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            <button
+              key="all-pois"
+              style={{
+                ...styles.modeChip,
+                ...(allPoisEnabled ? styles.toggleActive : {}),
+              }}
+              onClick={() => onSetAllPoiCategories?.(true)}
+            >
+              All
+            </button>
+            {poiChips.map(([category, { count, color }]) => {
+              const active = enabledPoiCategories?.includes(category) ?? true;
+              return (
+                <button
+                  key={category}
+                  style={{
+                    ...styles.modeChip,
+                    ...(active ? styles.toggleActive : {}),
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                  title={`${count.toLocaleString()} POIs — click to toggle`}
+                  onClick={() => onTogglePoiCategory?.(category)}
+                >
+                  <span style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    flexShrink: 0,
+                    // Disabled categories show an outlined dot (SourceLegend
+                    // hidden-row convention) instead of a filled one.
+                    background: active ? `rgb(${color[0]},${color[1]},${color[2]})` : 'transparent',
+                    border: `1px solid rgb(${color[0]},${color[1]},${color[2]})`,
+                  }} />
+                  {category}
+                  <span style={{ color: '#888', fontSize: 10 }}>
+                    {count.toLocaleString()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* City dropdown */}
       {filterOptions && filterOptions.cities.length > 0 && (
@@ -182,25 +404,120 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </div>
       )}
 
-      {/* Time range */}
+      {/* Time range — each slider gets a visible from/to readout so the two
+          thumbs' meaning is obvious (was: two bare stacked sliders). */}
       <div style={styles.section}>
-        <label style={styles.sectionLabel}>
-          Time: {String(filter.minHour).padStart(2, '0')}:00 – {String(filter.maxHour).padStart(2, '0')}:00
-        </label>
-        <div style={styles.row}>
+        <label style={styles.sectionLabel}>Time Range</label>
+        <div style={styles.sliderRow}>
+          <span style={styles.sliderCaption}>
+            From {String(filter.minHour).padStart(2, '0')}:00
+          </span>
           <input
             type="range" min={0} max={23}
             value={filter.minHour}
             onChange={e => onChange({ ...filter, minHour: Number(e.target.value) })}
             style={styles.rangeInput}
+            aria-label="Start hour"
           />
+        </div>
+        <div style={styles.sliderRow}>
+          <span style={styles.sliderCaption}>
+            To&nbsp;&nbsp;&nbsp;{String(filter.maxHour).padStart(2, '0')}:00
+          </span>
           <input
             type="range" min={0} max={23}
             value={filter.maxHour}
             onChange={e => onChange({ ...filter, maxHour: Number(e.target.value) })}
             style={styles.rangeInput}
+            aria-label="End hour"
           />
         </div>
+      </div>
+
+      {/* Advanced filters (F1 derived metrics) — Phase 2 Step 2.2 */}
+      <div style={{ marginBottom: 8 }}>
+        <button
+          onClick={() => setAdvancedExpanded(p => !p)}
+          style={styles.layersToggleBtn}
+        >
+          {advancedExpanded ? '▾' : '▸'} Advanced filters
+          {advancedActive && <span style={{ color: '#4fc3f7', marginLeft: 4 }}>•</span>}
+        </button>
+        {advancedExpanded && (
+          <div style={{ marginTop: 6, paddingLeft: 4 }}>
+            <div
+              style={{ ...styles.section, ...(!speedEnabled ? disabledStyle : {}) }}
+              title={!speedEnabled ? disabledTip('speed') : undefined}
+            >
+              <label style={styles.sectionLabel}>
+                Speed: {minSpeedVal} – {maxSpeedVal} km/h
+                {!speedEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
+              </label>
+              <div style={styles.row}>
+                <input
+                  type="range" min={0} max={SPEED_BOUND}
+                  value={minSpeedVal}
+                  onChange={e => onChange({ ...filter, minSpeed: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                  disabled={!speedEnabled}
+                />
+                <input
+                  type="range" min={0} max={SPEED_BOUND}
+                  value={maxSpeedVal}
+                  onChange={e => onChange({ ...filter, maxSpeed: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                  disabled={!speedEnabled}
+                />
+              </div>
+            </div>
+            <div
+              style={{ ...styles.section, ...(!dwellEnabled ? disabledStyle : {}) }}
+              title={!dwellEnabled ? disabledTip('dwell') : undefined}
+            >
+              <label style={styles.sectionLabel}>
+                Max dwell: {maxDwellVal} min
+                {!dwellEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
+              </label>
+              <input
+                type="range" min={0} max={DWELL_BOUND}
+                value={maxDwellVal}
+                onChange={e => onChange({ ...filter, maxDwellMinutes: Number(e.target.value) })}
+                style={styles.rangeInput}
+                disabled={!dwellEnabled}
+              />
+            </div>
+            <div
+              style={{ ...styles.section, ...(!detourEnabled ? disabledStyle : {}) }}
+              title={!detourEnabled ? disabledTip('detour') : undefined}
+            >
+              <label style={styles.sectionLabel}>
+                Detour: {minDetourVal.toFixed(2)} – {maxDetourVal.toFixed(2)}
+                {!detourEnabled && <span style={{ color: '#888', fontSize: 9 }}> · n/a</span>}
+              </label>
+              <div style={styles.row}>
+                <input
+                  type="range" min={DETOUR_MIN_BOUND} max={DETOUR_MAX_BOUND} step="0.01"
+                  value={minDetourVal}
+                  onChange={e => onChange({ ...filter, minDetourRatio: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                  disabled={!detourEnabled}
+                />
+                <input
+                  type="range" min={DETOUR_MIN_BOUND} max={DETOUR_MAX_BOUND} step="0.01"
+                  value={maxDetourVal}
+                  onChange={e => onChange({ ...filter, maxDetourRatio: Number(e.target.value) })}
+                  style={styles.rangeInput}
+                  disabled={!detourEnabled}
+                />
+              </div>
+            </div>
+            {advancedActive && (
+              <button onClick={resetAdvanced} style={styles.refreshBtn}>
+                Reset advanced
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Currently loaded / empty state */}
@@ -223,8 +540,39 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             {tripCount > 0 && <div>{tripCount} trip points</div>}
           </>
         )}
-        {error && <div style={styles.error}>{error}</div>}
+        {error && (() => {
+          const friendly = friendlyFetchError(error);
+          return (
+            <div style={styles.errorBox}>
+              <span style={{ flex: 1 }}>{friendly.text}</span>
+              {friendly.retryable && (
+                <button onClick={onRefetch} style={styles.retryBtn}>Retry</button>
+              )}
+            </div>
+          );
+        })()}
       </div>
+
+      {/* Phase 4 — active pedestrianize-scenario badge */}
+      {filter.scenario && (
+        <div style={styles.scenarioBox}>
+          <span>
+            <span style={{ color: '#ff8a80', fontWeight: 600 }}>Pedestrianized zone</span>
+            {scenarioImpact && (
+              <span style={{ display: 'block', color: '#f0c0a0' }}>
+                −{scenarioImpact.excluded_trips.toLocaleString()} car trips
+                {' · '}−{Math.round(scenarioImpact.excluded_vkt_km).toLocaleString()} km VKT
+              </span>
+            )}
+          </span>
+          <button
+            onClick={() => onChange({ ...filter, scenario: undefined })}
+            style={styles.scenarioClearBtn}
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Drill status indicator */}
       {(drillPoint || drillLoading) && (
@@ -245,7 +593,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </div>
       )}
 
-      {/* Layer toggles — collapsible */}
+      {/* Layer toggles — grouped + availability-aware. Layers the current
+          dataset can't support render disabled with the reason as a tooltip,
+          instead of toggling to a silent no-op (layerCatalog.ts). */}
       <div style={{ marginBottom: 8 }}>
         <button
           onClick={() => setLayersExpanded(p => !p)}
@@ -255,24 +605,87 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </button>
         {layersExpanded && (
           <div style={styles.layersList}>
-            {LAYER_LABELS.map(({ key, label }) => (
-              <label key={key} style={styles.layerRow}>
-                <input
-                  type="checkbox"
-                  checked={layerVisibility[key] ?? true}
-                  onChange={() => onLayerToggle(key)}
-                  style={{ marginRight: 6, accentColor: '#4fc3f7' }}
-                />
-                {label}
-              </label>
+            {LAYER_GROUPS.map(group => (
+              <div key={group.key} style={{ marginBottom: 4 }}>
+                <button
+                  onClick={() => setGroupExpanded(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+                  style={styles.layerGroupBtn}
+                >
+                  {groupExpanded[group.key] ? '▾' : '▸'} {group.label}
+                </button>
+                {groupExpanded[group.key] && group.layers.map(def => {
+                  const reason = def.unavailableReason?.(layerAvailability) ?? null;
+                  const disabled = reason !== null;
+                  const checked = !disabled && (layerVisibility[def.key] ?? true);
+                  return (
+                    <React.Fragment key={def.key}>
+                      <label
+                        style={{
+                          ...styles.layerRow,
+                          ...(disabled ? styles.layerRowDisabled : {}),
+                        }}
+                        title={reason ?? undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={disabled}
+                          onChange={() => onLayerToggle(def.key)}
+                          style={{ marginRight: 6, accentColor: '#4fc3f7' }}
+                        />
+                        {def.label}
+                      </label>
+                      {/* Phase 3 — height exaggeration, only while buildings are on */}
+                      {def.key === 'buildings' && !disabled && layerVisibility.buildings && (
+                        <div style={{ padding: '2px 0 4px 22px' }}>
+                          <label style={{ ...styles.sectionLabel, marginBottom: 2 }}>
+                            Height ×{buildingExaggeration.toFixed(1)}
+                          </label>
+                          <input
+                            type="range" min={0.5} max={5} step={0.1}
+                            value={buildingExaggeration}
+                            onChange={e => onBuildingExaggeration(Number(e.target.value))}
+                            style={{ ...styles.rangeInput, width: '90%' }}
+                          />
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
             ))}
           </div>
         )}
       </div>
 
-      <button onClick={onRefetch} style={styles.refreshBtn} disabled={loading}>
-        Refresh
-      </button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={onRefetch} style={{ ...styles.refreshBtn, flex: 1 }} disabled={loading}>
+          Refresh
+        </button>
+        {onUploadFiles && (
+          <>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{ ...styles.refreshBtn, flex: 1 }}
+              title="Upload trajectory files to visualize (.gpx, .geojson, .csv, .ndjson, .parquet)"
+            >
+              ⬆ Upload
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPT_ATTR}
+              style={{ display: 'none' }}
+              onChange={e => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) onUploadFiles(files);
+                e.target.value = '';   // allow re-picking the same file
+              }}
+            />
+          </>
+        )}
+      </div>
 
       {/* Inline keyframe for skeleton pulse */}
       <style>{`
@@ -299,6 +712,15 @@ const styles: Record<string, React.CSSProperties> = {
     width: 240,
     zIndex: 10,
     fontSize: 13,
+    // Cap to the viewport and scroll internally so every control (incl. the
+    // 3D Buildings / Footfall / Height rows at the bottom of Layers) stays
+    // reachable on any window height. Thin, dep-free scrollbar.
+    maxHeight: 'calc(100vh - 32px)',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    boxSizing: 'border-box',
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'rgba(255,255,255,0.25) transparent',
   },
   titleRow: {
     display: 'flex',
@@ -377,6 +799,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: '#4fc3f7',
     color: '#fff',
   },
+  // Transport-mode chips (Phase 1) — like toggleBtn but content-sized so
+  // 5-6 chips wrap instead of squeezing into one row.
+  modeChip: {
+    padding: '4px 8px',
+    border: '1px solid #444',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#aaa',
+    cursor: 'pointer',
+    fontSize: 11,
+  },
   row: {
     display: 'flex',
     gap: 8,
@@ -419,6 +852,31 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap' as const,
     flexShrink: 0,
   },
+  // Phase 4 — amber/red scenario badge (mirrors drillBox styling)
+  scenarioBox: {
+    background: 'rgba(231, 76, 60, 0.10)',
+    border: '1px solid rgba(231, 76, 60, 0.45)',
+    borderRadius: 6,
+    padding: '5px 8px',
+    fontSize: 11,
+    marginBottom: 8,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    lineHeight: 1.4,
+  },
+  scenarioClearBtn: {
+    padding: '2px 7px',
+    border: '1px solid rgba(231, 76, 60, 0.5)',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#ff8a80',
+    cursor: 'pointer',
+    fontSize: 10,
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
+  },
   layersToggleBtn: {
     width: '100%',
     padding: '4px 0',
@@ -443,6 +901,62 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#ccc',
     padding: '2px 0',
     cursor: 'pointer',
+  },
+  // Availability-gated layer rows: grayed, no pointer, reason via tooltip.
+  layerRowDisabled: {
+    opacity: 0.4,
+    cursor: 'not-allowed',
+  },
+  layerGroupBtn: {
+    width: '100%',
+    padding: '3px 0 3px 2px',
+    border: 'none',
+    background: 'transparent',
+    color: '#8ab4d8',
+    cursor: 'pointer',
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    textAlign: 'left' as const,
+  },
+  sliderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sliderCaption: {
+    fontSize: 11,
+    color: '#999',
+    whiteSpace: 'nowrap' as const,
+    width: 74,
+    flexShrink: 0,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  errorBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: 'rgba(239, 83, 80, 0.10)',
+    border: '1px solid rgba(239, 83, 80, 0.4)',
+    borderRadius: 6,
+    padding: '6px 8px',
+    color: '#ef9a9a',
+    fontSize: 11,
+    lineHeight: 1.5,
+    marginTop: 4,
+  },
+  retryBtn: {
+    padding: '2px 10px',
+    border: '1px solid rgba(239, 83, 80, 0.5)',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#ef9a9a',
+    cursor: 'pointer',
+    fontSize: 10,
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
   },
   refreshBtn: {
     width: '100%',

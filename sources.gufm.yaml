@@ -1,0 +1,85 @@
+# trajectory-viz source registry for the GUFM vs PFLOW-GT held-out fleets.
+#
+# Isolated from sources.yaml: use ONLY via the env vars
+#   PFLOW_VIZ_SOURCES=<abs path to this file>
+#   PFLOW_VIZ_DB=.../data/gufm/gufm.duckdb
+#   PFLOW_VIZ_OUTPUT_ROOT=.../data/gufm/output
+#
+# Two fleets of the same 400 held-out Tokyo persons (OD fidelity, no routing):
+#   gufm-gen  — GUFM model-generated trips   (vehicle keys gufm:{pid})
+#   pflow-gt  — PFLOW ground truth, ward 13101 (vehicle keys pflow:{pid})
+#
+# Time anchor: none declared -> viz_meta fallback BASE_EPOCH_SEC=1601478000
+# (2020-10-01 00:00 JST), matching the trips.starttime (sec-from-midnight) +
+# simulation_day=0 convention. Waypoint unix_time_ms are absolute epoch ms on
+# that anchor. See docs/DATA_FORMATS.md §3.
+#
+# Validate:
+#   .venv-viz/Scripts/python.exe -m backend.sources_schema --validate sources.gufm.yaml
+
+version: 1
+
+sources:
+  gufm-gen:
+    label: "GUFM Generated (400 held-out)"
+    source_id: gufm
+    discovery:
+      trips_glob: "trips/gufm/*.csv"
+      trajectories_glob: "trajectory/gufm/*.csv"
+      latest_only: false
+    vehicle_key_template: "gufm:{vehicle_id}"
+    render:
+      mode: points
+      color: [90, 140, 255]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: vehicle_id
+      trips:
+        starttime:       { csv: starttime,       type: int }
+        start_lon:       { csv: start_lon,       type: double }
+        start_lat:       { csv: start_lat,       type: double }
+        end_lon:         { csv: end_lon,         type: double }
+        end_lat:         { csv: end_lat,         type: double }
+        transport_mode:  { csv: transport_mode,  type: int }
+        purpose:         { csv: purpose,         type: int }
+        distance_km:     { csv: distance_km,     type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day,  type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,    type: bigint }
+        lon:             { csv: lon,             type: double }
+        lat:             { csv: lat,             type: double }
+        transport_mode:  { csv: transport_mode,  type: int }
+        purpose:         { csv: purpose,         type: int }
+
+  pflow-gt:
+    label: "PFLOW Ground Truth (400 held-out)"
+    source_id: pflow
+    discovery:
+      trips_glob: "trips/pflow_gt/*.csv"
+      trajectories_glob: "trajectory/pflow_gt/*.csv"
+      latest_only: false
+    vehicle_key_template: "pflow:{vehicle_id}"
+    render:
+      mode: points
+      color: [43, 200, 80]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: vehicle_id
+      trips:
+        starttime:       { csv: starttime,       type: int }
+        start_lon:       { csv: start_lon,       type: double }
+        start_lat:       { csv: start_lat,       type: double }
+        end_lon:         { csv: end_lon,         type: double }
+        end_lat:         { csv: end_lat,         type: double }
+        transport_mode:  { csv: transport_mode,  type: int }
+        purpose:         { csv: purpose,         type: int }
+        distance_km:     { csv: distance_km,     type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day,  type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,    type: bigint }
+        lon:             { csv: lon,             type: double }
+        lat:             { csv: lat,             type: double }
+        transport_mode:  { csv: transport_mode,  type: int }
+        purpose:         { csv: purpose,         type: int }

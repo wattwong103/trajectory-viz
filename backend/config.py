@@ -94,3 +94,50 @@ def get_output_root() -> Path:
 def get_output_dir() -> Path:
     """Alias for get_output_root() — retained for back-compat."""
     return get_output_root()
+
+
+# Base date anchor used in VehicleTrajectoryGenerator.java: 2020-10-01 00:00:00
+# JST = 1601478000 seconds since epoch (UTC+9). Waypoint unix_time_ms values
+# convert to seconds-from-midnight via (unix_time_ms/1000 - BASE_EPOCH_SEC) % 86400.
+# Shared by routers/trajectories.py (animation timestamps) and
+# ingest.build_density_hourly (pulse-heatmap hour buckets) — the two MUST agree
+# or the pulse would be offset from the trails.
+BASE_EPOCH_SEC = 1601478000
+
+
+def get_buildings_dir() -> Path:
+    """Directory of baked per-city building binaries (Phase 2C).
+
+    Priority:
+      1. PFLOW_VIZ_BUILDINGS_DIR env var
+      2. <viz db dir>/buildings — sits next to pflow.duckdb, so Docker's
+         /data volume mount picks both up together.
+    """
+    env = os.environ.get("PFLOW_VIZ_BUILDINGS_DIR")
+    if env:
+        return Path(env)
+    return get_viz_db_path().parent / "buildings"
+
+
+def uploads_dir() -> Path:
+    """Staging directory for uploaded trajectory files (upload-and-go).
+
+    Priority:
+      1. PFLOW_VIZ_UPLOADS_DIR env var
+      2. <viz db dir>/uploads — next to the DB, so a Docker /data volume
+         picks uploads up together with the database.
+    Created lazily on first call.
+    """
+    env = os.environ.get("PFLOW_VIZ_UPLOADS_DIR")
+    p = Path(env) if env else get_viz_db_path().parent / "uploads"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def uploads_registry_path() -> Path:
+    """Path of the auto-generated uploads registry (sources.uploads.yaml).
+
+    Lives next to the DB — the user's hand-written sources.yaml is never
+    mutated by uploads; style/POI lookups merge this file in at read time.
+    """
+    return get_viz_db_path().parent / "sources.uploads.yaml"

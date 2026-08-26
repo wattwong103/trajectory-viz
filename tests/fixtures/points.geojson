@@ -1,0 +1,33 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [139.700, 35.680] },
+      "properties": {
+        "name": "Cafe A",
+        "category": "cafe",
+        "time": "2024-05-01T09:00:00+09:00",
+        "rating": 4.5,
+        "tags": ["wifi", "outlet"]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [139.710, 35.690] },
+      "properties": {
+        "name": "Cafe B",
+        "category": "cafe"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [139.720, 35.700] },
+      "properties": {
+        "name": "Station X",
+        "category": "station",
+        "time": "2024-05-01T00:00:00Z"
+      }
+    }
+  ]
+}

@@ -2,10 +2,13 @@
 Stats endpoint — dataset summary and derived insights for the frontend dashboard.
 """
 
-from fastapi import APIRouter, Query
-from typing import Optional
-from ..db import get_table_stats, get_connection, build_trip_filter
+from fastapi import APIRouter, Depends, HTTPException
+from ..db import get_table_stats, get_connection
+from ..filters import (
+    SCENARIO_EXCLUDED_MODE, TripFilters, scenario_pair_subquery, trip_filters,
+)
 from ..models import StatsResponse
+from ..sources_schema import default_sources_path, load_sources_merged
 
 router = APIRouter()
 
@@ -23,12 +26,7 @@ async def stats():
 
 @router.get("/stats/insights")
 async def insights(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Compute derived insights from the trip dataset.
 
@@ -36,14 +34,29 @@ async def insights(
     that turn raw data into actionable understanding.
     """
     conn = get_connection()
-    extra = []
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {int(min_hour)}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {int(max_hour)}")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra if extra else None)
+
+    # Scenario contingency (200ms budget): insights runs ~6 filtered queries,
+    # and each would re-scan waypoints for the exclusion anti-join (~35ms per
+    # scan on 10M waypoints). Materialize the excluded pair set ONCE per
+    # request into a temp table and rewrite the clause against it. Safe on
+    # the singleton connection: this handler has no awaits between queries,
+    # so requests can't interleave mid-handler.
+    if f.scenario:
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE _scenario_excluded AS
+            SELECT vehicle_key, trip_id FROM waypoints
+            WHERE lon BETWEEN {float(f.sc_w)} AND {float(f.sc_e)}
+              AND lat BETWEEN {float(f.sc_s)} AND {float(f.sc_n)}
+        """)
+        base = f.model_copy(update={
+            "scenario": None, "sc_w": None, "sc_s": None, "sc_e": None, "sc_n": None,
+        })
+        where = base.where(extra=[
+            f"NOT (transport_mode = {SCENARIO_EXCLUDED_MODE} AND "
+            f"(vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM _scenario_excluded))"
+        ])
+    else:
+        where = f.where()
 
     # Core metrics
     core = conn.execute(f"""
@@ -97,41 +110,50 @@ async def insights(
         FROM hourly ORDER BY cnt ASC LIMIT 1
     """).fetchone()
 
-    # Taxi-specific: fare insights (respects current filter — scoped to city/day/hour if set)
+    # Fare insights — emitted whenever any matching trip carries a fare_yen value.
+    # Source-agnostic: in v0.1 this was hardcoded to vehicle_type='taxi'; the v0.2
+    # filter `fare_yen IS NOT NULL` excludes truck rows (whose fare_yen is NULL) and
+    # any future source that doesn't declare fare_yen in sources.yaml.
     fare_insights = None
-    if vehicle_type != 'truck':
-        fare_extra = []
-        if min_hour is not None:
-            fare_extra.append(f"dep_hour >= {int(min_hour)}")
-        if max_hour is not None:
-            fare_extra.append(f"dep_hour <= {int(max_hour)}")
-        fare_where = build_trip_filter('taxi', city, simulation_day, extra=fare_extra if fare_extra else None)
-        fare_row = conn.execute(f"""
-            SELECT
-                ROUND(AVG(fare_yen), 0)    AS avg_fare,
-                ROUND(MEDIAN(fare_yen), 0) AS median_fare,
-                ROUND(MAX(fare_yen), 0)    AS max_fare,
-                ROUND(AVG(CASE WHEN is_night_trip THEN fare_yen END), 0) AS avg_night_fare,
-                ROUND(AVG(CASE WHEN NOT is_night_trip THEN fare_yen END), 0) AS avg_day_fare,
-                ROUND(SUM(CASE WHEN is_night_trip THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS night_pct
-            FROM trips {fare_where}
-        """).fetchone()
-        if fare_row and fare_row[0]:
-            fare_insights = {
-                "avg_fare_yen": int(fare_row[0]),
-                "median_fare_yen": int(fare_row[1]),
-                "max_fare_yen": int(fare_row[2]),
-                "avg_night_fare_yen": int(fare_row[3]) if fare_row[3] else None,
-                "avg_day_fare_yen": int(fare_row[4]) if fare_row[4] else None,
-                "night_trip_pct": fare_row[5],
-            }
+    # The fare block deliberately drops goods_type (pre-refactor behavior:
+    # it applied only the hour filters). model_copy preserves that exactly.
+    fare_where = f.model_copy(update={"goods_type": None}).where(
+        extra=["fare_yen IS NOT NULL"]
+    )
+    fare_row = conn.execute(f"""
+        SELECT
+            ROUND(AVG(fare_yen), 0)    AS avg_fare,
+            ROUND(MEDIAN(fare_yen), 0) AS median_fare,
+            ROUND(MAX(fare_yen), 0)    AS max_fare,
+            ROUND(AVG(CASE WHEN is_night_trip THEN fare_yen END), 0) AS avg_night_fare,
+            ROUND(AVG(CASE WHEN NOT is_night_trip THEN fare_yen END), 0) AS avg_day_fare,
+            ROUND(SUM(CASE WHEN is_night_trip THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS night_pct
+        FROM trips {fare_where}
+    """).fetchone()
+    if fare_row and fare_row[0] is not None:
+        fare_insights = {
+            "avg_fare_yen": int(fare_row[0]),
+            "median_fare_yen": int(fare_row[1]),
+            "max_fare_yen": int(fare_row[2]),
+            "avg_night_fare_yen": int(fare_row[3]) if fare_row[3] else None,
+            "avg_day_fare_yen": int(fare_row[4]) if fare_row[4] else None,
+            "night_trip_pct": fare_row[5],
+        }
+
+    # Per-transport-mode breakdown (drives the FilterPanel mode chips/stats).
+    # Cheap: indexed int GROUP BY under the same filter.
+    mode_rows = conn.execute(f"""
+        SELECT transport_mode, COUNT(*) AS cnt
+        FROM trips {where}
+        GROUP BY transport_mode
+        ORDER BY transport_mode
+    """).fetchall()
+    by_transport_mode = {
+        int(r[0]): r[1] for r in mode_rows if r[0] is not None
+    }
 
     # Distance distribution buckets (for sparkline)
-    dist_extra = ["distance_km IS NOT NULL", "distance_km > 0"] + extra
-    dist_where = build_trip_filter(
-        vehicle_type, city, simulation_day,
-        extra=dist_extra,
-    )
+    dist_where = f.where(extra=["distance_km IS NOT NULL", "distance_km > 0"])
     dist_buckets = conn.execute(f"""
         SELECT
             FLOOR(distance_km / 2) * 2 AS bucket,
@@ -196,10 +218,46 @@ async def insights(
             "peak_to_offpeak_ratio": round(peak[1] / off_peak[1], 1) if peak and off_peak and off_peak[1] > 0 else 0,
         },
         "fare": fare_insights,
+        "by_transport_mode": by_transport_mode,
         "distance_distribution": [
             {"bucket_km": r[0], "count": r[1]} for r in dist_buckets
         ],
         "text_insights": text_insights,
+    }
+
+
+@router.get("/stats/scenario-impact")
+async def scenario_impact(f: TripFilters = Depends(trip_filters)):
+    """What the pedestrianize scenario removes: excluded-trip count + VKT.
+
+    Computed in INCLUSION form (count car trips entering the bbox) on the
+    scenario-stripped filters — the exact complement of the exclusion clause
+    every other endpoint applies, so `trips_without_scenario - trips_with ==
+    excluded_trips` by construction.
+    """
+    if not f.scenario:
+        raise HTTPException(
+            status_code=400,
+            detail="scenario=pedestrianize with sc_w/sc_s/sc_e/sc_n is required.",
+        )
+    base = f.model_copy(update={
+        "scenario": None, "sc_w": None, "sc_s": None, "sc_e": None, "sc_n": None,
+    })
+    inclusion = (
+        f"transport_mode = {SCENARIO_EXCLUDED_MODE} AND (vehicle_key, trip_id) IN "
+        f"{scenario_pair_subquery(f.sc_w, f.sc_s, f.sc_e, f.sc_n)}"
+    )
+    conn = get_connection()
+    row = conn.execute(f"""
+        SELECT COUNT(*), COALESCE(SUM(distance_km), 0)
+        FROM trips
+        {base.where(extra=[inclusion])}
+    """).fetchone()
+    return {
+        "excluded_trips": row[0],
+        "excluded_vkt_km": round(row[1], 1),
+        "excluded_mode": SCENARIO_EXCLUDED_MODE,
+        "bbox": {"w": f.sc_w, "s": f.sc_s, "e": f.sc_e, "n": f.sc_n},
     }
 
 
@@ -234,10 +292,76 @@ async def filter_options():
         "SELECT DISTINCT goods_type FROM trips WHERE goods_type IS NOT NULL ORDER BY goods_type"
     ).fetchall()]
 
+    # Transport modes present in the dataset, with counts — the FilterPanel
+    # renders one chip per entry and needs no second call for the breakdown.
+    transport_modes = [
+        {"mode": int(r[0]), "count": r[1]}
+        for r in conn.execute("""
+            SELECT transport_mode, COUNT(*) FROM trips
+            WHERE transport_mode IS NOT NULL
+            GROUP BY transport_mode ORDER BY transport_mode
+        """).fetchall()
+    ]
+
+    # Sprint B5 — per-source F1 metric availability so the frontend can disable
+    # sliders that would silently filter to zero rows. Single grouped query.
+    metrics_rows = conn.execute("""
+        SELECT
+            vehicle_type,
+            COUNT(speed_avg_kmh) > 0 AS has_speed,
+            COUNT(dwell_minutes) > 0 AS has_dwell,
+            COUNT(detour_ratio)  > 0 AS has_detour
+        FROM trips
+        WHERE vehicle_type IS NOT NULL
+        GROUP BY vehicle_type
+    """).fetchall()
+    metrics_available = {
+        r[0]: {"speed": bool(r[1]), "dwell": bool(r[2]), "detour": bool(r[3])}
+        for r in metrics_rows
+    }
+
     return {
         "vehicle_types": vtypes,
         "cities": cities,
         "city_centers": city_centers,
         "simulation_days": days,
         "goods_types": goods_types,
+        "transport_modes": transport_modes,
+        "metrics_available": metrics_available,
+        "sources": _source_styles(conn),
     }
+
+
+def _source_styles(conn) -> list[dict]:
+    """Rendering hints per source (Phase 2A) — powers SourceLegend and the
+    per-source layer split (trails/points/arcs) in MapView.
+
+    Only sources that actually have ingested rows are listed. Degrades to []
+    when sources.yaml is absent (Docker standalone mode ships only the DB).
+    """
+    try:
+        sources_file = load_sources_merged(default_sources_path())
+    except Exception:
+        return []
+
+    ingested = {r[0] for r in conn.execute(
+        "SELECT DISTINCT source_id FROM trips WHERE source_id IS NOT NULL"
+    ).fetchall()}
+    with_waypoints = {r[0] for r in conn.execute(
+        "SELECT DISTINCT source_id FROM waypoints WHERE source_id IS NOT NULL"
+    ).fetchall()}
+
+    styles = []
+    for key, src in sources_file.sources.items():
+        if src.source_id not in ingested:
+            continue
+        render = src.render
+        styles.append({
+            "source_key": key,
+            "source_id": src.source_id,
+            "label": src.label,
+            "mode": render.mode if render else "trails",
+            "color": list(render.color) if render and render.color else None,
+            "has_waypoints": src.source_id in with_waypoints,
+        })
+    return styles

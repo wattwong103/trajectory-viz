@@ -6,10 +6,11 @@ Schema mirrors the exact CSV column formats from TruckTrajectoryWriter.java
 and TaxiTrajectoryWriter.java.
 """
 
-import duckdb
 from pathlib import Path
-from .config import get_viz_db_path
 
+import duckdb
+
+from .config import get_viz_db_path
 
 _connection: duckdb.DuckDBPyConnection | None = None
 
@@ -36,8 +37,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             start_lat     DOUBLE  NOT NULL,
             end_lon       DOUBLE  NOT NULL,
             end_lat       DOUBLE  NOT NULL,
-            transport_mode INTEGER NOT NULL,
-            purpose       INTEGER NOT NULL,
+            transport_mode INTEGER,
+            purpose       INTEGER,
             vehicle_type  VARCHAR NOT NULL,
             distance_km   DOUBLE,
             dep_hour      INTEGER,
@@ -52,7 +53,12 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             passenger_in  BOOLEAN,
             taxi_id       INTEGER,
             city          VARCHAR,
-            vehicle_key   VARCHAR NOT NULL
+            vehicle_key   VARCHAR NOT NULL,
+            source_id     VARCHAR,
+            -- F1 derived metrics (computed after ingest by ingest.compute_derived_metrics)
+            speed_avg_kmh DOUBLE,
+            dwell_minutes DOUBLE,
+            detour_ratio  DOUBLE
         )
     """)
 
@@ -72,7 +78,45 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             passenger_in   VARCHAR,
             fare_yen       DOUBLE,
             is_night_trip  VARCHAR,
-            vehicle_key    VARCHAR NOT NULL
+            vehicle_key    VARCHAR NOT NULL,
+            source_id      VARCHAR
+        )
+    """)
+
+    # Idempotent migrations for additive column changes. Each tuple is
+    # (table, column_name, sql_type). New columns can be added here without
+    # requiring --reset (which would force a full re-ingest of the 8GB DB).
+    _additive_columns: list[tuple[str, str, str]] = [
+        # v0.2 (Phase 1): declarative source identity
+        ("trips",     "source_id",     "VARCHAR"),
+        ("waypoints", "source_id",     "VARCHAR"),
+        # v0.2 (Phase 2): F1 derived metrics (populated by ingest)
+        ("trips",     "speed_avg_kmh", "DOUBLE"),
+        ("trips",     "dwell_minutes", "DOUBLE"),
+        ("trips",     "detour_ratio",  "DOUBLE"),
+    ]
+    for table, col, typ in _additive_columns:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typ}")
+        except Exception:
+            # Older DuckDB without IF NOT EXISTS — try plain ADD COLUMN
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            except Exception:
+                pass  # already exists; safe to ignore
+
+    # Phase 2B — pulse heatmap aggregate. Built at ingest time (or via
+    # `python -m backend.ingest --aggregates-only`) from the 233M-row
+    # waypoints table; request-time queries read ONLY this table.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS density_hourly (
+            source_id  VARCHAR,
+            city       VARCHAR,
+            hour       INTEGER NOT NULL,
+            grid_lon   DOUBLE  NOT NULL,
+            grid_lat   DOUBLE  NOT NULL,
+            weight     BIGINT  NOT NULL,
+            resolution DOUBLE  NOT NULL
         )
     """)
 
@@ -102,6 +146,68 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    # Universal-trajectory-support (Phase 1) — static POI layers. One row per
+    # point of interest; poi_id is unique within (source_key) only — the pair
+    # (source_key, poi_id) is the full identity. props_json carries any
+    # remaining source properties as a JSON object string (NULL for csv/parquet).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pois (
+            poi_id     BIGINT  NOT NULL,
+            source_key VARCHAR NOT NULL,
+            name       VARCHAR,
+            category   VARCHAR,
+            lon        DOUBLE  NOT NULL,
+            lat        DOUBLE  NOT NULL,
+            props_json VARCHAR
+        )
+    """)
+
+    # Per-DB visualization metadata. Currently one key: 'epoch_anchor' — the
+    # absolute-time anchor (epoch seconds) that unix_time_ms values are
+    # relative to. Written on first ingest; read via get_epoch_anchor().
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS viz_meta (
+            key   VARCHAR PRIMARY KEY,
+            value VARCHAR NOT NULL
+        )
+    """)
+
+    # Indexes — without these, filter scans on 4.43M trips / 233M waypoints
+    # become full table scans and blow past the p99 budgets (200ms/1s/500ms).
+    # DuckDB uses ART for VARCHAR and min-max zone-maps for numeric cols.
+    _index_statements = [
+        # trips
+        "CREATE INDEX IF NOT EXISTS idx_trips_vehicle_type ON trips(vehicle_type)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_vehicle_key  ON trips(vehicle_key)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_city_day     ON trips(city, simulation_day)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_dep_hour     ON trips(dep_hour)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_distance     ON trips(distance_km)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_source_id    ON trips(source_id)",
+        # F1 derived metric indexes (Phase 2)
+        "CREATE INDEX IF NOT EXISTS idx_trips_speed        ON trips(speed_avg_kmh)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_dwell        ON trips(dwell_minutes)",
+        "CREATE INDEX IF NOT EXISTS idx_trips_detour       ON trips(detour_ratio)",
+        # Transport-mode filter (Phase: transport mode as first-class dimension).
+        # trips only — waypoints.transport_mode is never filtered (router output
+        # carries a uniform per-source value; the trip's mode is authoritative).
+        "CREATE INDEX IF NOT EXISTS idx_trips_transport_mode ON trips(transport_mode)",
+        # waypoints
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_vehicle_key ON waypoints(vehicle_key)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_source_id   ON waypoints(source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_trip        ON waypoints(vehicle_id, trip_id)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_link_id     ON waypoints(link_id)",
+        "CREATE INDEX IF NOT EXISTS idx_waypoints_lonlat      ON waypoints(lon, lat)",
+        # validation
+        "CREATE INDEX IF NOT EXISTS idx_validation_run_id ON validation_runs(run_id)",
+        # pulse heatmap aggregate (Phase 2B)
+        "CREATE INDEX IF NOT EXISTS idx_density_hourly ON density_hourly(source_id, city, hour)",
+        # POI layers (universal-trajectory-support Phase 1)
+        "CREATE INDEX IF NOT EXISTS idx_pois_category ON pois(category)",
+        "CREATE INDEX IF NOT EXISTS idx_pois_lonlat    ON pois(lon, lat)",
+    ]
+    for stmt in _index_statements:
+        conn.execute(stmt)
+
 
 def reset_db() -> None:
     """Drop all tables and re-create schema. Used for re-ingestion."""
@@ -110,7 +216,36 @@ def reset_db() -> None:
     conn.execute("DROP TABLE IF EXISTS trips")
     conn.execute("DROP TABLE IF EXISTS validation_runs")
     conn.execute("DROP TABLE IF EXISTS ingest_log")
+    conn.execute("DROP TABLE IF EXISTS density_hourly")
+    conn.execute("DROP TABLE IF EXISTS pois")
+    conn.execute("DROP TABLE IF EXISTS viz_meta")
     _init_schema(conn)
+
+
+def get_epoch_anchor(conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    """The DB's epoch anchor in seconds — the single read path for absolute
+    time conversion.
+
+    Returns viz_meta['epoch_anchor'] when the DB was ingested by a build that
+    declared an anchor (top-level or per-source `time.epoch_anchor` in
+    sources.yaml); otherwise the historical default `config.BASE_EPOCH_SEC`.
+    Every mod-86400 timestamp conversion (trajectory animation timestamps,
+    density_hourly hour buckets, HTML export) MUST go through this function so
+    trails and pulse can never drift apart on non-default anchors.
+    """
+    from .config import BASE_EPOCH_SEC
+
+    c = conn if conn is not None else get_connection()
+    try:
+        row = c.execute(
+            "SELECT value FROM viz_meta WHERE key = 'epoch_anchor'"
+        ).fetchone()
+    except Exception:
+        # Pre-universal-support DB without viz_meta — the constant is correct.
+        return int(BASE_EPOCH_SEC)
+    if row is None:
+        return int(BASE_EPOCH_SEC)
+    return int(row[0])
 
 
 def get_table_stats() -> dict:
@@ -160,24 +295,59 @@ def build_trip_filter(
     city: Optional[str] = None,
     simulation_day: Optional[int] = None,
     extra: Optional[list[str]] = None,
+    *,
+    source_id: Optional[str] = None,
+    transport_modes: Optional[list[int]] = None,
+    min_speed: Optional[float] = None,
+    max_speed: Optional[float] = None,
+    max_dwell_minutes: Optional[float] = None,
+    min_detour_ratio: Optional[float] = None,
+    max_detour_ratio: Optional[float] = None,
 ) -> str:
     """Build a SQL WHERE clause from common trip filters.
 
     Returns either an empty string or 'WHERE cond1 AND cond2 AND ...'.
     Values are used in raw SQL — callers MUST constrain inputs via Pydantic
-    (e.g. vehicle_type pattern='^(truck|taxi)$', city pattern='^[a-z_]+$').
+    (e.g. vehicle_type pattern='^[a-z][a-z0-9_]*$', city pattern='^[a-z_]+$').
+
+    `source_id` is the v0.2 canonical filter (preferred for new code); `vehicle_type`
+    is a back-compat alias and resolves to the same DB column. If both are passed,
+    `source_id` wins.
+
+    Phase 2 (Step 2.2) adds five F1-derived-metric filters
+    (min_speed/max_speed/max_dwell_minutes/min_detour_ratio/max_detour_ratio).
+    These are numeric and float-cast on use — safe from SQL injection.
 
     Example:
-        where = build_trip_filter(vehicle_type='taxi', city='tokyo')
+        where = build_trip_filter(vehicle_type='taxi', city='tokyo', min_speed=20)
         conn.execute(f'SELECT COUNT(*) FROM trips {where}')
     """
+    effective_vehicle_type = source_id if source_id is not None else vehicle_type
     conds: list[str] = []
-    if vehicle_type:
-        conds.append(f"vehicle_type = '{vehicle_type}'")
+    if effective_vehicle_type:
+        conds.append(f"vehicle_type = '{effective_vehicle_type}'")
     if city:
         conds.append(f"city = '{city}'")
     if simulation_day is not None:
         conds.append(f"simulation_day = {int(simulation_day)}")
+    # Transport mode is a PER-TRIP attribute (trips.transport_mode). This is
+    # the only place a mode condition is emitted — never filter on
+    # waypoints.transport_mode (uniform per source in router output).
+    # int-cast per element blocks injection, same discipline as the floats below.
+    if transport_modes:
+        ids = ", ".join(str(int(m)) for m in transport_modes)
+        conds.append(f"transport_mode IN ({ids})")
+    # F1 derived metrics — float-cast on the Python side blocks injection.
+    if min_speed is not None:
+        conds.append(f"speed_avg_kmh >= {float(min_speed)}")
+    if max_speed is not None:
+        conds.append(f"speed_avg_kmh <= {float(max_speed)}")
+    if max_dwell_minutes is not None:
+        conds.append(f"dwell_minutes <= {float(max_dwell_minutes)}")
+    if min_detour_ratio is not None:
+        conds.append(f"detour_ratio >= {float(min_detour_ratio)}")
+    if max_detour_ratio is not None:
+        conds.append(f"detour_ratio <= {float(max_detour_ratio)}")
     if extra:
         conds.extend(extra)
     return ("WHERE " + " AND ".join(conds)) if conds else ""

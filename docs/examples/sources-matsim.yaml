@@ -1,0 +1,108 @@
+# Example sources.yaml block for a hypothetical MATSim output.
+#
+# MATSim emits events.xml; downstream tooling typically post-processes those
+# into per-trip and per-event CSVs. This config shows how a MATSim → trajectory-viz
+# bridge would declare its column mapping — no backend code changes needed.
+#
+# Real-world usage: add this block to your top-level sources.yaml, point the
+# globs at your MATSim post-processed CSVs, and run trajectory-viz-ingest.
+#
+# Note: this is a *schema demonstration*. Actual MATSim column names and
+# semantics may differ depending on which post-processor you use
+# (matsim2osm, ARENA, MATSim_Octave, etc.). Adapt the column maps accordingly.
+
+version: 1
+
+sources:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # MATSim car trips — one row per executed trip in the iteration's events
+  # output. We assume a post-processor has already grouped events by personId.
+  # ─────────────────────────────────────────────────────────────────────────
+  matsim-car:
+    label: "MATSim Car (Berlin scenario)"
+    source_id: car                          # collides with future bus/bike sources;
+                                            # use a more-specific id if you have them
+    discovery:
+      # Convention: post-processor writes one CSV per scenario × iteration.
+      # We pick the latest iteration via the run_* timestamp dir.
+      trips_glob: "matsim/berlin/iter_*/trips_car.csv"
+      trajectories_glob: "matsim/berlin/iter_*/events_car_geo.csv"
+      latest_only: true
+      scope: { value: berlin }              # multi-scenario? Duplicate this block
+                                            # per scenario with different scope values
+    vehicle_key_template: "car:{scope}:{vehicle_id}"
+    columns:
+      trip_id_col: trip_id                  # MATSim's trip_id (post-processor output)
+      vehicle_id_col: person_id             # MATSim agents are persons, not vehicles
+      trips:
+        # Core required columns. Note: MATSim emits start/end coords in EPSG:31468
+        # (DHDN/Gauss-Kruger zone 4) for Berlin; convert to WGS84 in the
+        # post-processor or via a `derived:` SQL expression below.
+        starttime:       { csv: start_time_sec,    type: int }
+        start_lon:       { csv: start_lon_wgs84,   type: double }
+        start_lat:       { csv: start_lat_wgs84,   type: double }
+        end_lon:         { csv: end_lon_wgs84,     type: double }
+        end_lat:         { csv: end_lat_wgs84,     type: double }
+        # Optional
+        transport_mode:  { csv: mode,             type: varchar }  # MATSim mode string
+        distance_km:     { csv: trip_length_m,    type: double,
+                           transform: "value / 1000.0" }
+        dep_hour:        { derived: "CAST(start_time_sec / 3600 AS INTEGER)" }
+        # MATSim doesn't model goods or cargo by default; leave those columns NULL.
+      waypoints:
+        # Each row is one events output (LinkEnterEvent / LinkLeaveEvent
+        # post-processed with link geometry centroid).
+        unix_time_ms:    { csv: time_ms,    type: bigint }
+        lon:             { csv: lon_wgs84,  type: double }
+        lat:             { csv: lat_wgs84,  type: double }
+        link_id:         { csv: link_id,    type: varchar }   # MATSim network link id
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # MATSim public transit (PT) — separate source so the dashboard can filter
+  # cars vs PT independently. source_id collides with the car block above on
+  # purpose? Actually NO — give it a different source_id so the Vehicle Type
+  # buttons distinguish them in the UI.
+  # ─────────────────────────────────────────────────────────────────────────
+  matsim-pt:
+    label: "MATSim Public Transit (Berlin scenario)"
+    source_id: pt
+    discovery:
+      trips_glob: "matsim/berlin/iter_*/trips_pt.csv"
+      trajectories_glob: "matsim/berlin/iter_*/events_pt_geo.csv"
+      latest_only: true
+      scope: { value: berlin }
+    vehicle_key_template: "pt:{scope}:{vehicle_id}"
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: transit_line_id     # group by line, not individual person
+      trips:
+        starttime:       { csv: start_time_sec,  type: int }
+        start_lon:       { csv: board_lon_wgs84, type: double }
+        start_lat:       { csv: board_lat_wgs84, type: double }
+        end_lon:         { csv: alight_lon_wgs84, type: double }
+        end_lat:         { csv: alight_lat_wgs84, type: double }
+        transport_mode:  { csv: mode,             type: varchar }  # bus | rail | tram
+        distance_km:     { csv: trip_length_m,    type: double,
+                           transform: "value / 1000.0" }
+        dep_hour:        { derived: "CAST(start_time_sec / 3600 AS INTEGER)" }
+      waypoints:
+        unix_time_ms:    { csv: time_ms,    type: bigint }
+        lon:             { csv: lon_wgs84,  type: double }
+        lat:             { csv: lat_wgs84,  type: double }
+        link_id:         { csv: link_id,    type: varchar }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verification:
+#   python -m backend.sources_schema --validate docs/examples/sources-matsim.yaml
+#
+# Expected output:
+#   OK: docs/examples/sources-matsim.yaml (schema version 1)
+#   Sources (2):
+#     matsim-car   source_id=car  'MATSim Car (Berlin scenario)', scope=berlin
+#     matsim-pt    source_id=pt   'MATSim Public Transit ...',     scope=berlin
+#
+# Dry-run discovery (counts matching CSVs under your output root):
+#   python -m backend.sources_schema --discovery docs/examples/sources-matsim.yaml \
+#                                     --output-root /path/to/matsim/output
+# ─────────────────────────────────────────────────────────────────────────────

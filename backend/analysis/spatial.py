@@ -8,23 +8,107 @@ finer resolution.
 Results feed DeckGL HeatmapLayer and HexagonLayer.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
-from ..db import get_connection, build_trip_filter
+from ..db import get_connection
+from ..filters import TripFilters, trip_filters
 
 router = APIRouter()
 
 
+@router.get("/analysis/spatial/density-hourly")
+async def density_hourly(
+    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    resolution: float = Query(0.005, ge=0.001, le=0.1,
+                              description="Grid resolution in degrees (must match a built aggregate)"),
+    max_cells_per_hour: int = Query(15000, ge=100, le=50000),
+):
+    """Hour-binned waypoint density for the animated pulse heatmap (Phase 2B).
+
+    Returns all 24 hour buckets in one response — the frontend holds them and
+    crossfades between adjacent hours as the time slider runs, never
+    refetching during animation.
+
+    Reads ONLY the precomputed density_hourly aggregate (built at ingest or
+    via `python -m backend.ingest --aggregates-only`). It never falls back to
+    GROUP-BYing the 233M-row waypoints table at request time — that would
+    blow the 1s analysis budget — so an empty aggregate is a 409 with the fix.
+    """
+    conn = get_connection()
+
+    built = conn.execute(
+        "SELECT COUNT(*) FROM density_hourly WHERE resolution = ?", [float(resolution)]
+    ).fetchone()[0]
+    if built == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"density_hourly not built at resolution {resolution} — run: "
+                f"python -m backend.ingest --aggregates-only"
+            ),
+        )
+
+    conds = ["resolution = ?"]
+    params: list = [float(resolution)]
+    if vehicle_type:
+        conds.append("source_id = ?")
+        params.append(vehicle_type)
+    if city:
+        conds.append("city = ?")
+        params.append(city)
+    where = " AND ".join(conds)
+
+    # Cells can repeat across (source_id, city) when no filter is set —
+    # re-aggregate, then keep the top-N per hour by weight.
+    rows = conn.execute(f"""
+        WITH filtered AS (
+            SELECT hour, grid_lon, grid_lat, SUM(weight) AS weight
+            FROM density_hourly
+            WHERE {where}
+            GROUP BY hour, grid_lon, grid_lat
+        ),
+        ranked AS (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY hour ORDER BY weight DESC
+            ) AS rn
+            FROM filtered
+        )
+        SELECT hour, grid_lon, grid_lat, weight
+        FROM ranked
+        WHERE rn <= ?
+        ORDER BY hour, weight DESC
+    """, params + [int(max_cells_per_hour)]).fetchall()
+
+    total = conn.execute(f"""
+        SELECT COUNT(*) FROM (
+            SELECT 1 FROM density_hourly WHERE {where}
+            GROUP BY hour, grid_lon, grid_lat
+        )
+    """, params).fetchone()[0]
+
+    hours: list[dict] = [{"hour": h, "points": []} for h in range(24)]
+    global_max = 0
+    for hour, lon, lat, weight in rows:
+        hours[int(hour)]["points"].append({"lon": lon, "lat": lat, "weight": weight})
+        if weight > global_max:
+            global_max = weight
+
+    return {
+        "resolution_deg": resolution,
+        "global_max_weight": global_max,
+        "hours": hours,
+        "total_cells": total,
+        "truncated": len(rows) < total,
+    }
+
+
 @router.get("/analysis/spatial/density-grid")
 async def density_grid(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     resolution: float = Query(0.01, ge=0.001, le=0.1,
                               description="Grid cell size in degrees (~0.01=1km)"),
     point_type: str = Query("origin", pattern="^(origin|destination|both)$"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Grid-based spatial density of trip origins, destinations, or both.
 
@@ -32,14 +116,7 @@ async def density_grid(
     Resolution 0.01° ≈ 1km at Japan's latitude.
     """
     conn = get_connection()
-
-    extra: list[str] = []
-    if min_hour is not None:
-        extra.append(f"dep_hour >= {min_hour}")
-    if max_hour is not None:
-        extra.append(f"dep_hour <= {max_hour}")
-
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    where = f.where()
 
     queries = []
     if point_type in ("origin", "both"):
@@ -88,12 +165,10 @@ async def density_grid(
 
 @router.get("/analysis/spatial/waypoint-density")
 async def waypoint_density(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     resolution: float = Query(0.005, ge=0.001, le=0.05,
                               description="Grid cell size in degrees (~0.005=500m)"),
     limit: int = Query(5000, ge=100, le=20000),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Waypoint spatial density — where vehicles actually travel (not just OD).
 
@@ -102,9 +177,15 @@ async def waypoint_density(
     """
     conn = get_connection()
 
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day)
+    trip_where = f.where()
 
-    if trip_where:
+    # INVARIANT: transport_mode is per-TRIP. With a mode filter set, per-vehicle
+    # scoping over-selects (one walk trip drags in the vehicle's car waypoints
+    # too), so switch to trip-granular (vehicle_key, trip_id) scoping. The
+    # vehicle_key path stays for the common no-mode case (identical to before).
+    if trip_where and f.transport_mode_list():
+        waypoint_where = f"WHERE (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
+    elif trip_where:
         waypoint_where = f"WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
     else:
         waypoint_where = ""
@@ -133,13 +214,10 @@ async def waypoint_density(
 
 @router.get("/analysis/spatial/link-density")
 async def link_density(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     top_n: int = Query(500, ge=10, le=5000),
     min_waypoints: int = Query(50, ge=1, le=10000,
                                description="Skip links with fewer than this many waypoints"),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    f: TripFilters = Depends(trip_filters),
 ):
     """DRM link-level waypoint density.
 
@@ -156,11 +234,11 @@ async def link_density(
     """
     conn = get_connection()
 
-    trip_extra = []
-    if goods_type:
-        trip_extra.append(f"goods_type = '{goods_type}'")
-    trip_where = build_trip_filter(vehicle_type, city, simulation_day, extra=trip_extra if trip_extra else None)
-    if trip_where:
+    trip_where = f.where()
+    # Same trip-granular scoping rule as waypoint-density (see comment there).
+    if trip_where and f.transport_mode_list():
+        waypoint_scope = f"AND (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
+    elif trip_where:
         waypoint_scope = f"AND vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
     else:
         waypoint_scope = ""
@@ -210,12 +288,9 @@ async def link_density(
 
 @router.get("/analysis/spatial/hotspots")
 async def hotspots(
-    vehicle_type: Optional[str] = Query(None, pattern="^(truck|taxi)$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
     point_type: str = Query("origin", pattern="^(origin|destination)$"),
     top_n: int = Query(20, ge=5, le=100),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Top-N densest locations (hotspots).
 
@@ -228,10 +303,7 @@ async def hotspots(
     else:
         lon_col, lat_col = "end_lon", "end_lat"
 
-    extra = [f"{lon_col} IS NOT NULL"]
-    if goods_type:
-        extra.append(f"goods_type = '{goods_type}'")
-    where = build_trip_filter(vehicle_type, city, simulation_day, extra=extra)
+    where = f.where(extra=[f"{lon_col} IS NOT NULL"])
 
     rows = conn.execute(f"""
         SELECT

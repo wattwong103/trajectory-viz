@@ -2,20 +2,27 @@
 FastAPI application — PFLOW Trajectory Visualization & Mining API.
 
 Serves trip and trajectory data from DuckDB to the React/DeckGL frontend.
-Run with: uvicorn viz.backend.app:app --host 0.0.0.0 --port 9999 --reload
+Run with: uvicorn backend.app:app --host 0.0.0.0 --port 9999 --reload
+
+In Docker (Phase 3 Step 3.1), the built React app is served at / via
+StaticFiles. In native dev, the Vite dev server on :5173 is primary and the
+StaticFiles mount is skipped because frontend/dist/ doesn't exist yet.
 """
+
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from .routers import stats, trips, trajectories
-from .analysis import temporal, od_flows, spatial, clustering, trip_chains
+from .analysis import clustering, compare, od_flows, spatial, temporal, trip_chains
+from .routers import buildings, ingest_api, pois, stats, trajectories, trips
 
 app = FastAPI(
-    title="PFLOW Viz API",
-    description="Trajectory visualization and mining for Pseudo-PFLOW truck/taxi simulations",
-    version="0.1.0",
+    title="trajectory-viz API",
+    description="Interactive visualization for agent-based mobility model outputs (v0.2)",
+    version="0.2.0a1",
 )
 
 # Allow frontend dev server (Vite default: 5173) and any localhost
@@ -30,11 +37,19 @@ app.add_middleware(
 app.include_router(stats.router, prefix="/api", tags=["stats"])
 app.include_router(trips.router, prefix="/api", tags=["trips"])
 app.include_router(trajectories.router, prefix="/api", tags=["trajectories"])
+# Phase 2C: baked 3D buildings
+app.include_router(buildings.router, prefix="/api", tags=["buildings"])
+# Universal-trajectory-support Phase 1: static POI layers
+app.include_router(pois.router, prefix="/api", tags=["pois"])
+# Upload-and-go: drag-and-drop ingest
+app.include_router(ingest_api.router, prefix="/api/ingest", tags=["ingest"])
 
 # Phase 2: Analysis
 app.include_router(temporal.router, prefix="/api", tags=["analysis"])
 app.include_router(od_flows.router, prefix="/api", tags=["analysis"])
 app.include_router(spatial.router, prefix="/api", tags=["analysis"])
+# Fleet-comparison: A/B fleet report
+app.include_router(compare.router, prefix="/api", tags=["analysis"])
 
 # Phase 3: Mining
 app.include_router(clustering.router, prefix="/api", tags=["mining"])
@@ -51,10 +66,45 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.get("/")
-async def root():
-    return {
-        "name": "PFLOW Viz API",
-        "docs": "/docs",
-        "stats": "/api/stats",
-    }
+# Conditional StaticFiles mount — only when the built frontend exists.
+# In Docker, the Dockerfile builds the frontend into <project>/frontend/dist/
+# and FastAPI serves it at /. In native dev, this directory is absent and
+# the mount is a no-op; the root JSON endpoint below handles GET /.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_STATIC_MOUNTED = _FRONTEND_DIST.is_dir() and (_FRONTEND_DIST / "index.html").is_file()
+if _STATIC_MOUNTED:
+    # `html=True` makes any unmatched route fall through to index.html so React
+    # Router (or hash routing) works. Mounting LAST means /api/* routes win.
+    app.mount(
+        "/",
+        StaticFiles(directory=str(_FRONTEND_DIST), html=True),
+        name="frontend",
+    )
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "name": "trajectory-viz API",
+            "version": "0.2.0a1",
+            "docs": "/docs",
+            "stats": "/api/stats",
+            "note": (
+                "Frontend dist/ not bundled. Run the Vite dev server on :5173 "
+                "(or build with `npm run build` to embed)."
+            ),
+        }
+
+
+def serve():
+    """Entry point for `trajectory-viz-serve`.
+
+    Reads host/port from env (default 127.0.0.1:9999). Use `--reload` via uvicorn
+    directly for dev; this wrapper is the production-style single-command start.
+    """
+    import os
+
+    import uvicorn
+
+    host = os.environ.get("TRAJECTORY_VIZ_HOST", "127.0.0.1")
+    port = int(os.environ.get("TRAJECTORY_VIZ_PORT", "9999"))
+    uvicorn.run("backend.app:app", host=host, port=port, reload=False)
