@@ -248,6 +248,26 @@ export interface PoiCategoriesResponse {
   categories: PoiCategory[];      // one row per (source_key, category)
 }
 
+export interface ZoneListResponse {
+  zones: Zone[];
+  count: number;
+}
+
+export interface Zone {
+  zone_id: number;
+  source_key: string;
+  name: string | null;
+  category: string | null;
+  /** Precomputed at ingest: {w,s,e,n}. */
+  bbox: { w: number; s: number; e: number; n: number } | null;
+  /** Parsed GeoJSON geometry ({type: Polygon|MultiPolygon, coordinates}). */
+  geometry: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: number[][][] | number[][][][];
+  };
+  props: Record<string, unknown> | null;
+}
+
 // ─── Agent selection (Phase 2A) ──────────────────────────
 
 export interface AgentInfo {
@@ -333,6 +353,7 @@ export interface CompareModeShare {
   b_trips: number;
   b_share: number;
   delta_pp: number;                  // (share_b − share_a) × 100
+  p_value: number | null;            // two-proportion z-test (null = fleet empty)
 }
 
 export interface CompareHourly {
@@ -365,6 +386,16 @@ export interface CompareMatched {
     p90_abs: number | null;
     max_abs: number | null;
   };
+  /** Wilcoxon signed-rank over per-person trip counts; null = too few pairs. */
+  significance: { statistic: number; p_value: number; n_pairs: number } | null;
+  /** Rank-paired per-trip similarity for shared persons (0..1, 1 = identical). */
+  alignment: {
+    persons: number;
+    pairs: number;
+    mean: number | null;
+    median: number | null;
+    histogram: Array<{ lo: number; hi: number; count: number }>;
+  };
   top: CompareMatchedTop[];
 }
 
@@ -378,4 +409,43 @@ export interface CompareResponse {
   out_of_range: { a: number; b: number };
   distance_hist: CompareDistanceBucket[];   // [] when both fleets lack distances
   matched: CompareMatched | null;           // null = no shared vehicle ids
+}
+
+// ─── Multi-fleet comparison (compare-multi) ───────────────
+
+export interface MultiCompareFleet extends CompareFleetSummary {
+  source_id: string;
+}
+
+/** Hourly count row: { hour: 0..23, [source_id]: count }. */
+export type MultiHourly = { hour: number } & Record<string, number>;
+
+/** Per-mode row: { mode, [source_id]: { trips, share } }. */
+export type MultiModeShare = { mode: number } & Record<
+  string,
+  { trips: number; share: number }
+>;
+
+export interface MultiCompareResponse {
+  sources: string[];
+  fleets: MultiCompareFleet[];
+  hourly: MultiHourly[];
+  out_of_range: Record<string, number>;
+  mode_shares: MultiModeShare[];
+}
+
+// ─── Grid diff (compare/grid — map-canvas A/B delta layer) ─
+
+/** One equirectangular grid cell; delta > 0 = B-heavier. */
+export interface CompareGridCell {
+  lon: number;
+  lat: number;
+  count_a: number;
+  count_b: number;
+  delta: number;
+}
+
+export interface CompareGridResponse {
+  cell_deg: number;
+  cells: CompareGridCell[];
 }

@@ -25,14 +25,16 @@ import { useHourlyDensity } from './hooks/useHourlyDensity';
 import { useFootfall } from './hooks/useFootfall';
 import { useScenarioImpact } from './hooks/useScenarioImpact';
 import { usePois } from './hooks/usePois';
+import { useZones } from './hooks/useZones';
 import { useUpload } from './hooks/useUpload';
 import { poiColor } from './poiColors';
+import { buildPoiIconAtlas } from './poiSprites';
 import { unionBboxes, type Bbox } from './utils/bbox';
 import { UploadDropzone } from './components/UploadDropzone';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
 import { exportCompositePng } from './utils/exportPng';
 import type { LayerAvailabilityContext } from './layerCatalog';
-import type { FilterState, FilterOptions, Trajectory, TripPoint } from './types';
+import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
 const DEFAULT_FILTER: FilterState = {
@@ -219,6 +221,10 @@ const DEFAULT_LAYER_VIS: LayerVisibility = {
   // Universal-trajectory Phase 2 — POI context layer (default on; hidden
   // automatically when the dataset declares no POI sources)
   pois: true,
+  // Zones/polygon layers (default on; hidden automatically with no zone data)
+  zones: true,
+  // Fleet-comparison grid diff (opt-in; toggled from the ⇄ Compare tab)
+  compareGrid: true,
 };
 
 export default function App() {
@@ -399,6 +405,9 @@ export default function App() {
     onDisabledChange: setDisabledPoiCategories,
   });
 
+  // Zones/polygon layers — static per DB, fetched once on mount.
+  const { zones, loading: zonesLoading } = useZones();
+
   // Category → color map (YAML color wins; deterministic hash fallback) and
   // POI source_key → label map for MapView dots + tooltips. Categories arrive
   // one row per (source_key, category) — first row wins for shared names.
@@ -409,6 +418,13 @@ export default function App() {
     }
     return m;
   }, [poi.categories]);
+
+  // Category-glyph sprite sheet for the map's POI IconLayer (null in
+  // canvas-less environments → MapView keeps the dot fallback).
+  const poiIconAtlas = useMemo(
+    () => buildPoiIconAtlas(poi.categories, poiColorByCategory),
+    [poi.categories, poiColorByCategory],
+  );
 
   const poiSourceLabels = useMemo(() => {
     const m: Record<string, string> = {};
@@ -423,11 +439,15 @@ export default function App() {
   const [densityPoints, setDensityPoints] = useState<DensityPoint[]>([]);
   const [clusterResult, setClusterResult] = useState<ClusterResult | null>(null);
   const [linkDensity, setLinkDensity] = useState<LinkDensityItem[]>([]);
+  // Fleet-comparison grid-diff cells (⇄ tab toggle)
+  const [compareGrid, setCompareGrid] = useState<CompareGridResponse | null>(null);
 
   const handleODFlows = useCallback((flows: ODFlow[]) => setODFlows(flows), []);
   const handleDensity = useCallback((pts: DensityPoint[]) => setDensityPoints(pts), []);
   const handleClusters = useCallback((res: ClusterResult | null) => setClusterResult(res), []);
   const handleLinkDensity = useCallback((links: LinkDensityItem[]) => setLinkDensity(links), []);
+  const handleCompareGrid = useCallback(
+    (grid: CompareGridResponse | null) => setCompareGrid(grid), []);
 
   // Fix 4: auto-clear on-demand overlays when major filter dimensions change
   useEffect(() => {
@@ -437,6 +457,8 @@ export default function App() {
     setLinkDensity([]);
     setDrillTrajectories([]);
     setDrillPoint(null);
+    // Fleet-comparison grid diff is filter-scoped too
+    setCompareGrid(null);
     // Sprint A1b: also clear zone results — they were filter-scoped
     setZoneBBox(null);
     setZoneTrips([]);
@@ -528,11 +550,14 @@ export default function App() {
     hasODFlows: odFlows.length > 0,
     hasDensity: densityPoints.length > 0,
     hasLinkDensity: linkDensity.length > 0,
+    hasCompareGrid: compareGrid !== null && compareGrid.cells.length > 0,
     hasFollowedAgents: selectedAgents.length > 0,
     hasPois: poi.categories.length > 0,
+    hasZones: zones.length > 0,
   }), [
     stats, filterOptions, pulseProbe, clusterResult, drillTrajectories,
-    odFlows, densityPoints, linkDensity, selectedAgents, poi.categories,
+    odFlows, densityPoints, linkDensity, compareGrid, selectedAgents, poi.categories,
+    zones,
   ]);
 
   return (
@@ -548,6 +573,8 @@ export default function App() {
         cityCenter={cityCenter}
         fitToBBox={initialFitBBox}
         linkDensityPoints={linkDensity}
+        compareGridCells={compareGrid?.cells}
+        compareGridCellDeg={compareGrid?.cell_deg}
         drillTrajectories={drillTrajectories}
         drillPoint={drillPoint}
         zoneBBox={zoneBBox}
@@ -564,6 +591,8 @@ export default function App() {
         hiddenSources={hiddenSources}
         pois={poi.pois}
         poiColorByCategory={poiColorByCategory}
+        poiIconAtlas={poiIconAtlas}
+        zones={zones}
         poiSourceLabels={poiSourceLabels}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
@@ -656,6 +685,7 @@ export default function App() {
         onDensity={handleDensity}
         onClusters={handleClusters}
         onLinkDensity={handleLinkDensity}
+        onCompareGrid={handleCompareGrid}
         selectedTrajectory={selectedTrajectory}
         onClearSelectedTrajectory={clearSelectedTrajectory}
         zoneBBox={zoneBBox}
@@ -675,6 +705,11 @@ export default function App() {
         sources={filterOptions?.sources ?? []}
         transportModes={filter.transportModes}
         scenario={filter.scenario}
+        minSpeed={filter.minSpeed}
+        maxSpeed={filter.maxSpeed}
+        maxDwellMinutes={filter.maxDwellMinutes}
+        minDetourRatio={filter.minDetourRatio}
+        maxDetourRatio={filter.maxDetourRatio}
       />
 
       <TimeSlider

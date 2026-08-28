@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "Ward A", "category": "service"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [[139.0, 35.0], [139.1, 35.0], [139.1, 35.1], [139.0, 35.1], [139.0, 35.0]],
+          [[139.04, 35.04], [139.06, 35.04], [139.06, 35.06], [139.04, 35.06], [139.04, 35.04]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "Islands B"},
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [[[140.0, 36.0], [140.1, 36.0], [140.1, 36.1], [140.0, 36.1], [140.0, 36.0]]]
+        ]
+      }
+    }
+  ]
+}

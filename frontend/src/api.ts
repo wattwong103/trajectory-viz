@@ -19,6 +19,9 @@ import type {
   UploadAccepted,
   IngestJob,
   CompareResponse,
+  MultiCompareResponse,
+  CompareGridResponse,
+  ZoneListResponse,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -769,6 +772,12 @@ export async function fetchPoiCategories(): Promise<PoiCategoriesResponse> {
   return fetchJson('/api/pois/categories');
 }
 
+// ─── Zones (polygon layers) ──────────────────────────────
+// GET /api/zones — static polygon layers from sources.yaml's `zones:` block.
+export async function fetchZones(): Promise<ZoneListResponse> {
+  return fetchJson('/api/zones');
+}
+
 // ─── Upload-and-go ingest ────────────────────────────────
 // NOT fetchJson-based: the upload is multipart (the browser must set the
 // Content-Type boundary itself) and the 422 detail is a {reasons[]} object,
@@ -824,6 +833,12 @@ export interface CompareFilters {
   goodsType?: string;
   minHour?: number;
   maxHour?: number;
+  // F1 derived-metric ranges — applied symmetrically to both fleets.
+  minSpeed?: number;
+  maxSpeed?: number;
+  maxDwellMinutes?: number;
+  minDetourRatio?: number;
+  maxDetourRatio?: number;
   transportModes?: number[];
   scenario?: Scenario;
 }
@@ -844,8 +859,65 @@ export async function fetchComparison(
   if (filters.goodsType) params.set('goods_type', filters.goodsType);
   if (filters.minHour !== undefined) params.set('min_hour', String(filters.minHour));
   if (filters.maxHour !== undefined) params.set('max_hour', String(filters.maxHour));
+  if (filters.minSpeed !== undefined) params.set('min_speed', String(filters.minSpeed));
+  if (filters.maxSpeed !== undefined) params.set('max_speed', String(filters.maxSpeed));
+  if (filters.maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(filters.maxDwellMinutes));
+  if (filters.minDetourRatio !== undefined) params.set('min_detour_ratio', String(filters.minDetourRatio));
+  if (filters.maxDetourRatio !== undefined) params.set('max_detour_ratio', String(filters.maxDetourRatio));
   const tm = transportModesParam(filters.transportModes);
   if (tm) params.set('transport_modes', tm);
   appendScenarioParams(params, filters.scenario);
   return fetchJson(`/api/analysis/compare?${params}`);
+}
+
+// GET /api/analysis/compare-multi — 2–4 fleets under identical shared
+// filters. At-a-glance rollup; matched-person machinery is pairwise-only.
+export async function fetchMultiComparison(
+  sources: string[],
+  filters: CompareFilters = {},
+): Promise<MultiCompareResponse> {
+  const params = new URLSearchParams({ sources: sources.join(',') });
+  if (filters.city) params.set('city', filters.city);
+  if (filters.simulationDay !== undefined) params.set('simulation_day', String(filters.simulationDay));
+  if (filters.goodsType) params.set('goods_type', filters.goodsType);
+  if (filters.minHour !== undefined) params.set('min_hour', String(filters.minHour));
+  if (filters.maxHour !== undefined) params.set('max_hour', String(filters.maxHour));
+  if (filters.minSpeed !== undefined) params.set('min_speed', String(filters.minSpeed));
+  if (filters.maxSpeed !== undefined) params.set('max_speed', String(filters.maxSpeed));
+  if (filters.maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(filters.maxDwellMinutes));
+  if (filters.minDetourRatio !== undefined) params.set('min_detour_ratio', String(filters.minDetourRatio));
+  if (filters.maxDetourRatio !== undefined) params.set('max_detour_ratio', String(filters.maxDetourRatio));
+  const tm = transportModesParam(filters.transportModes);
+  if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, filters.scenario);
+  return fetchJson(`/api/analysis/compare-multi?${params}`);
+}
+
+// GET /api/analysis/compare/grid — diverging A/B grid over trip start
+// points, rendered as a map overlay (blue = B-heavier, orange = A-heavier).
+export async function fetchCompareGrid(
+  sourceA: string,
+  sourceB: string,
+  filters: CompareFilters = {},
+  cellDeg: number = 0.005,
+): Promise<CompareGridResponse> {
+  const params = new URLSearchParams({
+    source_a: sourceA,
+    source_b: sourceB,
+    cell_deg: String(cellDeg),
+  });
+  if (filters.city) params.set('city', filters.city);
+  if (filters.simulationDay !== undefined) params.set('simulation_day', String(filters.simulationDay));
+  if (filters.goodsType) params.set('goods_type', filters.goodsType);
+  if (filters.minHour !== undefined) params.set('min_hour', String(filters.minHour));
+  if (filters.maxHour !== undefined) params.set('max_hour', String(filters.maxHour));
+  if (filters.minSpeed !== undefined) params.set('min_speed', String(filters.minSpeed));
+  if (filters.maxSpeed !== undefined) params.set('max_speed', String(filters.maxSpeed));
+  if (filters.maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(filters.maxDwellMinutes));
+  if (filters.minDetourRatio !== undefined) params.set('min_detour_ratio', String(filters.minDetourRatio));
+  if (filters.maxDetourRatio !== undefined) params.set('max_detour_ratio', String(filters.maxDetourRatio));
+  const tm = transportModesParam(filters.transportModes);
+  if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, filters.scenario);
+  return fetchJson(`/api/analysis/compare/grid?${params}`);
 }

@@ -21,6 +21,7 @@ Result tables (see backend/db.py for full schema):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -807,6 +808,61 @@ def ingest_pois(conn, poi_key: str, cfg: PoiConfig, path: Path,
     return after - before
 
 
+def ingest_zones(conn, zone_key: str, cfg, path: Path,
+                 replace: bool = True) -> int:
+    """Ingest one zone (GeoJSON polygon) file into the `zones` table.
+
+    Unlike trips/waypoints/pois this is a pure-Python path: polygons come
+    from the GeoJSON geometry (no lon/lat columns to map), and zone counts
+    are small (tens to hundreds), so row-at-a-time INSERT ... VALUES is fine.
+    Each record's bbox is computed here for the router's bbox prefilter.
+    Idempotent via `replace=True` (delete-then-insert per source_key).
+    """
+    if replace:
+        conn.execute("DELETE FROM zones WHERE source_key = ?", [zone_key])
+
+    name_spec = cfg.columns.name
+    category_spec = cfg.columns.category
+
+    def _attr(props: dict, spec) -> str | None:
+        if spec is None or spec.csv is None:
+            return None
+        v = props.get(spec.csv)
+        return None if v is None else str(v)
+
+    rows: list[tuple] = []
+    for idx, rec in enumerate(_formats.extract_geojson_polygons(path)):
+        props: dict = {}
+        if rec.get("_props_json"):
+            props = json.loads(rec["_props_json"])
+        geom = rec["_geometry"]
+        # Normalize to a list of polygons (Polygon → wrap; MultiPolygon → use).
+        polys = (
+            [geom["coordinates"]] if geom["type"] == "Polygon"
+            else list(geom["coordinates"])
+        )
+        flat = [pt for poly in polys for ring in poly for pt in ring]
+        lons = [p[0] for p in flat]; lats = [p[1] for p in flat]
+        rows.append((
+            idx,
+            _attr(props, name_spec),
+            _attr(props, category_spec),
+            min(lons), max(lons), min(lats), max(lats),
+            json.dumps(geom, ensure_ascii=False),
+            rec.get("_props_json"),
+        ))
+
+    conn.executemany(
+        """INSERT INTO zones (zone_id, source_key, name, category,
+                              min_lon, max_lon, min_lat, max_lat,
+                              geometry_json, props_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [[r[0], zone_key, r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]]
+         for r in rows],
+    )
+    return len(rows)
+
+
 # --- F1 derived metrics (Phase 2) -------------------------------------------
 
 
@@ -1215,6 +1271,30 @@ def main() -> None:
             except Exception as e:
                 print(f"ERROR: {type(e).__name__}: {e}")
                 _log_failure(poi_path, "pois", e)
+
+    # ------- Zone (polygon) layers -------
+    total_zones = 0
+    for zone_key, zone_cfg in (sources.zones or {}).items():
+        print(f"\n[ZONE] {zone_key} ({zone_cfg.label})")
+        zone_files = sorted(
+            Path(p) for p in glob(str((output_dir / zone_cfg.glob).as_posix()), recursive=True)
+        )
+        if not zone_files:
+            print(f"  [zone] no matches for glob: {zone_cfg.glob}")
+        for i, zone_path in enumerate(zone_files):
+            print(f"  [zone]   {zone_path}", end=" ... ", flush=True)
+            t = time.time()
+            try:
+                n = ingest_zones(conn, zone_key, zone_cfg, zone_path, replace=(i == 0))
+                total_zones += n
+                print(f"{n:,} zones ({time.time()-t:.1f}s)")
+                conn.execute(
+                    "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'zones', ?)",
+                    [str(zone_path), n],
+                )
+            except Exception as e:
+                print(f"ERROR: {type(e).__name__}: {e}")
+                _log_failure(zone_path, "zones", e)
 
     # ------- F1 derived metrics (post-ingest pass) -------
     derived_counts: dict[str, int] = {}

@@ -11,11 +11,14 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(scriptDir, '..')
 const repoRoot = path.resolve(frontendDir, '..')
 const isWin = process.platform === 'win32'
-const venvPython = path.join(
-  repoRoot,
-  isWin ? '.venv-viz/Scripts/python.exe' : '.venv-viz/bin/python',
-)
-const python = existsSync(venvPython) ? venvPython : 'python'
+const venvLayouts = [
+  ['.venv-viz', isWin ? 'Scripts/python.exe' : 'bin/python'],
+  ['.venv', isWin ? 'Scripts/python.exe' : 'bin/python'],
+]
+const venvPython = venvLayouts
+  .map(([dir, exe]) => path.join(repoRoot, dir, exe))
+  .find(existsSync)
+const python = process.env.PFLOW_VIZ_PYTHON ?? venvPython ?? (isWin ? 'python' : 'python3')
 
 // Demo defaults — only applied when the caller hasn't pointed the backend
 // at real data via the environment.

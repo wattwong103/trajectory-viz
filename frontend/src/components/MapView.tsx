@@ -18,14 +18,14 @@ import {
   WebMercatorViewport,
 } from '@deck.gl/core';
 import { TripsLayer, MVTLayer } from '@deck.gl/geo-layers';
-import { ScatterplotLayer, ArcLayer, PathLayer, PolygonLayer } from '@deck.gl/layers';
+import { ScatterplotLayer, ArcLayer, PathLayer, PolygonLayer, IconLayer } from '@deck.gl/layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { Map } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { DataFilterExtension } from '@deck.gl/extensions';
 
-import type { Trajectory, TripPoint, SourceStyle, Poi } from '../types';
+import type { Trajectory, TripPoint, SourceStyle, Poi, CompareGridCell, Zone } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
@@ -36,6 +36,7 @@ import {
 import { transportModeColor, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
 import { poiFallbackColor } from '../poiColors';
+import type { PoiIconAtlas } from '../poiSprites';
 import type { Bbox } from '../utils/bbox';
 
 // Night-scene lighting (Phase 2C): dim ambient + one directional from NW so
@@ -124,6 +125,9 @@ interface MapViewProps {
   // never if the user has already panned/zoomed.
   fitToBBox?: Bbox | null;
   linkDensityPoints?: LinkDensityItem[];
+  /** A/B grid-diff cells (fleet comparison) — diverging delta overlay. */
+  compareGridCells?: CompareGridCell[];
+  compareGridCellDeg?: number;
   drillTrajectories: Trajectory[];
   drillPoint: [number, number] | null;
   // Sprint A1b: through-zone bbox rendered as a translucent yellow PolygonLayer
@@ -154,6 +158,10 @@ interface MapViewProps {
   pois?: Poi[];
   poiColorByCategory?: Record<string, [number, number, number]>;
   poiSourceLabels?: Record<string, string>;   // source_key → sources.yaml label
+  /** Category-glyph sprite sheet (poiSprites.ts); null → dot fallback. */
+  poiIconAtlas?: PoiIconAtlas | null;
+  /** Static polygon layers (zones feature) — rendered under trajectories. */
+  zones?: Zone[];
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -164,6 +172,8 @@ export const MapView: React.FC<MapViewProps> = ({
   odFlows, densityPoints, clusterResult, cityCenter,
   fitToBBox = null,
   linkDensityPoints,
+  compareGridCells,
+  compareGridCellDeg = 0.005,
   drillTrajectories, drillPoint,
   zoneBBox,
   scenarioBBox = null,
@@ -180,6 +190,8 @@ export const MapView: React.FC<MapViewProps> = ({
   pois = [],
   poiColorByCategory = {},
   poiSourceLabels = {},
+  poiIconAtlas = null,
+  zones = [],
   onMapClick,
   onTrajectoryClick,
 }) => {
@@ -432,6 +444,37 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
+    // Layer 1c: Zone/polygon layers (zones feature). Flat translucent fills
+    // with a per-source-key color (hash fallback — YAML colors arrive via a
+    // future styles prop; geometry is pre-parsed server-side). Lowest of the
+    // context layers so POIs and trips read on top.
+    if (layerVisibility.zones && zones.length > 0) {
+      const zoneColor = (z: Zone): [number, number, number, number] => {
+        const c = sourceFallbackColor(z.source_key);
+        return [c[0], c[1], c[2], 40] as [number, number, number, number];
+      };
+      result.push(
+        new PolygonLayer<Zone>({
+          id: 'zones',
+          data: zones,
+          getPolygon: (d: Zone) => d.geometry.coordinates as number[][][],
+          getFillColor: zoneColor,
+          getLineColor: (d: Zone) => {
+            const c = sourceFallbackColor(d.source_key);
+            return [c[0], c[1], c[2], 160] as [number, number, number, number];
+          },
+          getLineWidth: 1,
+          lineWidthMinPixels: 1,
+          lineWidthUnits: 'pixels',
+          stroked: true,
+          filled: true,
+          wireframe: false,
+          pickable: true,
+          opacity: 0.6,
+        }),
+      );
+    }
+
     // Layer 2: Link density scatterplot (above heatmap, below trajectories)
     if (layerVisibility.linkDensity && linkDensityPoints && linkDensityPoints.length > 0) {
       const maxCount = Math.max(...linkDensityPoints.map(l => l.waypoint_count));
@@ -452,6 +495,37 @@ export const MapView: React.FC<MapViewProps> = ({
           getRadius: (d: LinkDensityItem) => 30 + 20 * Math.log2(1 + d.waypoint_count),
           radiusMinPixels: 3,
           radiusMaxPixels: 20,
+          stroked: false,
+          pickable: true,
+        }),
+      );
+    }
+
+    // Layer 2b: A/B grid-diff (fleet comparison). Diverging scatterplot:
+    // blue cells = B-heavier, orange = A-heavier; opacity scales with the
+    // |delta| so weak differences recede. Radius ≈ cell footprint in meters
+    // (equirectangular: ~111.32 km per degree, capped to pixel bounds).
+    if (layerVisibility.compareGrid && compareGridCells && compareGridCells.length > 0) {
+      const maxAbs = Math.max(...compareGridCells.map(c => Math.abs(c.delta)), 1);
+      const radiusM = compareGridCellDeg * 111320 * 0.7;
+      result.push(
+        new ScatterplotLayer<CompareGridCell>({
+          id: 'compare-grid-diff',
+          data: compareGridCells,
+          getPosition: (d: CompareGridCell) => [d.lon, d.lat],
+          getFillColor: (d: CompareGridCell) => {
+            const t = Math.abs(d.delta) / maxAbs;
+            const base: [number, number, number] = d.delta > 0 ? [68, 170, 255] : [253, 128, 93];
+            return [
+              Math.round(base[0] * (0.45 + 0.55 * t)),
+              Math.round(base[1] * (0.45 + 0.55 * t)),
+              Math.round(base[2] * (0.45 + 0.55 * t)),
+              Math.round(60 + 160 * t),
+            ] as [number, number, number, number];
+          },
+          getRadius: radiusM,
+          radiusMinPixels: 3,
+          radiusMaxPixels: 26,
           stroked: false,
           pickable: true,
         }),
@@ -631,32 +705,58 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 3a-3 (universal-trajectory Phase 2): POI context dots. Sits below
+    // Layer 3a-3 (universal-trajectory Phase 2): POI context layer. Sits below
     // origins/destinations so trip endpoints stay visually dominant. Data is
     // pre-filtered to enabled categories by usePois; colors come from the
-    // category map (YAML override → deterministic hash fallback).
+    // category map (YAML override → deterministic hash fallback). With a
+    // sprite atlas (poiSprites.ts) each category renders its glyph; without
+    // one (or in canvas-less environments) plain colored dots are kept.
     if (layerVisibility.pois && pois.length > 0) {
-      result.push(
-        new ScatterplotLayer<Poi>({
-          id: 'pois',
-          data: pois,
-          getPosition: (d: Poi) => [d.lon, d.lat],
-          getFillColor: (d: Poi) => {
-            const key = d.category ?? '';
-            const c = poiColorByCategory[key] ?? poiFallbackColor(key);
-            return [c[0], c[1], c[2], 230];
-          },
-          updateTriggers: { getFillColor: [poiColorByCategory] },
-          getRadius: 60,
-          radiusMinPixels: 2,
-          radiusMaxPixels: 8,
-          opacity: 0.85,
-          stroked: true,
-          getLineColor: [255, 255, 255, 90],
-          lineWidthMinPixels: 1,
-          pickable: true,
-        }),
-      );
+      if (poiIconAtlas) {
+        result.push(
+          new IconLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getIcon: (d: Poi) => {
+              const cat = d.category ?? '';
+              if (cat in poiIconAtlas.iconFor) return cat;
+              return Object.keys(poiIconAtlas.iconFor)[0] ?? '';
+            },
+            iconAtlas: poiIconAtlas.url,
+            iconMapping: poiIconAtlas.iconFor,
+            getSize: 22,
+            sizeUnits: 'pixels',
+            sizeMinPixels: 10,
+            sizeMaxPixels: 34,
+            opacity: 0.95,
+            pickable: true,
+            updateTriggers: { getIcon: [poiIconAtlas] },
+          }),
+        );
+      } else {
+        result.push(
+          new ScatterplotLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getFillColor: (d: Poi) => {
+              const key = d.category ?? '';
+              const c = poiColorByCategory[key] ?? poiFallbackColor(key);
+              return [c[0], c[1], c[2], 230];
+            },
+            updateTriggers: { getFillColor: [poiColorByCategory] },
+            getRadius: 60,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 8,
+            opacity: 0.85,
+            stroked: true,
+            getLineColor: [255, 255, 255, 90],
+            lineWidthMinPixels: 1,
+            pickable: true,
+          }),
+        );
+      }
     }
 
     // Layer 3b: Trip origins

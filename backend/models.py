@@ -6,7 +6,6 @@ Response formats are designed for direct consumption by DeckGL layers:
 - ScatterplotLayer expects {position: [lon, lat], ...}
 """
 
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,8 +23,8 @@ class TripQuery(TripFilters):
     # Zone codes are alphanumeric + _/- (e.g. MFS01, PRF47, OSK30). The pattern
     # here is load-bearing: origin_zone/dest_zone are f-string'd into SQL at
     # routers/trips.py, so unvalidated input would be a SQL injection vector.
-    origin_zone: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
-    dest_zone: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
+    origin_zone: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
+    dest_zone: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
     limit: int = Field(1000, ge=1, le=50000)
 
 
@@ -38,14 +37,14 @@ class BBoxQuery(ScenarioFields):
     min_lat: float
     max_lon: float
     max_lat: float
-    vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
-    city: Optional[str] = Field(None, pattern="^[a-z_]+$")
-    simulation_day: Optional[int] = Field(None, ge=0)
+    vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
+    city: str | None = Field(None, pattern="^[a-z_]+$")
+    simulation_day: int | None = Field(None, ge=0)
     # Comma-separated transport-mode ids ("0,3"). Filters by the TRIP's mode
     # via the (vehicle_key, trip_id) subquery — see filters.TripFilters.
-    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
-    min_hour: Optional[int] = None
-    max_hour: Optional[int] = None
+    transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
+    min_hour: int | None = None
+    max_hour: int | None = None
     limit: int = Field(500, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics (link_id/speed/dwell)
     include_segments: bool = False
@@ -58,11 +57,11 @@ class PointQuery(ScenarioFields):
     lon: float
     lat: float
     radius_km: float = Field(1.0, ge=0.1, le=50.0)
-    vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
-    city: Optional[str] = Field(None, pattern="^[a-z_]+$")
-    simulation_day: Optional[int] = Field(None, ge=0)
+    vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
+    city: str | None = Field(None, pattern="^[a-z_]+$")
+    simulation_day: int | None = Field(None, ge=0)
     # Comma-separated transport-mode ids ("0,3") — trip-granular filter.
-    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
+    transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     limit: int = Field(200, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics
     include_segments: bool = False
@@ -80,12 +79,12 @@ class TrajectoryMetadata(BaseModel):
     # (vehicle_key, trip_id)). NOT the waypoint's — router-generated waypoints
     # carry a uniform per-source value (taxi writer stamps 8 on everything),
     # verified empirically. 0=walk 1=bike 2=bus 3=car 4=train 8=taxi.
-    transport_mode: Optional[int] = None
-    goods_type: Optional[str] = None
-    vehicle_size: Optional[str] = None
-    passenger_in: Optional[str] = None
-    fare_yen: Optional[float] = None
-    purpose: Optional[int] = None
+    transport_mode: int | None = None
+    goods_type: str | None = None
+    vehicle_size: str | None = None
+    passenger_in: str | None = None
+    fare_yen: float | None = None
+    purpose: int | None = None
 
 
 class TrajectorySegment(BaseModel):
@@ -94,9 +93,9 @@ class TrajectorySegment(BaseModel):
     A trajectory of N waypoints has N-1 segments. Returned only when the
     endpoint is called with `include_segments=true` — heavy payload otherwise.
     """
-    link_id: Optional[str] = None         # DRM link the second waypoint sits on
-    speed_kmh: Optional[float] = None     # haversine distance / dt; None if dt<=0
-    dwell_sec: Optional[float] = None     # populated when speed < 1 km/h (idle marker)
+    link_id: str | None = None         # DRM link the second waypoint sits on
+    speed_kmh: float | None = None     # haversine distance / dt; None if dt<=0
+    dwell_sec: float | None = None     # populated when speed < 1 km/h (idle marker)
 
 
 class Trajectory(BaseModel):
@@ -107,14 +106,14 @@ class Trajectory(BaseModel):
     metadata: TrajectoryMetadata
     # Phase 2 Step 2.5 — populated only when include_segments=true on the call.
     # len(segments) == len(path) - 1 when present.
-    segments: Optional[list[TrajectorySegment]] = None
+    segments: list[TrajectorySegment] | None = None
 
 
 class TrajectoryResponse(BaseModel):
     """Paginated trajectory query response."""
     trajectories: list[Trajectory]
     count: int                                  # number returned
-    total_matching: Optional[int] = None        # total matching the query (if computed)
+    total_matching: int | None = None        # total matching the query (if computed)
 
 
 class TripPoint(BaseModel):
@@ -127,18 +126,18 @@ class TripPoint(BaseModel):
     end_lon: float
     end_lat: float
     vehicle_type: str
-    distance_km: Optional[float] = None
-    goods_type: Optional[str] = None
-    city: Optional[str] = None
+    distance_km: float | None = None
+    goods_type: str | None = None
+    city: str | None = None
     # 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (trips.transport_mode)
-    transport_mode: Optional[int] = None
+    transport_mode: int | None = None
 
 
 class TripResponse(BaseModel):
     """Paginated trip query response."""
     trips: list[TripPoint]
     count: int
-    total_matching: Optional[int] = None
+    total_matching: int | None = None
 
 
 class StatsResponse(BaseModel):
@@ -154,11 +153,11 @@ class Poi(BaseModel):
     """One point of interest for ScatterplotLayer."""
     poi_id: int
     source_key: str
-    name: Optional[str] = None
-    category: Optional[str] = None
+    name: str | None = None
+    category: str | None = None
     lon: float
     lat: float
-    props: Optional[dict] = None
+    props: dict | None = None
 
 
 class PoiListResponse(BaseModel):
@@ -170,13 +169,33 @@ class PoiListResponse(BaseModel):
 
 class PoiCategory(BaseModel):
     """One POI category summary, with the layer's render hints joined in."""
-    category: Optional[str] = None
+    category: str | None = None
     count: int
-    color: Optional[list[int]] = None
-    label: Optional[str] = None
+    color: list[int] | None = None
+    label: str | None = None
     source_key: str
 
 
 class PoiCategoriesResponse(BaseModel):
     """POI category counts across all layers."""
     categories: list[PoiCategory]
+
+
+class Zone(BaseModel):
+    """One polygon zone for the map's PolygonLayer. `geometry` is a parsed
+    GeoJSON geometry dict ({type: Polygon|MultiPolygon, coordinates}); bbox
+    is precomputed at ingest for quick viewport prefilters."""
+    zone_id: int
+    source_key: str
+    name: str | None = None
+    category: str | None = None
+    bbox: dict | None = None          # {w,s,e,n}
+    geometry: dict
+    props: dict | None = None
+
+
+class ZoneListResponse(BaseModel):
+    """Zone query response. `truncated` is True when `limit` cut the result."""
+    zones: list[Zone]
+    count: int
+    truncated: bool = False

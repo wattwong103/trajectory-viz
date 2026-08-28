@@ -27,13 +27,17 @@ timestamps are ASSUMED UTC (documented — GPX mandates Z, GeoJSON producers
 vary); aware timestamps convert to UTC epoch ms. Numeric timestamps are epoch
 seconds when < 1e11, epoch milliseconds otherwise.
 
-Known limit: GeoJSON uses whole-file json.load (ingest-time only; batched
-staging keeps post-parse memory flat; a streaming parser is Phase 3).
+GeoJSON memory profile: FeatureCollections stream feature-by-feature via ijson
+when installed (optional extra `speed`; C-accelerated), so peak memory is one
+feature regardless of file size. Without ijson the file falls back to a whole-
+document json.load — same rows, higher peak memory. Bare `Feature` roots and
+any ijson import failure take the fallback path.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -42,11 +46,19 @@ from typing import Any
 
 from .sources_schema import _FORMAT_BY_EXT, FormatType
 
+try:  # optional streaming backend (see module docstring)
+    import ijson  # type: ignore[import-untyped]
+
+    _HAS_IJSON = True
+except ImportError:
+    _HAS_IJSON = False
+
 __all__ = [
     "detect_format",
     "normalize_geojson",
     "normalize_gpx",
     "normalize_ndjson",
+    "extract_geojson_polygons",
 ]
 
 
@@ -131,66 +143,107 @@ def _geojson_features(doc: Any) -> Iterator[dict]:
         )
 
 
-def normalize_geojson(
-    path: Path | str,
-    coord_times_prop: str | None = None,
+def _geojson_feature_rows(
+    feature_idx: int,
+    feature: dict,
+    coord_times_prop: str | None,
 ) -> Iterator[dict]:
-    """Yield canonical staging rows from a GeoJSON file.
+    """Yield canonical staging rows for one GeoJSON feature.
 
     Point features yield one row per feature; LineString features yield one
     row per coordinate. Per-point time resolution order for LineStrings:
     `coord_times_prop[i]` → feature `time` property → NULL. For Points: the
     feature `time` property or NULL.
     """
+    geom = feature.get("geometry") or {}
+    gtype = geom.get("type")
+    coords = geom.get("coordinates") or []
+    props = dict(feature.get("properties") or {})
+
+    consumed = {"time"}
+    if coord_times_prop:
+        consumed.add(coord_times_prop)
+    feature_time_ms = parse_time_to_ms(props.get("time"))
+    coord_times = props.get(coord_times_prop) if coord_times_prop else None
+    flat = {k: v for k, v in _flatten_scalars(props).items() if k not in consumed}
+    props_json = _props_json({k: v for k, v in props.items() if k not in consumed})
+
+    base = {
+        "_feature_id": feature_idx,
+        "_props_json": props_json,
+        **flat,
+    }
+
+    if gtype == "Point":
+        yield {
+            **base,
+            "_lon": coords[0] if len(coords) > 0 else None,
+            "_lat": coords[1] if len(coords) > 1 else None,
+            "_time_ms": feature_time_ms,
+            "_seq": 0,
+        }
+    elif gtype == "LineString":
+        for i, coord in enumerate(coords):
+            if coord_times is not None and i < len(coord_times):
+                t_ms = parse_time_to_ms(coord_times[i])
+            else:
+                t_ms = feature_time_ms
+            yield {
+                **base,
+                "_lon": coord[0] if len(coord) > 0 else None,
+                "_lat": coord[1] if len(coord) > 1 else None,
+                "_time_ms": t_ms,
+                "_seq": i,
+            }
+    else:
+        raise ValueError(
+            f"Unsupported GeoJSON geometry type {gtype!r} "
+            f"(feature {feature_idx}) — Point and LineString only."
+        )
+
+
+# A FeatureCollection root — the only shape the ijson streaming path handles.
+_FC_ROOT_RE = re.compile(rb'"type"\s*:\s*"FeatureCollection"')
+
+
+def normalize_geojson(
+    path: Path | str,
+    coord_times_prop: str | None = None,
+) -> Iterator[dict]:
+    """Yield canonical staging rows from a GeoJSON file.
+
+    FeatureCollections stream via ijson when available (one-feature peak
+    memory); otherwise the whole document loads first. Bare `Feature`
+    documents always take the whole-document path (they are one feature).
+    Both paths share _geojson_feature_rows, so rows are byte-identical.
+    """
+    if _HAS_IJSON and _looks_like_feature_collection(path):
+        with open(path, "rb") as fh:
+            # use_float: emit floats, not Decimal (Decimal breaks json.dumps
+            # in _props_json downstream).
+            for idx, feature in enumerate(
+                ijson.items(fh, "features.item", use_float=True)
+            ):
+                if not isinstance(feature, dict):
+                    continue
+                yield from _geojson_feature_rows(idx, feature, coord_times_prop)
+        return
+
     with open(path, encoding="utf-8") as fh:
         doc = json.load(fh)
 
     for feature_idx, feature in enumerate(_geojson_features(doc)):
-        geom = feature.get("geometry") or {}
-        gtype = geom.get("type")
-        coords = geom.get("coordinates") or []
-        props = dict(feature.get("properties") or {})
+        yield from _geojson_feature_rows(feature_idx, feature, coord_times_prop)
 
-        consumed = {"time"}
-        if coord_times_prop:
-            consumed.add(coord_times_prop)
-        feature_time_ms = parse_time_to_ms(props.get("time"))
-        coord_times = props.get(coord_times_prop) if coord_times_prop else None
-        flat = {k: v for k, v in _flatten_scalars(props).items() if k not in consumed}
-        props_json = _props_json({k: v for k, v in props.items() if k not in consumed})
 
-        base = {
-            "_feature_id": feature_idx,
-            "_props_json": props_json,
-            **flat,
-        }
-
-        if gtype == "Point":
-            yield {
-                **base,
-                "_lon": coords[0] if len(coords) > 0 else None,
-                "_lat": coords[1] if len(coords) > 1 else None,
-                "_time_ms": feature_time_ms,
-                "_seq": 0,
-            }
-        elif gtype == "LineString":
-            for i, coord in enumerate(coords):
-                if coord_times is not None and i < len(coord_times):
-                    t_ms = parse_time_to_ms(coord_times[i])
-                else:
-                    t_ms = feature_time_ms
-                yield {
-                    **base,
-                    "_lon": coord[0] if len(coord) > 0 else None,
-                    "_lat": coord[1] if len(coord) > 1 else None,
-                    "_time_ms": t_ms,
-                    "_seq": i,
-                }
-        else:
-            raise ValueError(
-                f"Unsupported GeoJSON geometry type {gtype!r} in {path} "
-                f"(feature {feature_idx}) — Point and LineString only."
-            )
+def _looks_like_feature_collection(path: Path | str) -> bool:
+    """Cheap root-type sniff on the file head; anything ambiguous → False,
+    which selects the whole-document fallback (correct, just slower)."""
+    try:
+        with open(path, "rb") as fh:
+            return bool(_FC_ROOT_RE.search(fh.read(4096)))
+    except OSError:
+        return False
 
 
 # --- GPX -------------------------------------------------------------------------
@@ -289,3 +342,51 @@ def normalize_ndjson(path: Path | str) -> Iterator[dict]:
                 "_props_json": _props_json(row),
                 **_flatten_scalars(row),
             }
+
+
+# --- GeoJSON polygons (zones) -----------------------------------------------------
+
+
+def extract_geojson_polygons(path: Path | str) -> Iterator[dict]:
+    """Yield polygon records from a GeoJSON file (zones/polygons layer).
+
+    Accepts FeatureCollections and bare Features whose geometry is Polygon
+    or MultiPolygon; anything else raises. Each record carries the full
+    geometry under `_geometry` ({type, coordinates}) plus the usual property
+    flattening (`_props_json` + first-level scalars) so sources.yaml can
+    map name/category columns exactly like POI layers.
+    """
+    def _rows(feature: dict, feature_idx: int) -> Iterator[dict]:
+        geom = feature.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates")
+        props = dict(feature.get("properties") or {})
+        if gtype not in ("Polygon", "MultiPolygon"):
+            raise ValueError(
+                f"Unsupported zone geometry type {gtype!r} "
+                f"(feature {feature_idx}) — Polygon and MultiPolygon only."
+            )
+        if not coords:
+            raise ValueError(
+                f"Zone geometry has no coordinates (feature {feature_idx})."
+            )
+        yield {
+            "_feature_id": feature_idx,
+            "_props_json": _props_json(props),
+            "_geometry": {"type": gtype, "coordinates": coords},
+            **_flatten_scalars(props),
+        }
+
+    if _HAS_IJSON and _looks_like_feature_collection(path):
+        with open(path, "rb") as fh:
+            for idx, feature in enumerate(
+                ijson.items(fh, "features.item", use_float=True)
+            ):
+                if isinstance(feature, dict):
+                    yield from _rows(feature, idx)
+        return
+
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    for idx, feature in enumerate(_geojson_features(doc)):
+        yield from _rows(feature, idx)

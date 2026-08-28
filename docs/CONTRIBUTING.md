@@ -161,10 +161,13 @@ If you change the SQL builders in `backend/ingest.py`, the parity check confirms
 In rough priority order:
 
 1. **New `sources.yaml` configs** for ABMs you actually use (MATSim, SUMO, AnyLogic, custom Python). Each one stress-tests the schema generalization.
-2. **F2/F3 UI hookup** — the backend endpoints exist for `through-zone-bbox`, `multi-stop`, `route-similarity`; the dashboard UI for invoking them is deferred. Frontend contributions welcome.
-3. **Performance improvements** — query plans, index tuning, JSON serialization caps.
-4. **Bug fixes & ergonomics** — anything that bites you also bites the next user.
-5. **Docs** — clarifications, additional examples, troubleshooting entries.
+2. **Performance improvements** — query plans, index tuning, JSON serialization caps.
+3. **Bug fixes & ergonomics** — anything that bites you also bites the next user.
+4. **Docs** — clarifications, additional examples, troubleshooting entries.
+
+> The F2/F3 endpoints (`through-zone-bbox`, `multi-stop`, `route-similarity`)
+> all have dashboard UI: Zone tab (bbox), Chains tab (multi-stop), and
+> Clusters tab (route similarity).
 
 ## Code of conduct
 

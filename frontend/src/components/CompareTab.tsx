@@ -24,10 +24,16 @@ import {
   LineChart, Line, BarChart, Bar, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { fetchComparison } from '../api';
+import { fetchComparison, fetchMultiComparison, fetchCompareGrid } from '../api';
 import { friendlyFetchError } from '../friendlyError';
 import { transportModeLabel, transportModeColor } from '../transportModes';
-import type { CompareResponse, FilterState, SourceStyle } from '../types';
+import type {
+  CompareResponse, MultiCompareResponse, CompareGridResponse,
+  FilterState, SourceStyle,
+} from '../types';
+
+/** Fleet-comparison supports 2–4 sources (deep view at exactly two). */
+const COMPARE_MAX_SOURCES = 4;
 
 // ─── Formatting helpers (exported for tests) ────────────
 
@@ -55,6 +61,50 @@ export function fmtClock(sec: number): string {
   return `${h}:${m}`;
 }
 
+/**
+ * One-line auto-insight for the tab header — the single most decision-
+ * relevant divergence in the response, ranked: matched-person behavior gap
+ * (the ground-truth workflow) > biggest mode-share swing ≥1 pp > peak-hour
+ * mismatch. Returns null when there is nothing worth surfacing (empty or
+ * near-identical fleets) so the line can stay hidden instead of padding.
+ */
+export function compareInsight(
+  data: CompareResponse,
+  labelA: string,
+  labelB: string,
+): string | null {
+  // Matched persons: relative trips/person gap is the headline number.
+  if (data.matched && data.matched.trips_per_person_a && data.matched.trips_per_person_b) {
+    const tppA = data.matched.trips_per_person_a;
+    const tppB = data.matched.trips_per_person_b;
+    if (tppA > 0 && Math.abs(tppB - tppA) / tppA >= 0.05) {
+      const pct = Math.round(Math.abs(tppB - tppA) / tppA * 100);
+      return `${data.matched.matched_persons.toLocaleString()} shared persons: ${labelB} makes ${pct}% ${tppB > tppA ? 'more' : 'fewer'} trips/person (${tppA} vs ${tppB}).`;
+    }
+  }
+  // Mode shares: largest absolute swing ≥ 1 pp.
+  const modeSwing = [...data.mode_shares]
+    .filter(r => Math.abs(r.delta_pp) >= 1)
+    .sort((x, y) => Math.abs(y.delta_pp) - Math.abs(x.delta_pp))[0];
+  if (modeSwing) {
+    const dir = modeSwing.delta_pp > 0 ? labelB : labelA;
+    const mag = Math.abs(modeSwing.delta_pp).toFixed(1);
+    return `${transportModeLabel(modeSwing.mode)} share differs by ${mag} pp — ${dir} heavier (${(modeSwing.a_share * 100).toFixed(0)}% → ${(modeSwing.b_share * 100).toFixed(0)}%).`;
+  }
+  // Hourly profile: biggest single-hour count gap.
+  let peakGap = 0, peakHour = -1;
+  for (const h of data.hourly) {
+    const gap = Math.abs(h.b - h.a);
+    if (gap > peakGap) { peakGap = gap; peakHour = h.hour; }
+  }
+  if (peakHour >= 0 && peakGap >= 10) {
+    const hi = data.hourly[peakHour];
+    const leader = hi.b > hi.a ? labelB : labelA;
+    return `Departures diverge most at ${String(peakHour).padStart(2, '0')}:00 — ${leader} runs ${peakGap.toLocaleString()} more.`;
+  }
+  return null;
+}
+
 function fmtVal(v: number | null, digits: number, unit: string): string {
   if (v === null) return '—';
   return `${v.toLocaleString(undefined, {
@@ -76,32 +126,61 @@ interface CompareTabProps {
   goodsType?: string;
   minHour?: number;
   maxHour?: number;
+  /** F1 derived-metric ranges (applied symmetrically to both fleets). */
+  minSpeed?: number;
+  maxSpeed?: number;
+  maxDwellMinutes?: number;
+  minDetourRatio?: number;
+  maxDetourRatio?: number;
   transportModes?: number[];
   scenario?: FilterState['scenario'];
   /** App's existing agent-follow handler (vehicle_key). Follow-pair = 2 calls. */
   onAddAgent?: (key: string) => void;
+  /** Grid-diff overlay control — null clears the map layer. */
+  onCompareGrid?: (grid: CompareGridResponse | null) => void;
 }
 
 export const CompareTab: React.FC<CompareTabProps> = ({
   sources,
-  city, simulationDay, goodsType, minHour, maxHour, transportModes, scenario,
+  city, simulationDay, goodsType, minHour, maxHour,
+  minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+  transportModes, scenario,
   onAddAgent,
+  onCompareGrid,
 }) => {
-  const [sel, setSel] = useState<{ a: string; b: string } | null>(null);
-  const [data, setData] = useState<CompareResponse | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [data, setData] = useState<
+    | { kind: 'pair'; res: CompareResponse }
+    | { kind: 'multi'; res: MultiCompareResponse }
+    | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gridOn, setGridOn] = useState(false);
 
   // Default = first two sources; keep the user's picks across sources reloads.
   useEffect(() => {
     if (sources.length < 2) return;
     const ids = sources.map(s => s.source_id);
-    setSel(prev =>
-      prev && ids.includes(prev.a) && ids.includes(prev.b)
-        ? prev
-        : { a: ids[0], b: ids[1] },
-    );
+    setPicked(prev => {
+      const kept = prev.filter(id => ids.includes(id));
+      return kept.length >= 2 ? kept : [ids[0], ids[1]];
+    });
   }, [sources]);
+
+  /** Toggle a fleet in/out of the comparison set (min 2, max 4). */
+  const toggleSource = (id: string) => {
+    setPicked(prev => {
+      if (prev.includes(id)) {
+        return prev.length <= 2 ? prev : prev.filter(x => x !== id);
+      }
+      if (prev.length >= COMPARE_MAX_SOURCES || prev.length === 0) return prev;
+      return [...prev, id];
+    });
+  };
+
+  const pairMode = picked.length === 2;
+  const pickedKey = picked.join('|');
 
   // Flatten filter deps (array/object identity changes per filter change,
   // which is exactly when we want to refetch anyway).
@@ -110,17 +189,32 @@ export const CompareTab: React.FC<CompareTabProps> = ({
     ? `${scenario.type}:${scenario.bbox.w},${scenario.bbox.s},${scenario.bbox.e},${scenario.bbox.n}`
     : '';
 
+  const filters = {
+    city, simulationDay, goodsType, minHour, maxHour,
+    minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+    transportModes, scenario,
+  };
+
   useEffect(() => {
-    if (!sel || sel.a === sel.b) {
+    if (!pairMode && picked.length < 3) {
       setData(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchComparison(sel.a, sel.b,
-      { city, simulationDay, goodsType, minHour, maxHour, transportModes, scenario }, 10)
-      .then(res => { if (!cancelled) setData(res); })
+    const req: Promise<CompareResponse | MultiCompareResponse> = pairMode
+      ? fetchComparison(picked[0], picked[1], filters, 10)
+      : fetchMultiComparison(picked, filters);
+    req
+      .then(res => {
+        if (cancelled) return;
+        setData(
+          pairMode
+            ? { kind: 'pair', res: res as CompareResponse }
+            : { kind: 'multi', res: res as MultiCompareResponse },
+        );
+      })
       .catch(e => {
         if (!cancelled) {
           setData(null);
@@ -129,9 +223,29 @@ export const CompareTab: React.FC<CompareTabProps> = ({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-    // tmKey/scenarioKey stand in for the raw values intentionally.
+    // pickedKey/scenarioKey stand in for the raw values intentionally.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel?.a, sel?.b, city, simulationDay, goodsType, minHour, maxHour, tmKey, scenarioKey]);
+  }, [pickedKey, pairMode, city, simulationDay, goodsType, minHour, maxHour,
+      minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+      tmKey, scenarioKey]);
+
+  // Grid-diff overlay lifecycle: on = fetch for the current pair+filters,
+  // off / multi-mode = clear. Filter changes clear via App's overlay reset.
+  useEffect(() => {
+    if (!onCompareGrid) return;
+    if (!gridOn || !pairMode) {
+      onCompareGrid(null);
+      return;
+    }
+    let cancelled = false;
+    fetchCompareGrid(picked[0], picked[1], filters)
+      .then(res => { if (!cancelled) onCompareGrid(res); })
+      .catch(() => { if (!cancelled) onCompareGrid(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridOn, pairMode, pickedKey, city, simulationDay, goodsType, minHour,
+      maxHour, minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio,
+      maxDetourRatio, tmKey, scenarioKey]);
 
   if (sources.length < 2) {
     return (
@@ -142,18 +256,19 @@ export const CompareTab: React.FC<CompareTabProps> = ({
   }
 
   const sourceById = Object.fromEntries(sources.map(s => [s.source_id, s]));
-  const metaA = sel ? sourceById[sel.a] : undefined;
-  const metaB = sel ? sourceById[sel.b] : undefined;
-  const labelA = metaA?.label ?? sel?.a ?? '';
-  const labelB = metaB?.label ?? sel?.b ?? '';
-  const colorA = cssColor(metaA?.color ?? null, '#4fc3f7');
-  const colorB = cssColor(metaB?.color ?? null, '#fd805d');
-  const sameSource = !!sel && sel.a === sel.b;
+  const labelOf = (id: string) => sourceById[id]?.label ?? id;
+  const colorOf = (id: string) => cssColor(sourceById[id]?.color ?? null, '#4fc3f7');
+  const labelA = pairMode ? labelOf(picked[0]) : '';
+  const labelB = pairMode ? labelOf(picked[1]) : '';
+  const colorA = pairMode ? colorOf(picked[0]) : '#4fc3f7';
+  const colorB = pairMode ? colorOf(picked[1]) : '#fd805d';
+  const pairData = data?.kind === 'pair' ? data.res : null;
+  const multiData = data?.kind === 'multi' ? data.res : null;
 
   const followPair = (vehicleId: number) => {
-    if (!onAddAgent || !data) return;
-    onAddAgent(`${data.source_a}:${vehicleId}`);
-    onAddAgent(`${data.source_b}:${vehicleId}`);
+    if (!onAddAgent || !pairData) return;
+    onAddAgent(`${pairData.source_a}:${vehicleId}`);
+    onAddAgent(`${pairData.source_b}:${vehicleId}`);
   };
 
   const METRIC_ROWS: Array<{
@@ -162,68 +277,205 @@ export const CompareTab: React.FC<CompareTabProps> = ({
     b: number | null;
     digits: number;
     unit: string;
-  }> = data ? [
-    { label: 'Trips',    a: data.fleet_a.trips,             b: data.fleet_b.trips,             digits: 0, unit: '' },
-    { label: 'Vehicles', a: data.fleet_a.vehicles,          b: data.fleet_b.vehicles,          digits: 0, unit: '' },
-    { label: 'VKT',      a: data.fleet_a.vkt_km,            b: data.fleet_b.vkt_km,            digits: 1, unit: ' km' },
-    { label: 'Avg dist', a: data.fleet_a.avg_distance_km,   b: data.fleet_b.avg_distance_km,   digits: 2, unit: ' km' },
-    { label: 'Med dist', a: data.fleet_a.median_distance_km, b: data.fleet_b.median_distance_km, digits: 2, unit: ' km' },
-    { label: 'Max dist', a: data.fleet_a.max_distance_km,   b: data.fleet_b.max_distance_km,   digits: 1, unit: ' km' },
+  }> = pairData ? [
+    { label: 'Trips',    a: pairData.fleet_a.trips,             b: pairData.fleet_b.trips,             digits: 0, unit: '' },
+    { label: 'Vehicles', a: pairData.fleet_a.vehicles,          b: pairData.fleet_b.vehicles,          digits: 0, unit: '' },
+    { label: 'VKT',      a: pairData.fleet_a.vkt_km,            b: pairData.fleet_b.vkt_km,            digits: 1, unit: ' km' },
+    { label: 'Avg dist', a: pairData.fleet_a.avg_distance_km,   b: pairData.fleet_b.avg_distance_km,   digits: 2, unit: ' km' },
+    { label: 'Med dist', a: pairData.fleet_a.median_distance_km, b: pairData.fleet_b.median_distance_km, digits: 2, unit: ' km' },
+    { label: 'Max dist', a: pairData.fleet_a.max_distance_km,   b: pairData.fleet_b.max_distance_km,   digits: 1, unit: ' km' },
   ] : [];
 
-  const divergences = data
-    ? [...data.mode_shares]
+  const divergences = pairData
+    ? [...pairData.mode_shares]
         .filter(r => Math.abs(r.delta_pp) >= 0.5)
         .sort((x, y) => Math.abs(y.delta_pp) - Math.abs(x.delta_pp))
         .slice(0, 4)
     : [];
 
-  const oorTotal = data ? data.out_of_range.a + data.out_of_range.b : 0;
+  const oorTotal = pairData ? pairData.out_of_range.a + pairData.out_of_range.b : 0;
+  const insight = pairData ? compareInsight(pairData, labelA, labelB) : null;
 
   return (
     <div>
-      {/* ── Source pickers ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 8 }}>
-        <select
-          value={sel?.a ?? ''}
-          onChange={e => sel && setSel({ a: e.target.value, b: sel.b })}
-          style={{ ...st.select, borderLeft: `3px solid ${colorA}` }}
-          title="Fleet A"
-        >
-          {sources.map(s => (
-            <option key={s.source_id} value={s.source_id}>{s.label}</option>
-          ))}
-        </select>
-        <button
-          onClick={() => sel && setSel({ a: sel.b, b: sel.a })}
-          style={st.swapBtn}
-          title="Swap A and B"
-          aria-label="Swap A and B"
-        >
-          ⇄
-        </button>
-        <select
-          value={sel?.b ?? ''}
-          onChange={e => sel && setSel({ a: sel.a, b: e.target.value })}
-          style={{ ...st.select, borderLeft: `3px solid ${colorB}` }}
-          title="Fleet B"
-        >
-          {sources.map(s => (
-            <option key={s.source_id} value={s.source_id}>{s.label}</option>
-          ))}
-        </select>
+      {/* ── Source chips (toggle fleets in/out; order = pick order) ── */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+        {sources.map(s => {
+          const active = picked.includes(s.source_id);
+          const c = cssColor(s.color ?? null, '#4fc3f7');
+          const order = picked.indexOf(s.source_id);
+          return (
+            <button
+              key={s.source_id}
+              onClick={() => toggleSource(s.source_id)}
+              style={{
+                ...st.chip,
+                ...(active ? { ...st.chipOn, borderColor: c } : {}),
+              }}
+              title={
+                active
+                  ? picked.length <= 2
+                    ? 'A comparison needs at least two fleets'
+                    : `Remove ${s.label} from the comparison`
+                  : `Add ${s.label} to the comparison`
+              }
+            >
+              <span style={{ ...st.legendDot, background: c }} />
+              {s.label}
+              {active && <span style={st.chipOrder}>{order + 1}</span>}
+            </button>
+          );
+        })}
+        {pairMode && (
+          <button
+            onClick={() => setPicked(p => [p[1], p[0], ...p.slice(2)])}
+            style={st.swapBtn}
+            title="Swap A and B"
+            aria-label="Swap A and B"
+          >
+            ⇄
+          </button>
+        )}
+        {pairMode && onCompareGrid && (
+          <button
+            onClick={() => setGridOn(v => !v)}
+            style={{
+              ...st.chip,
+              ...(gridOn ? { ...st.chipOn, borderColor: '#e8c96d' } : {}),
+              marginLeft: 'auto',
+            }}
+            title="Overlay per-cell A/B trip-count differences on the map"
+            aria-pressed={gridOn}
+          >
+            ⬚ Diff on map
+          </button>
+        )}
       </div>
 
-      {sameSource && (
+      {picked.length >= COMPARE_MAX_SOURCES && (
         <div style={st.hint}>
-          Pick two different sources — comparing a fleet to itself is meaningless.
+          Up to {COMPARE_MAX_SOURCES} fleets per comparison.
         </div>
       )}
 
       {loading && <div style={st.muted}>Comparing fleets…</div>}
       {error && <div style={st.errorBox}>{error}</div>}
 
-      {data && !sameSource && (
+      {/* ── Pairwise deep view (exactly two fleets) ── */}
+      {pairData && insight && (
+        <div style={st.insightLine} title="Auto-generated summary of the largest divergence">
+          <span style={st.insightTag}>insight</span> {insight}
+        </div>
+      )}
+
+      {multiData && multiData.fleets.some(fl => fl.trips > 0) && (() => {
+        const ids = multiData.sources;
+        const labels = Object.fromEntries(ids.map(id => [id, labelOf(id)]));
+        const colors = Object.fromEntries(ids.map(id => [id, colorOf(id)]));
+        const maxTrips = Math.max(...multiData.fleets.map(fl => fl.trips));
+        return (
+          <>
+            {/* ── Fleet cards grid ── */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+              {multiData.fleets.map(fl => (
+                <div
+                  key={fl.source_id}
+                  style={{
+                    ...st.fleetCard, minWidth: 96,
+                    borderTop: `2px solid ${colors[fl.source_id]}`,
+                    ...(fl.trips === maxTrips && maxTrips > 0 ? {} : { opacity: 0.75 }),
+                  }}
+                >
+                  <div style={{ ...st.fleetTitle, color: colors[fl.source_id] }}>
+                    {labels[fl.source_id]}
+                  </div>
+                  <div style={st.metricRow}><span style={st.metricLabel}>Trips</span><span style={st.metricValue}>{fl.trips.toLocaleString()}</span></div>
+                  <div style={st.metricRow}><span style={st.metricLabel}>Vehicles</span><span style={st.metricValue}>{fl.vehicles.toLocaleString()}</span></div>
+                  <div style={st.metricRow}><span style={st.metricLabel}>VKT</span><span style={st.metricValue}>{fmtVal(fl.vkt_km, 1, ' km')}</span></div>
+                  <div style={st.metricRow}><span style={st.metricLabel}>Avg dist</span><span style={st.metricValue}>{fmtVal(fl.avg_distance_km, 2, ' km')}</span></div>
+                </div>
+              ))}
+            </div>
+
+            {/* ── Hourly departures, one line per fleet ── */}
+            <div style={st.sectionTitle}>
+              Hourly departures
+              <span style={st.legend}>
+                {ids.map((id, i) => (
+                  <span key={id}>
+                    {i > 0 && <span style={{ marginLeft: 8 }} />}
+                    <span style={{ ...st.legendDot, background: colors[id] }} />{labels[id]}
+                  </span>
+                ))}
+              </span>
+            </div>
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={multiData.hourly} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                <XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#888' }} interval={2} />
+                <YAxis tick={{ fontSize: 9, fill: '#888' }} />
+                <Tooltip
+                  contentStyle={{ background: '#1a1a2e', border: '1px solid #333', fontSize: 11 }}
+                  labelFormatter={h => `${String(h).padStart(2, '0')}:00`}
+                  formatter={(v: number) => v.toLocaleString()}
+                />
+                {ids.map(id => (
+                  <Line key={id} type="monotone" dataKey={id} name={labels[id]}
+                        stroke={colors[id]} strokeWidth={1.5} dot={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+
+            {/* ── Mode-share table (share of each fleet's non-null-mode trips) ── */}
+            {multiData.mode_shares.length > 0 && (
+              <>
+                <div style={{ ...st.sectionTitle, marginTop: 10 }}>Mode shares</div>
+                <table style={st.multiTable}>
+                  <thead>
+                    <tr>
+                      <th style={st.multiTh}>mode</th>
+                      {ids.map(id => (
+                        <th key={id} style={{ ...st.multiTh, color: colors[id] }}>{labels[id]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {multiData.mode_shares.map(r => {
+                      const best = Math.max(...ids.map(id => r[id]?.share ?? 0));
+                      return (
+                        <tr key={r.mode}>
+                          <td style={st.multiTd}>{transportModeLabel(r.mode)}</td>
+                          {ids.map(id => {
+                            const cell = r[id];
+                            const isBest = best > 0 && cell?.share === best;
+                            return (
+                              <td
+                                key={id}
+                                style={{
+                                  ...st.multiTd,
+                                  fontWeight: isBest ? 700 : 400,
+                                  color: isBest ? colors[id] : '#99a',
+                                }}
+                              >
+                                {cell ? `${(cell.share * 100).toFixed(1)}%` : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            <div style={{ ...st.footnote, marginTop: 8 }}>
+              Deep-dive (matched persons, significance tests): pick exactly two fleets.
+            </div>
+          </>
+        );
+      })()}
+
+      {pairData && (
         <>
           {/* ── Fleet summary cards ── */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
@@ -251,9 +503,9 @@ export const CompareTab: React.FC<CompareTabProps> = ({
                 <div style={st.metricRow}>
                   <span style={st.metricLabel}>Active</span>
                   <span style={st.metricValue}>
-                    {(side === 'a' ? data.fleet_a : data.fleet_b).min_starttime !== null &&
-                     (side === 'a' ? data.fleet_a : data.fleet_b).max_starttime !== null
-                      ? `${fmtClock((side === 'a' ? data.fleet_a : data.fleet_b).min_starttime!)}–${fmtClock((side === 'a' ? data.fleet_a : data.fleet_b).max_starttime!)}`
+                    {(side === 'a' ? pairData.fleet_a : pairData.fleet_b).min_starttime !== null &&
+                     (side === 'a' ? pairData.fleet_a : pairData.fleet_b).max_starttime !== null
+                      ? `${fmtClock((side === 'a' ? pairData.fleet_a : pairData.fleet_b).min_starttime!)}–${fmtClock((side === 'a' ? pairData.fleet_a : pairData.fleet_b).max_starttime!)}`
                       : '—'}
                   </span>
                 </div>
@@ -270,7 +522,7 @@ export const CompareTab: React.FC<CompareTabProps> = ({
             </span>
           </div>
           <ResponsiveContainer width="100%" height={120}>
-            <LineChart data={data.hourly} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+            <LineChart data={pairData.hourly} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
               <XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#888' }} interval={2} />
               <YAxis tick={{ fontSize: 9, fill: '#888' }} />
               <Tooltip
@@ -285,20 +537,20 @@ export const CompareTab: React.FC<CompareTabProps> = ({
           {oorTotal > 0 && (
             <div style={st.footnote}>
               {[
-                data.out_of_range.a > 0 ? `${data.out_of_range.a} ${labelA}` : null,
-                data.out_of_range.b > 0 ? `${data.out_of_range.b} ${labelB}` : null,
+                pairData.out_of_range.a > 0 ? `${pairData.out_of_range.a} ${labelA}` : null,
+                pairData.out_of_range.b > 0 ? `${pairData.out_of_range.b} ${labelB}` : null,
               ].filter(Boolean).join(' + ')}{' '}
               {oorTotal === 1 ? 'trip' : 'trips'} outside 0–23h excluded.
             </div>
           )}
 
           {/* ── Mode shares ── */}
-          {data.mode_shares.length > 0 && (
+          {pairData.mode_shares.length > 0 && (
             <>
               <div style={{ ...st.sectionTitle, marginTop: 10 }}>Mode shares</div>
               <ResponsiveContainer width="100%" height={100}>
                 <BarChart
-                  data={data.mode_shares.map(r => ({
+                  data={pairData.mode_shares.map(r => ({
                     mode: transportModeLabel(r.mode),
                     modeId: r.mode,
                     a: Math.round(r.a_share * 1000) / 10,
@@ -313,13 +565,13 @@ export const CompareTab: React.FC<CompareTabProps> = ({
                     formatter={(v: number) => `${v}%`}
                   />
                   <Bar dataKey="a" name={labelA}>
-                    {data.mode_shares.map((r, i) => {
+                    {pairData.mode_shares.map((r, i) => {
                       const c = transportModeColor(r.mode);
                       return <Cell key={i} fill={`rgb(${c[0]},${c[1]},${c[2]})`} />;
                     })}
                   </Bar>
                   <Bar dataKey="b" name={labelB}>
-                    {data.mode_shares.map((r, i) => {
+                    {pairData.mode_shares.map((r, i) => {
                       const c = transportModeColor(r.mode);
                       return <Cell key={i} fill={`rgba(${c[0]},${c[1]},${c[2]},0.45)`} />;
                     })}
@@ -330,7 +582,17 @@ export const CompareTab: React.FC<CompareTabProps> = ({
                 <div style={st.divergenceList}>
                   {divergences.map(r => (
                     <div key={r.mode} style={st.divergenceRow}>
-                      <span style={{ flex: 1 }}>{transportModeLabel(r.mode)}</span>
+                      <span style={{ flex: 1 }}>
+                        {transportModeLabel(r.mode)}
+                        {r.p_value !== null && r.p_value < 0.05 && (
+                          <span
+                            style={st.sigStar}
+                            title={`Two-proportion z-test p = ${r.p_value} — shift unlikely to be sampling noise`}
+                          >
+                            *
+                          </span>
+                        )}
+                      </span>
                       <span style={{ color: r.delta_pp > 0 ? colorB : colorA, fontWeight: 600 }}>
                         {r.delta_pp > 0 ? '+' : ''}{r.delta_pp.toFixed(1)} pp
                       </span>
@@ -346,10 +608,10 @@ export const CompareTab: React.FC<CompareTabProps> = ({
 
           {/* ── Distance histogram overlay ── */}
           <div style={{ ...st.sectionTitle, marginTop: 10 }}>Distance distribution (km)</div>
-          {data.distance_hist.length > 0 ? (
+          {pairData.distance_hist.length > 0 ? (
             <ResponsiveContainer width="100%" height={100}>
               <LineChart
-                data={data.distance_hist.map(bk => ({
+                data={pairData.distance_hist.map(bk => ({
                   hi: bk.bucket_hi, a: bk.a, b: bk.b,
                 }))}
                 margin={{ top: 4, right: 4, left: -20, bottom: 0 }}
@@ -370,23 +632,60 @@ export const CompareTab: React.FC<CompareTabProps> = ({
           )}
 
           {/* ── Matched persons (GUFM-vs-PFLOW ground-truth workflow) ── */}
-          {data.matched !== null ? (
+          {pairData.matched !== null ? (
             <>
               <div style={{ ...st.sectionTitle, marginTop: 10 }}>Matched persons</div>
               <div style={st.matchedHeader}>
-                {data.matched.matched_persons.toLocaleString()} persons present in both fleets
+                {pairData.matched.matched_persons.toLocaleString()} persons present in both fleets
               </div>
               <div style={st.matchedStats}>
                 <span>
-                  trips/person: <b style={{ color: colorA }}>{data.matched.trips_per_person_a ?? '—'}</b>
+                  trips/person: <b style={{ color: colorA }}>{pairData.matched.trips_per_person_a ?? '—'}</b>
                   {' vs '}
-                  <b style={{ color: colorB }}>{data.matched.trips_per_person_b ?? '—'}</b>
+                  <b style={{ color: colorB }}>{pairData.matched.trips_per_person_b ?? '—'}</b>
                 </span>
                 <span>
-                  Δ mean {data.matched.delta.mean ?? '—'} · median {data.matched.delta.median ?? '—'}
-                  {' · p90 |Δ| '}{data.matched.delta.p90_abs ?? '—'} · max |Δ| {data.matched.delta.max_abs ?? '—'}
+                  Δ mean {pairData.matched.delta.mean ?? '—'} · median {pairData.matched.delta.median ?? '—'}
+                  {' · p90 |Δ| '}{pairData.matched.delta.p90_abs ?? '—'} · max |Δ| {pairData.matched.delta.max_abs ?? '—'}
                 </span>
+                {pairData.matched.significance && (
+                  <span
+                    title="Wilcoxon signed-rank over per-person trip counts (B vs A)"
+                  >
+                    Wilcoxon p = {pairData.matched.significance.p_value}
+                    {pairData.matched.significance.p_value < 0.05 ? (
+                      <b style={{ color: '#e8c96d' }}> — systematic per-person gap</b>
+                    ) : ' — no consistent direction'}
+                  </span>
+                )}
+                {pairData.matched.alignment.mean !== null && (
+                  <span
+                    title="Rank-paired trips (k-th earliest departure each side) scored on departure-time + distance similarity; 1 = identical"
+                  >
+                    Alignment: mean {pairData.matched.alignment.mean} · median{' '}
+                    {pairData.matched.alignment.median} over{' '}
+                    {pairData.matched.alignment.pairs.toLocaleString()} paired trips
+                  </span>
+                )}
               </div>
+              {pairData.matched.alignment.histogram.some(b => b.count > 0) && (
+                <ResponsiveContainer width="100%" height={54}>
+                  <BarChart
+                    data={pairData.matched.alignment.histogram.map(b => ({
+                      band: `${b.lo.toFixed(1)}`, count: b.count,
+                    }))}
+                    margin={{ top: 2, right: 4, left: -30, bottom: 0 }}
+                  >
+                    <XAxis dataKey="band" tick={{ fontSize: 8, fill: '#777' }} interval={1} />
+                    <YAxis tick={{ fontSize: 8, fill: '#777' }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ background: '#1a1a2e', border: '1px solid #333', fontSize: 11 }}
+                      formatter={(v: number) => [`${v}`, 'persons']}
+                    />
+                    <Bar dataKey="count" fill="#4fc3f7" fillOpacity={0.55} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
               <div style={st.matchedTable}>
                 <div style={{ ...st.matchedRow, ...st.matchedHead }}>
                   <span style={{ flex: 1 }}>person</span>
@@ -395,7 +694,7 @@ export const CompareTab: React.FC<CompareTabProps> = ({
                   <span style={st.numCol}>Δ</span>
                   <span style={{ width: 64 }} />
                 </div>
-                {data.matched.top.map(p => (
+                {pairData.matched.top.map(p => (
                   <div key={p.vehicle_id} style={st.matchedRow}>
                     <span style={{ flex: 1, fontFamily: 'monospace' }}>{p.vehicle_id}</span>
                     <span style={st.numCol}>{p.trips_a}</span>
@@ -407,7 +706,7 @@ export const CompareTab: React.FC<CompareTabProps> = ({
                       onClick={() => followPair(p.vehicle_id)}
                       disabled={!onAddAgent}
                       style={st.followBtn}
-                      title={`Follow ${data.source_a}:${p.vehicle_id} + ${data.source_b}:${p.vehicle_id}`}
+                      title={`Follow ${pairData.source_a}:${p.vehicle_id} + ${pairData.source_b}:${p.vehicle_id}`}
                     >
                       ⚑ Follow pair
                     </button>
@@ -425,6 +724,14 @@ export const CompareTab: React.FC<CompareTabProps> = ({
           <div style={{ ...st.footnote, marginTop: 10 }}>
             Tip: set Color by = Source in the filter panel to see both fleets on the map.
           </div>
+          {gridOn && (
+            <div style={{ ...st.footnote, marginTop: 4 }}>
+              Diff grid on map:{' '}
+              <span style={{ color: '#68aaff' }}>■</span> B-heavier ·{' '}
+              <span style={{ color: '#fd805d' }}>■</span> A-heavier ·
+              opacity = |Δ| (trip starts, {'\u2248'}{(0.005 * 111).toFixed(1)} km cells)
+            </div>
+          )}
         </>
       )}
     </div>
@@ -443,12 +750,26 @@ const st: Record<string, React.CSSProperties> = {
     background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.35)',
     borderRadius: 4, padding: '4px 8px', marginBottom: 8, lineHeight: 1.4,
   },
-  select: {
-    flex: 1, minWidth: 0,
-    background: 'rgba(255,255,255,0.06)', color: '#ddd',
-    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4,
-    padding: '4px 6px', fontSize: 11,
+  insightLine: {
+    fontSize: 11, color: '#d8e6f3',
+    background: 'rgba(79,195,247,0.08)', borderLeft: '3px solid #4fc3f7',
+    borderRadius: 3, padding: '5px 8px', marginBottom: 8, lineHeight: 1.45,
   },
+  insightTag: {
+    fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+    color: '#4fc3f7', marginRight: 4,
+  },
+  chip: {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    background: 'rgba(255,255,255,0.05)', color: '#99a',
+    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 12,
+    padding: '3px 9px', fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  chipOn: {
+    background: 'rgba(79,195,247,0.12)', color: '#ddd',
+    borderWidth: 1, borderStyle: 'solid',
+  },
+  chipOrder: { fontSize: 8, color: '#888', marginLeft: 2 },
   swapBtn: {
     background: 'rgba(79,195,247,0.12)', color: '#4fc3f7',
     border: '1px solid rgba(79,195,247,0.35)', borderRadius: 4,
@@ -488,6 +809,16 @@ const st: Record<string, React.CSSProperties> = {
     fontSize: 10, padding: '1px 0',
   },
   divergenceShares: { color: '#667', fontSize: 9 },
+  multiTable: { width: '100%', borderCollapse: 'collapse', fontSize: 10 },
+  multiTh: {
+    textAlign: 'right', padding: '2px 4px', color: '#889',
+    fontWeight: 600, borderBottom: '1px solid #333', fontSize: 9,
+  },
+  multiTd: {
+    textAlign: 'right', padding: '2px 4px', color: '#99a',
+    borderBottom: '1px solid rgba(255,255,255,0.05)',
+  },
+  sigStar: { color: '#e8c96d', marginLeft: 3, fontWeight: 700 },
   matchedHeader: { fontSize: 11, color: '#ddd', marginBottom: 2 },
   matchedStats: {
     fontSize: 10, color: '#9aa', display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 6,

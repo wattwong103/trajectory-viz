@@ -27,9 +27,13 @@ export interface LayerAvailabilityContext {
   /** overlay results produced this session (Analysis panel / map click) */
   hasClusterResult: boolean;
   hasDrillResult: boolean;
+  /** zone/polygon layers declared in sources.yaml */
+  hasZones: boolean;
   hasODFlows: boolean;
   hasDensity: boolean;
   hasLinkDensity: boolean;
+  /** fleet-comparison grid-diff cells fetched from the ⇄ tab */
+  hasCompareGrid: boolean;
   /** agents followed via the Agents tab */
   hasFollowedAgents: boolean;
   /** POI sources declared in sources.yaml */
@@ -81,6 +85,10 @@ export const LAYER_GROUPS: LayerGroup[] = [
         key: 'linkDensity', label: 'Link density',
         unavailableReason: c => c.hasLinkDensity ? null : 'Run link-density from the Analysis panel first',
       },
+      {
+        key: 'compareGrid', label: 'Fleet diff grid',
+        unavailableReason: c => c.hasCompareGrid ? null : 'Toggle "Show diff on map" from the ⇄ Compare tab first',
+      },
       { key: 'speedSegments', label: 'Speed gradient', unavailableReason: needsTrajectories },
       { key: 'dwellMarkers', label: 'Dwell markers', unavailableReason: needsTrajectories },
       {
@@ -122,6 +130,10 @@ export const LAYER_GROUPS: LayerGroup[] = [
         key: 'footfall', label: 'Footfall (walk density)',
         unavailableReason: c =>
           c.transportModes.includes(0) ? null : 'No walk trips in this dataset',
+      },
+      {
+        key: 'zones', label: 'Zones',
+        unavailableReason: c => c.hasZones ? null : 'No zone layers in this dataset',
       },
       {
         key: 'pois', label: 'POIs',

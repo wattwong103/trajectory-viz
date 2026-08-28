@@ -4,15 +4,55 @@ DuckDB connection manager and schema initialization.
 Provides a singleton connection to the pflow.duckdb analytical database.
 Schema mirrors the exact CSV column formats from TruckTrajectoryWriter.java
 and TaxiTrajectoryWriter.java.
+
+Spatial extension: opt-in via PFLOW_VIZ_SPATIAL=1 (or true/yes/on). When set,
+_init_schema INSTALLs + LOADs duckdb's `spatial` extension so geometry
+predicates (ST_Within etc.) work in ad-hoc SQL and in the
+/api/zones/contains endpoint. Off by default — the base app needs no
+geometry engine, and bbox prefilters cover its own queries.
 """
 
-from pathlib import Path
+import os
 
 import duckdb
 
 from .config import get_viz_db_path
 
 _connection: duckdb.DuckDBPyConnection | None = None
+
+# True when the spatial extension was successfully loaded on this connection.
+_spatial_loaded = False
+
+
+def _wants_spatial() -> bool:
+    """PFLOW_VIZ_SPATIAL opt-in check."""
+    return os.environ.get("PFLOW_VIZ_SPATIAL", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def ensure_spatial(conn) -> bool:
+    """INSTALL + LOAD the spatial extension on this connection.
+
+    Always re-LOADs: extension state is per-connection in duckdb, so a
+    process-level "already loaded" flag would lie for fresh connections.
+    INSTALL/LOAD are both idempotent. Never raises: a missing wheel /
+    offline INSTALL failure degrades to spatial-off (callers must handle
+    the bbox fallback themselves).
+    """
+    global _spatial_loaded
+    try:
+        conn.execute("INSTALL spatial")
+        conn.execute("LOAD spatial")
+        _spatial_loaded = True
+    except Exception:
+        _spatial_loaded = False
+    return _spatial_loaded
+
+
+def spatial_available() -> bool:
+    """Whether ST_* predicates are usable on this connection."""
+    return _spatial_loaded
 
 
 def get_connection() -> duckdb.DuckDBPyConnection:
@@ -27,6 +67,8 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 
 def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """Create tables if they don't exist yet."""
+    if _wants_spatial():
+        ensure_spatial(conn)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS trips (
@@ -172,6 +214,21 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS zones (
+            zone_id      BIGINT  NOT NULL,
+            source_key   VARCHAR NOT NULL,
+            name         VARCHAR,
+            category     VARCHAR,
+            min_lon      DOUBLE,
+            max_lon      DOUBLE,
+            min_lat      DOUBLE,
+            max_lat      DOUBLE,
+            geometry_json VARCHAR NOT NULL,
+            props_json   VARCHAR
+        )
+    """)
+
     # Indexes — without these, filter scans on 4.43M trips / 233M waypoints
     # become full table scans and blow past the p99 budgets (200ms/1s/500ms).
     # DuckDB uses ART for VARCHAR and min-max zone-maps for numeric cols.
@@ -204,6 +261,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         # POI layers (universal-trajectory-support Phase 1)
         "CREATE INDEX IF NOT EXISTS idx_pois_category ON pois(category)",
         "CREATE INDEX IF NOT EXISTS idx_pois_lonlat    ON pois(lon, lat)",
+        # Zones/polygon layers
+        "CREATE INDEX IF NOT EXISTS idx_zones_source ON zones(source_key)",
     ]
     for stmt in _index_statements:
         conn.execute(stmt)
@@ -218,6 +277,7 @@ def reset_db() -> None:
     conn.execute("DROP TABLE IF EXISTS ingest_log")
     conn.execute("DROP TABLE IF EXISTS density_hourly")
     conn.execute("DROP TABLE IF EXISTS pois")
+    conn.execute("DROP TABLE IF EXISTS zones")
     conn.execute("DROP TABLE IF EXISTS viz_meta")
     _init_schema(conn)
 
@@ -287,22 +347,21 @@ def get_table_stats() -> dict:
     return stats
 
 
-from typing import Optional
 
 
 def build_trip_filter(
-    vehicle_type: Optional[str] = None,
-    city: Optional[str] = None,
-    simulation_day: Optional[int] = None,
-    extra: Optional[list[str]] = None,
+    vehicle_type: str | None = None,
+    city: str | None = None,
+    simulation_day: int | None = None,
+    extra: list[str] | None = None,
     *,
-    source_id: Optional[str] = None,
-    transport_modes: Optional[list[int]] = None,
-    min_speed: Optional[float] = None,
-    max_speed: Optional[float] = None,
-    max_dwell_minutes: Optional[float] = None,
-    min_detour_ratio: Optional[float] = None,
-    max_detour_ratio: Optional[float] = None,
+    source_id: str | None = None,
+    transport_modes: list[int] | None = None,
+    min_speed: float | None = None,
+    max_speed: float | None = None,
+    max_dwell_minutes: float | None = None,
+    min_detour_ratio: float | None = None,
+    max_detour_ratio: float | None = None,
 ) -> str:
     """Build a SQL WHERE clause from common trip filters.
 

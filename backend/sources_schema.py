@@ -493,6 +493,59 @@ class PoiConfig(BaseModel):
         return self
 
 
+class ZoneColumnsConfig(BaseModel):
+    """Column mapping for a zone layer. Geometry comes from the GeoJSON
+    coordinates; name/category are optional display attributes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[ColumnSpec] = Field(default=None)
+    category: Optional[ColumnSpec] = Field(default=None)
+
+
+class ZoneConfig(BaseModel):
+    """One static polygon/zone layer (wards, service areas, districts...).
+
+    Ingested into the `zones` table under the `zones:` block key (source_key);
+    served via /api/zones. GeoJSON only — polygons need real geometry.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(description="Human-readable label shown in the dashboard.")
+    glob: str = Field(
+        description="Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching zone files."
+    )
+    format: Optional[FormatType] = Field(
+        default=None,
+        description="Ingest format; auto-detected from extension when omitted.",
+    )
+    columns: ZoneColumnsConfig
+    color: Optional[tuple[int, int, int]] = Field(
+        default=None,
+        description="RGB color triple (0-255 each). Omit for palette fallback.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_color_range(self) -> "ZoneConfig":
+        if self.color is not None:
+            for c in self.color:
+                if not (0 <= c <= 255):
+                    raise ValueError(
+                        f"zones color components must be 0-255, got {self.color}."
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_format_unambiguous(self) -> "ZoneConfig":
+        if self.format is None and Path(self.glob).suffix.lower() == ".json":
+            raise ValueError(
+                f"zones glob {self.glob!r} has a `.json` extension, which is "
+                f"ambiguous (geojson vs ndjson). Set an explicit `format:`."
+            )
+        return self
+
+
 class SourcesFile(BaseModel):
     """Top-level structure of sources.yaml."""
 
@@ -505,6 +558,10 @@ class SourcesFile(BaseModel):
     pois: Optional[dict[str, PoiConfig]] = Field(
         default=None,
         description="Optional map of POI layer key -> PoiConfig.",
+    )
+    zones: Optional[dict[str, ZoneConfig]] = Field(
+        default=None,
+        description="Optional map of zone/polygon layer key -> ZoneConfig.",
     )
     time: Optional[TimeConfig] = Field(
         default=None,
@@ -580,10 +637,12 @@ def load_sources_merged(
     up = load_sources(uploads)
     sources = {**base.sources, **up.sources}
     pois = {**(base.pois or {}), **(up.pois or {})}
+    zones = {**(base.zones or {}), **(up.zones or {})}
     return SourcesFile.model_construct(
         version=base.version,
         sources=sources,
         pois=pois or None,
+        zones=zones or None,
         time=base.time or up.time,
     )
 
@@ -620,6 +679,8 @@ def dryrun_discovery(sources: SourcesFile, output_root: Path) -> dict[str, int]:
         counts[key] = n
     for key, poi in (sources.pois or {}).items():
         counts[f"poi:{key}"] = len(glob(str(output_root / poi.glob)))
+    for key, zone in (sources.zones or {}).items():
+        counts[f"zone:{key}"] = len(glob(str(output_root / zone.glob)))
     return counts
 
 
@@ -735,6 +796,13 @@ pois:
       category: { derived: "'station'" }
       lon:      { csv: _lon,     type: double }
       lat:      { csv: _lat,     type: double }
+zones:
+  wards:
+    label: "Service Wards"
+    glob: "zones/wards.geojson"
+    color: [120, 200, 160]
+    columns:
+      name:     { csv: name,     type: varchar }
 """
 
 
@@ -766,6 +834,10 @@ def _cli_validate(path: str) -> int:
         print(f"POI layers ({len(sources.pois)}):")
         for key, poi in sources.pois.items():
             print(f"  {key:25} {poi.label!r}")
+    if sources.zones:
+        print(f"Zone layers ({len(sources.zones)}):")
+        for key, zone in sources.zones.items():
+            print(f"  {key:25} {zone.label!r}")
     return 0
 
 

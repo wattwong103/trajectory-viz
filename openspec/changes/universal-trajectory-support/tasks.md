@@ -24,5 +24,27 @@
 
 ## Phase 3+ (future changes)
 
-- Polygons/zones, upload UI, streaming, pyarrow fast paths, spatial extension
-  opt-in, multi-day playback, POI sprites
+- ~~Polygons/zones~~ — SHIPPED: `zones:` block in sources.yaml (GeoJSON
+  Polygon/MultiPolygon), `zones` table + `/api/zones` + `/api/zones/contains`
+  (ST_Under exact with PFLOW_VIZ_SPATIAL=1, bbox fallback), frontend
+  PolygonLayer + Layers-panel toggle. See docs/DATA_FORMATS.md §6.7.
+- ~~Upload UI~~ — shipped as the `upload-and-go` change.
+- ~~Spatial extension opt-in~~ — SHIPPED: `PFLOW_VIZ_SPATIAL=1` loads duckdb
+  `spatial` at schema init (`db.ensure_spatial`, per-connection LOAD, never
+  raises); powers `/api/zones/contains` exact mode.
+- ~~POI sprites~~ — SHIPPED: category→glyph mapping + runtime canvas sprite
+  atlas (`frontend/src/poiSprites.ts`); MapView renders an IconLayer when the
+  atlas builds, dot fallback in canvas-less environments.
+- Multi-day playback — DEFERRED: touches the animation core
+  (useAnimation/TimeSlider/day-offset interpolation) but no multi-day dataset
+  exists to verify against (GUFM DB has simulation_days=[0] only). Revisit
+  when a multi-day source is available.
+- ~~Streaming parser~~ — SHIPPED: GeoJSON FeatureCollections stream via
+  optional `ijson` (`pip install ".[speed]"`), one-feature peak memory;
+  GPX/NDJSON already streamed; whole-doc fallback kept for bare Features.
+- ~~Pyarrow fast paths~~ — RESOLVED OBSOLETE: csv/parquet ingest reads
+  natively through DuckDB (`read_csv`/`read_parquet`, staged count 0), and
+  the upload sniffer samples parquet the same way. There is no Python-side
+  row loop for pyarrow to accelerate; adding it would be a dependency with
+  no win.
+- ~~Upload UI~~ — shipped as the `upload-and-go` change.

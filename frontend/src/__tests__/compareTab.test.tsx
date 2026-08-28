@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { CompareTab, formatDelta, fmtClock } from '../components/CompareTab';
+import { CompareTab, compareInsight, formatDelta, fmtClock } from '../components/CompareTab';
 import type { CompareResponse, SourceStyle } from '../types';
 
 // jsdom lacks ResizeObserver, which recharts' ResponsiveContainer requires.
@@ -35,7 +35,7 @@ const RESP: CompareResponse = {
   fleet_a: { trips: 4400, vehicles: 400, vkt_km: 2676.9, avg_distance_km: 0.608, median_distance_km: 0.0, max_distance_km: 53.879, min_starttime: 19800, max_starttime: 82800 },
   fleet_b: { trips: 870, vehicles: 400, vkt_km: 5432.1, avg_distance_km: 6.244, median_distance_km: 5.1, max_distance_km: 61.2, min_starttime: 21600, max_starttime: 79200 },
   mode_shares: [
-    { mode: 4, a_trips: 4260, a_share: 0.968, b_trips: 6, b_share: 0.007, delta_pp: -96.13 },
+    { mode: 4, a_trips: 4260, a_share: 0.968, b_trips: 6, b_share: 0.007, delta_pp: -96.13, p_value: 0.0 },
   ],
   hourly: Array.from({ length: 24 }, (_, h) => ({ hour: h, a: h === 23 ? 1705 : 0, b: h === 7 ? 300 : 0 })),
   out_of_range: { a: 0, b: 1 },
@@ -50,8 +50,50 @@ const RESP_MATCHED: CompareResponse = {
     trips_per_person_a: 11.0,
     trips_per_person_b: 2.175,
     delta: { mean: -8.825, median: -9.0, p90_abs: 10.0, max_abs: 10 },
+    significance: { statistic: 12.0, p_value: 0.000001, n_pairs: 400 },
+    alignment: {
+      persons: 400,
+      pairs: 2200,
+      mean: 0.412,
+      median: 0.398,
+      histogram: [
+        { lo: 0, hi: 0.1, count: 12 }, { lo: 0.1, hi: 0.2, count: 30 },
+        { lo: 0.9, hi: 1, count: 88 },
+      ],
+    },
     top: [{ vehicle_id: 240903, trips_a: 11, trips_b: 1, delta: -10 }],
   },
+};
+
+// Three-fleet rollup (compare-multi): dynamic per-source keys.
+const RESP_MULTI = {
+  sources: ['gufm', 'pflow', 'bus'],
+  fleets: [
+    { source_id: 'gufm', trips: 4400, vehicles: 400, vkt_km: 2676.9, avg_distance_km: 0.608, median_distance_km: 0.0, max_distance_km: 53.9, min_starttime: 19800, max_starttime: 82800 },
+    { source_id: 'pflow', trips: 870, vehicles: 400, vkt_km: 5432.1, avg_distance_km: 6.244, median_distance_km: 5.1, max_distance_km: 61.2, min_starttime: 21600, max_starttime: 79200 },
+    { source_id: 'bus', trips: 120, vehicles: 12, vkt_km: 900.0, avg_distance_km: 7.5, median_distance_km: 7.0, max_distance_km: 20.0, min_starttime: 18000, max_starttime: 80000 },
+  ],
+  hourly: Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    gufm: h === 23 ? 1705 : 10,
+    pflow: h === 7 ? 300 : 5,
+    bus: h === 8 ? 40 : 2,
+  })),
+  out_of_range: { gufm: 0, pflow: 1, bus: 0 },
+  mode_shares: [
+    {
+      mode: 4,
+      gufm: { trips: 4260, share: 0.968 },
+      pflow: { trips: 6, share: 0.007 },
+      bus: { trips: 0, share: 0.0 },
+    },
+    {
+      mode: 3,
+      gufm: { trips: 140, share: 0.032 },
+      pflow: { trips: 864, share: 0.993 },
+      bus: { trips: 120, share: 1.0 },
+    },
+  ],
 };
 
 function fetchCalls(): string[] {
@@ -74,6 +116,56 @@ function renderTab(overrides: Partial<React.ComponentProps<typeof CompareTab>> =
 }
 
 describe('CompareTab', () => {
+  describe('compareInsight', () => {
+    it('leads with the matched-person gap when present and material', () => {
+      const text = compareInsight(RESP_MATCHED, 'GUFM', 'PFLOW');
+      expect(text).toContain('400 shared persons');
+      expect(text).toContain('fewer trips/person (11 vs 2.175)');
+    });
+
+    it('falls back to the largest mode-share swing ≥ 1 pp', () => {
+      const text = compareInsight(RESP, 'GUFM', 'PFLOW');
+      expect(text).toMatch(/Train share differs by 96\.1 pp — GUFM heavier/);
+    });
+
+    it('falls back to peak-hour mismatch when modes are quiet', () => {
+      const noModes: CompareResponse = { ...RESP, mode_shares: [] };
+      const text = compareInsight(noModes, 'GUFM', 'PFLOW');
+      expect(text).toContain('diverge most at 23:00');
+      expect(text).toContain('GUFM runs 1,705 more');
+    });
+
+    it('returns null when fleets are near-identical', () => {
+      const flat: CompareResponse = {
+        ...RESP,
+        mode_shares: [{ mode: 4, a_trips: 100, a_share: 0.5, b_trips: 100, b_share: 0.5, delta_pp: 0, p_value: 1 }],
+        hourly: Array.from({ length: 24 }, (_, h) => ({ hour: h, a: 10, b: 10 })),
+        matched: null,
+      };
+      expect(compareInsight(flat, 'A', 'B')).toBeNull();
+    });
+  });
+
+  it('surfaces significance markers and the Wilcoxon line', async () => {
+    renderTab();
+    await screen.findByText('4,400');
+    // Mode-share star (p < 0.05) with tooltip.
+    expect(screen.getByTitle(/Two-proportion z-test/)).toBeInTheDocument();
+  });
+
+  it('matched block shows the Wilcoxon verdict when present', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => RESP_MATCHED,
+    } as Response)));
+    renderTab();
+    await screen.findByText(/present in both fleets/);
+    expect(screen.getByText(/Wilcoxon p = /)).toBeInTheDocument();
+    expect(screen.getByText(/systematic per-person gap/)).toBeInTheDocument();
+    // Alignment line + histogram render from the matched block.
+    expect(screen.getByText(/Alignment: mean 0\.412 · median 0\.398 over 2,200 paired trips/)).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -120,14 +212,64 @@ describe('CompareTab', () => {
     expect(url).toContain('source_b=gufm');
   });
 
-  it('same-source selection shows the hint instead of firing a 422', async () => {
+  it('F1 ranges ride along symmetrically when set', async () => {
+    renderTab({
+      minSpeed: 5, maxSpeed: 60, maxDwellMinutes: 30,
+      minDetourRatio: 1.2, maxDetourRatio: 3.5,
+    });
+    await screen.findByText('4,400');
+    const url = fetchCalls()[0];
+    expect(url).toContain('min_speed=5');
+    expect(url).toContain('max_speed=60');
+    expect(url).toContain('max_dwell_minutes=30');
+    expect(url).toContain('min_detour_ratio=1.2');
+    expect(url).toContain('max_detour_ratio=3.5');
+  });
+
+  it('chips toggle a third fleet into the multi view', async () => {
     renderTab();
     await screen.findByText('4,400');
-    const [, selectB] = screen.getAllByRole('combobox');
-    fireEvent.change(selectB, { target: { value: 'gufm' } });
-    expect(screen.getByText(/Pick two different sources/)).toBeInTheDocument();
-    // No second request — the guard preempts the backend's 422.
+    // Re-stub for the multi response — this also resets the call log.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => RESP_MULTI,
+    } as Response)));
+    fireEvent.click(screen.getByRole('button', { name: /City Buses/ }));
+    await screen.findByRole('columnheader', { name: 'City Buses' });
+    const url = fetchCalls()[0];
+    expect(url).toContain('/api/analysis/compare-multi?');
+    expect(url).toContain('sources=gufm%2Cpflow%2Cbus');
+  });
+
+  it('removing below two fleets is blocked', async () => {
+    renderTab();
+    await screen.findByText('4,400');
+    fireEvent.click(screen.getByRole('button', { name: /^GUFM/ }));
+    // Min-two guard: no refetch, pairwise view (delta chip) still rendered.
     expect(fetchCalls()).toHaveLength(1);
+    expect(screen.getByText('−3,530')).toBeInTheDocument();
+  });
+
+  it('grid-diff toggle fetches the grid and clears when switched off', async () => {
+    const onCompareGrid = vi.fn();
+    renderTab({ onCompareGrid });
+    await screen.findByText('4,400');
+    // Multi-fetch stub: first call (grid) returns a tiny cell set.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () => url.includes('/compare/grid')
+          ? { cell_deg: 0.005, cells: [{ lon: 139.0, lat: 35.0, count_a: 8, count_b: 6, delta: -2 }] }
+          : RESP,
+      } as Response;
+    }));
+    fireEvent.click(screen.getByRole('button', { name: /Diff on map/i }));
+    await waitFor(() => expect(onCompareGrid).toHaveBeenCalledWith(
+      expect.objectContaining({ cell_deg: 0.005 }),
+    ));
+    fireEvent.click(screen.getByRole('button', { name: /Diff on map/i }));
+    await waitFor(() => expect(onCompareGrid).toHaveBeenLastCalledWith(null));
   });
 
   it('needs at least two sources', () => {

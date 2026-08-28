@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .analysis import clustering, compare, od_flows, spatial, temporal, trip_chains
-from .routers import buildings, ingest_api, pois, stats, trajectories, trips
+from .routers import buildings, ingest_api, pois, stats, trajectories, trips, zones
 
 app = FastAPI(
     title="trajectory-viz API",
@@ -41,6 +41,8 @@ app.include_router(trajectories.router, prefix="/api", tags=["trajectories"])
 app.include_router(buildings.router, prefix="/api", tags=["buildings"])
 # Universal-trajectory-support Phase 1: static POI layers
 app.include_router(pois.router, prefix="/api", tags=["pois"])
+# Zones/polygon layers
+app.include_router(zones.router, prefix="/api", tags=["zones"])
 # Upload-and-go: drag-and-drop ingest
 app.include_router(ingest_api.router, prefix="/api/ingest", tags=["ingest"])
 

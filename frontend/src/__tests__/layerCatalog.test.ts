@@ -14,8 +14,9 @@ import {
 // update both — this test failing is the prompt.
 const DEFAULT_LAYER_VIS_KEYS = [
   'origins', 'destinations', 'trajectories', 'odFlows', 'density',
-  'linkDensity', 'clusters', 'drill', 'speedSegments', 'dwellMarkers',
-  'agents', 'sourceArcs', 'pulse', 'buildings', 'footfall', 'pois',
+  'linkDensity', 'compareGrid', 'clusters', 'drill', 'speedSegments',
+  'dwellMarkers', 'agents', 'sourceArcs', 'pulse', 'buildings', 'footfall',
+  'pois', 'zones',
 ];
 
 function ctx(overrides: Partial<LayerAvailabilityContext> = {}): LayerAvailabilityContext {
@@ -30,8 +31,10 @@ function ctx(overrides: Partial<LayerAvailabilityContext> = {}): LayerAvailabili
     hasODFlows: true,
     hasDensity: true,
     hasLinkDensity: true,
+    hasCompareGrid: true,
     hasFollowedAgents: true,
     hasPois: true,
+    hasZones: true,
     ...overrides,
   };
 }

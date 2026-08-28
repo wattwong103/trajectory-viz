@@ -184,6 +184,10 @@ Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-
 
 **POIs** — **`/api/pois`**, **`/api/pois/categories`** (static POI layers)
 
+**Zones** — **`/api/zones`** (polygon layers from `sources.yaml`'s `zones:` block), **`/api/zones/contains?lon=&lat=`** (point-in-zone lookup; exact ST_Within with `PFLOW_VIZ_SPATIAL=1`, bbox fallback otherwise)
+
+**Fleet comparison** — **`/api/analysis/compare`** (deep A/B: matched persons, Wilcoxon, alignment), **`/api/analysis/compare-multi`** (2–4 fleets), **`/api/analysis/compare/grid`** (map diff layer)
+
 **Trips** — `/api/trips/sample`, `POST /api/trips/query` (with F1 dims)
 
 **Trajectories** (DeckGL TripsLayer-ready path + timestamps; F3 segments opt-in via `?include_segments=true`):

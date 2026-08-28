@@ -31,6 +31,7 @@ import {
   type LinkDensityItem, type MultiStopVehicle,
   type RouteSimilarityResponse,
 } from '../api';
+import type { CompareGridResponse } from '../types';
 import { AgentTab } from './AgentTab';
 import { CompareTab } from './CompareTab';
 
@@ -71,6 +72,8 @@ interface AnalysisPanelProps {
   onDensity: (points: DensityPoint[]) => void;
   onClusters: (result: ClusterResult | null) => void;
   onLinkDensity: (links: LinkDensityItem[]) => void;
+  /** Fleet-comparison grid-diff toggle (⇄ tab) — null clears the overlay. */
+  onCompareGrid?: (grid: CompareGridResponse | null) => void;
   // Sprint A1a — Trajectory Details
   selectedTrajectory?: Trajectory | null;
   onClearSelectedTrajectory?: () => void;
@@ -94,6 +97,12 @@ interface AnalysisPanelProps {
   sources?: SourceStyle[];
   transportModes?: number[];
   scenario?: FilterState['scenario'];
+  // F1 ranges forwarded to the ⇄ tab (symmetric across both fleets).
+  minSpeed?: number;
+  maxSpeed?: number;
+  maxDwellMinutes?: number;
+  minDetourRatio?: number;
+  maxDetourRatio?: number;
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -325,13 +334,14 @@ const SkeletonLines: React.FC = () => (
 export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   vehicleType, city, simulationDay, goodsType, minHour, maxHour,
   hasData, insights, insightsLoading,
-  onODFlows, onDensity, onClusters, onLinkDensity,
+  onODFlows, onDensity, onClusters, onLinkDensity, onCompareGrid,
   selectedTrajectory, onClearSelectedTrajectory,
   zoneBBox, zoneTrips, onZoneResult, onClearZone,
   scenarioActive = false, onPedestrianize, onClearScenario,
   selectedAgents = [], agentLoading = false,
   onAddAgent, onRemoveAgent, onClearAgents,
   sources = [], transportModes, scenario,
+  minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -1260,9 +1270,15 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             goodsType={goodsType}
             minHour={minHour}
             maxHour={maxHour}
+            minSpeed={minSpeed}
+            maxSpeed={maxSpeed}
+            maxDwellMinutes={maxDwellMinutes}
+            minDetourRatio={minDetourRatio}
+            maxDetourRatio={maxDetourRatio}
             transportModes={transportModes}
             scenario={scenario}
             onAddAgent={onAddAgent}
+            onCompareGrid={onCompareGrid}
           />
         )}
 

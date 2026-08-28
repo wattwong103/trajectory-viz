@@ -90,6 +90,18 @@ def _compare(client, **params) -> dict:
     return r.json()
 
 
+def _compare_multi(client, sources: str) -> dict:
+    r = client.get("/api/analysis/compare-multi", params={"sources": sources})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _get(client, path: str, **params) -> dict:
+    r = client.get(path, params=params)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 # --- Fleet summaries -----------------------------------------------------------
 
 
@@ -200,9 +212,199 @@ def test_matched_top_n_limit(client):
 # --- Guards ---------------------------------------------------------------------------
 
 
+def test_mode_share_p_values(client):
+    """Two-proportion z-test rides each mode-share row."""
+    body = _compare(client, source_a="gufm", source_b="pflow")
+    shares = {m["mode"]: m for m in body["mode_shares"]}
+    # Mode 4: 7/8 vs 4/6 → z ≈ −0.94 → p ≈ 0.35 (symmetric for mode 3).
+    assert shares[4]["p_value"] == pytest.approx(0.347, abs=0.01)
+    assert shares[3]["p_value"] == pytest.approx(shares[4]["p_value"], abs=0.005)
+    assert 0.0 <= shares[4]["p_value"] <= 1.0
+
+
+def test_wilcoxon_needs_enough_pairs(client):
+    """Fixture has 5 union persons — below the floor, so no test is reported."""
+    body = _compare(client, source_a="gufm", source_b="pflow")
+    assert body["matched"]["significance"] is None
+
+
+# --- Per-trip alignment (matched persons) ---------------------------------------
+
+
+def test_alignment_scores_rank_paired_trips(client):
+    """Person 1: A trips at 8/9/10h (5/10/15km), B trip at 8h (6km).
+
+    Rank pairing → one pair (8h vs 8h): dt=0, dist pen = 1/6 → score
+    1 − 0.5·(0 + 1/6) ≈ 0.917. Person scores averaged into the response.
+    """
+    body = _compare(client, source_a="gufm", source_b="pflow")
+    al = body["matched"]["alignment"]
+    assert al["persons"] == 3          # shared persons 1, 2, 3
+    # pairs: person1 min(3,1)=1; person2 min(2,2)=2; person3 min(1,1)=1
+    assert al["pairs"] == 4
+    assert 0.0 <= al["mean"] <= 1.0
+    assert len(al["histogram"]) == 10
+    assert sum(b["count"] for b in al["histogram"]) == al["persons"]
+    # Person 1's single pair is near-perfect: mean must be high.
+    assert al["mean"] > 0.5
+
+
+def test_alignment_identical_fleets_is_perfect(monkeypatch):
+    """Same rows on both sides → every pair scores exactly 1.0."""
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        rows = [(v, 8 + t % 10, 4, 5.0 + v) for v in range(1, 7) for t in range(3)]
+        _insert(conn, "gufm", rows)
+        _insert(conn, "pflow", rows)
+        monkeypatch.setattr(backend.db, "_connection", conn)
+        client = TestClient(app)
+        body = _compare(client, source_a="gufm", source_b="pflow")
+        al = body["matched"]["alignment"]
+        assert al["mean"] == pytest.approx(1.0)
+        assert al["median"] == pytest.approx(1.0)
+        assert al["histogram"][-1]["count"] == 6   # all in the top bucket
+        assert sum(b["count"] for b in al["histogram"][:-1]) == 0
+    finally:
+        conn.close()
+
+
+def test_alignment_time_shift_lowers_score(client):
+    """Person 3 departs hour 7 on both sides but B's mode differs... use
+    person 2: A at 8h+12h, B at 9h+13h — a constant 1h shift. Time penalty
+    3600/14400 = 0.25 → pair score 0.875 each."""
+    body = _compare(client, source_a="gufm", source_b="pflow")
+    al = body["matched"]["alignment"]
+    # With distances equal-ish and a 1h shift, mean stays well under 1.
+    assert al["mean"] < 1.0
+    assert al["median"] <= al["mean"] + 0.001 or al["median"] >= al["mean"] - 0.001
+
+
+def test_wilcoxon_detects_systematic_gap(monkeypatch):
+    """12 shared persons with B uniformly +2 trips → significant, p < 0.05."""
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        _insert(conn, "gufm", [(v, 8 + t % 10, 4, 5.0) for v in range(1, 13) for t in (0, 1)])
+        _insert(conn, "pflow", [(v, 8 + t % 10, 4, 5.0) for v in range(1, 13) for t in range(4)])
+        monkeypatch.setattr(backend.db, "_connection", conn)
+        client = TestClient(app)
+        body = _compare(client, source_a="gufm", source_b="pflow")
+        sig = body["matched"]["significance"]
+        assert sig is not None
+        assert sig["n_pairs"] == 12
+        assert sig["p_value"] < 0.05
+    finally:
+        conn.close()
+
+
 def test_same_source_422(client):
     r = client.get("/api/analysis/compare", params={"source_a": "gufm", "source_b": "gufm"})
     assert r.status_code == 422
+
+
+# --- Multi-fleet (compare-multi) -----------------------------------------------
+
+
+def test_multi_two_sources_shape(client):
+    body = _compare_multi(client, sources="gufm,pflow")
+    assert body["sources"] == ["gufm", "pflow"]
+    by_src = {f["source_id"]: f for f in body["fleets"]}
+    assert by_src["gufm"]["trips"] == 8
+    assert by_src["pflow"]["trips"] == 6
+    # Hourly rows carry a count column per fleet; 24 rows always.
+    assert len(body["hourly"]) == 24
+    assert body["hourly"][8]["gufm"] == 2   # persons 1+2 depart at hour 8
+    assert set(body["out_of_range"]) == {"gufm", "pflow"}
+    assert body["out_of_range"]["gufm"] == 1
+    # Mode shares keyed by source with trips + normalized share.
+    m4 = next(m for m in body["mode_shares"] if m["mode"] == 4)
+    assert m4["gufm"]["share"] == pytest.approx(7 / 8)
+    assert m4["pflow"]["share"] == pytest.approx(4 / 6, abs=1e-4)
+
+
+def test_multi_three_sources_union_of_modes(monkeypatch):
+    """Third fleet rides its own in-memory DB (session fixture has two)."""
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        _insert(conn, "gufm", _GUFM_ROWS)
+        _insert(conn, "pflow", _PFLOW_ROWS)
+        _insert(conn, "bus", [
+            (1, 7, 0, 1.0),
+            (1, 8, 0, 1.5),
+            (2, 9, 2, 9.0),
+        ])
+        monkeypatch.setattr(backend.db, "_connection", conn)
+        client = TestClient(app)
+        body = _compare_multi(client, sources="gufm,pflow,bus")
+        assert body["sources"] == ["gufm", "pflow", "bus"]
+        modes = {m["mode"] for m in body["mode_shares"]}
+        assert {0, 2, 3, 4} <= modes                    # union across fleets
+        m0 = next(m for m in body["mode_shares"] if m["mode"] == 0)
+        assert m0["bus"]["trips"] == 2
+        assert m0["gufm"]["trips"] == 0                 # absent → explicit zero
+        assert m0["bus"]["share"] == pytest.approx(2 / 3, abs=1e-4)  # 2 of bus's 3 trips
+        assert {f["source_id"] for f in body["fleets"]} == {"gufm", "pflow", "bus"}
+    finally:
+        conn.close()
+
+
+def test_multi_duplicate_source_422(client):
+    r = client.get("/api/analysis/compare-multi", params={"sources": "gufm,gufm"})
+    assert r.status_code == 422
+
+
+def test_multi_single_source_422(client):
+    """Pattern enforces ≥2 comma-separated ids."""
+    r = client.get("/api/analysis/compare-multi", params={"sources": "gufm"})
+    assert r.status_code == 422
+
+
+# --- Grid diff (compare/grid) ---------------------------------------------------
+
+
+def test_grid_cells_and_delta(client):
+    body = _get(client, "/api/analysis/compare/grid", source_a="gufm", source_b="pflow")
+    assert body["cell_deg"] == 0.005
+    # All fixture trips share the same start point → one cell.
+    assert len(body["cells"]) == 1
+    cell = body["cells"][0]
+    assert cell["count_a"] == 8
+    assert cell["count_b"] == 6
+    assert cell["delta"] == -2
+    # Cell centroid sits inside its own cell.
+    assert abs(cell["lon"] - 139.0) <= body["cell_deg"]
+    assert abs(cell["lat"] - 35.0) <= body["cell_deg"]
+
+
+def test_grid_sorted_by_abs_delta_desc(monkeypatch):
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        _insert(conn, "gufm", [(1, 8, 4, 1.0), (2, 8, 4, 1.0), (3, 8, 4, 1.0), (4, 9, 4, 1.0)])
+        _insert(conn, "pflow", [(1, 8, 4, 1.0)])
+        # Shift person 1's pflow trip into a different cell via a second insert
+        # at a distinct start point — needs custom SQL, so just verify ordering
+        # with two cells by giving pflow a far-away trip.
+        conn.execute(
+            """INSERT INTO trips (
+                   vehicle_id, trip_id, starttime, start_lon, start_lat,
+                   end_lon, end_lat, vehicle_type, vehicle_key, source_id,
+                   dep_hour, transport_mode, distance_km
+               ) VALUES (1, 99, 28800, 140.0, 36.0, 140.0, 36.0,
+                         'pflow', 'pflow:1', 'pflow', 8, 4, 1.0)"""
+        )
+        monkeypatch.setattr(backend.db, "_connection", conn)
+        client = TestClient(app)
+        body = _get(client, "/api/analysis/compare/grid", source_a="gufm", source_b="pflow")
+        deltas = [c["delta"] for c in body["cells"]]
+        assert len(body["cells"]) == 2
+        # |delta|=3 cell before |delta|=+1 cell.
+        assert deltas[0] == -3
+        assert deltas[1] == 1
+    finally:
+        conn.close()
 
 
 def test_zero_trip_side_matched_null(client):

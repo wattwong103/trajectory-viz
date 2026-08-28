@@ -163,6 +163,39 @@ def test_lines_geojson_no_coord_times_prop_declared():
     assert all(r["_time_ms"] is None for r in bus1)
 
 
+# --- GeoJSON streaming path (ijson) ---------------------------------------------
+
+
+def test_streaming_rows_identical_to_whole_doc(monkeypatch):
+    """ijson streaming and whole-doc fallback produce identical rows."""
+    import backend.formats as formats
+
+    for name, kwargs in [
+        ("points.geojson", {}),
+        ("lines.geojson", {"coord_times_prop": "coordTimes"}),
+    ]:
+        streamed = list(normalize_geojson(FIXTURES / name, **kwargs))
+        monkeypatch.setattr(formats, "_HAS_IJSON", False)
+        fallback = list(normalize_geojson(FIXTURES / name, **kwargs))
+        monkeypatch.undo()
+        assert streamed == fallback
+
+
+def test_bare_feature_takes_fallback_path(tmp_path):
+    """A root-level Feature (no 'features' key) still parses via fallback."""
+    doc = {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [139.5, 35.5]},
+        "properties": {"vehicle": "solo"},
+    }
+    p = tmp_path / "bare.feature.geojson"
+    p.write_text(json.dumps(doc))
+    rows = list(normalize_geojson(p))
+    assert len(rows) == 1
+    assert rows[0]["_lon"] == 139.5
+    assert rows[0]["_seq"] == 0
+
+
 # --- GPX ------------------------------------------------------------------------
 
 

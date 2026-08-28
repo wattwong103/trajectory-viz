@@ -267,7 +267,26 @@ are re-ingested idempotently per layer, and are served via `/api/pois` +
 `/api/pois/categories`. Remaining source properties ride along in
 `props_json` and surface in the `props` field of `/api/pois`.
 
-### 6.7 Absolute time (top-level anchor)
+### 6.7 Zone / polygon layer
+
+```yaml
+zones:
+  wards:
+    label: "Service Wards"
+    glob: "zones/*.geojson"          # GeoJSON Polygon / MultiPolygon
+    color: [120, 200, 160]           # optional render hint
+    columns:
+      name:     { csv: name,     type: varchar }   # optional
+      category: { csv: category, type: varchar }   # optional
+```
+
+Zones ingest into the `zones` table (bbox precomputed per feature), render
+as translucent map fills via the Layers panel's **Zones** toggle, and serve
+`/api/zones` + `/api/zones/contains?lon=&lat=` point lookups. With
+`PFLOW_VIZ_SPATIAL=1`, contains uses exact ST_Within (holes honored);
+without it, a bbox approximation. See Known limits.
+
+### 6.8 Absolute time (top-level anchor)
 
 ```yaml
 time:
@@ -321,8 +340,17 @@ DB** — your hand-written `sources.yaml` is never modified.
 
 ## Known limits (Phase 3+)
 
-- Geometry types beyond Point/LineString (polygons, zones) are rejected.
-- GeoJSON parsing uses whole-file `json.load` (staging keeps post-parse memory
-  flat; a streaming parser is future work).
+- Geometry types beyond Point/LineString are rejected for trajectory sources.
+  Polygon layers have a dedicated path: declare them under `zones:` (GeoJSON
+  Polygon/MultiPolygon, same `columns:` mapping style as POIs) and they ingest
+  into the `zones` table, render as translucent map fills, and answer
+  `/api/zones/contains` point lookups. Set `PFLOW_VIZ_SPATIAL=1` to make that
+  lookup exact (duckdb `spatial` extension, ST_Within with hole support)
+  instead of the default bbox approximation.
+- GeoJSON FeatureCollections stream feature-by-feature when the optional
+  `ijson` package is installed (`pip install "trajectory-viz[speed]"`), giving
+  one-feature peak memory regardless of file size. Without it, ingest falls
+  back to whole-file `json.load` — same rows, higher peak memory. GPX
+  (`iterparse`) and NDJSON (line-by-line) always stream.
 - `.json` files always need an explicit `format:` declaration (the upload path
   content-sniffs them instead — section 7).
