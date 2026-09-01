@@ -67,3 +67,6 @@ exports/
 *%date%*
 H[:]Dropbox*
 .e2e_db
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
