@@ -272,6 +272,28 @@ describe('CompareTab', () => {
     await waitFor(() => expect(onCompareGrid).toHaveBeenLastCalledWith(null));
   });
 
+  it('grid-diff resolution selector refetches at the chosen cell size', async () => {
+    const onCompareGrid = vi.fn();
+    renderTab({ onCompareGrid });
+    await screen.findByText('4,400');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () => url.includes('/compare/grid')
+          ? { cell_deg: 0.01, cells: [] }
+          : RESP,
+      } as Response;
+    }));
+    fireEvent.click(screen.getByRole('button', { name: /Diff on map/i }));
+    await screen.findByLabelText('Grid-diff cell size');
+    fireEvent.change(screen.getByLabelText('Grid-diff cell size'), { target: { value: '0.01' } });
+    await waitFor(() => {
+      const urls = vi.mocked(fetch).mock.calls.map(c => String(c[0]));
+      expect(urls.some(u => u.includes('cell_deg=0.01'))).toBe(true);
+    });
+  });
+
   it('needs at least two sources', () => {
     renderTab({ sources: [SOURCES[0]] });
     expect(screen.getByText(/needs at least two sources/)).toBeInTheDocument();

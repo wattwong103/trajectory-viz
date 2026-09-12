@@ -75,6 +75,54 @@ zones:
         load_sources(str(p))
 
 
+def test_zone_config_rejects_derived_columns(tmp_path):
+    """derived:/transform: can't run on the zones' pure-Python ingest path —
+    validation must fail loudly instead of silently dropping the mapping."""
+    p = tmp_path / "derived.yaml"
+    p.write_text("""
+version: 1
+sources: {}
+zones:
+  x:
+    label: "X"
+    glob: "z.geojson"
+    columns:
+      name: { derived: "'fixed'" }
+""")
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="plain `csv:`"):
+        load_sources(str(p))
+
+
+def test_zones_merge_and_dryrun(tmp_path):
+    """Uploads-registry merge path carries zones; dryrun reports zone: keys."""
+    from backend.sources_schema import dryrun_discovery, load_sources_merged
+
+    base = tmp_path / "base.yaml"
+    up = tmp_path / "up.yaml"
+    base.write_text("""
+version: 1
+sources: {}
+zones:
+  a:
+    label: "A"
+    glob: "a.geojson"
+    columns: {}
+""")
+    up.write_text("""
+version: 1
+sources: {}
+zones:
+  b:
+    label: "B"
+    glob: "b.geojson"
+    columns: {}
+""")
+    merged = load_sources_merged(base, up)
+    assert sorted(merged.zones or {}) == ["a", "b"]
+    assert dryrun_discovery(merged, tmp_path) == {"zone:a": 0, "zone:b": 0}
+
+
 # --- Polygon extraction ------------------------------------------------------------
 
 
@@ -164,6 +212,55 @@ def test_zones_endpoint_source_filter_and_bad_bbox(client):
     assert r.status_code == 422
 
 
+def test_zone_styles_endpoint(client):
+    """Render hints come from the sources registry (label; color may be null)."""
+    body = client.get("/api/zones/styles").json()
+    assert "styles" in body
+
+
+def test_zone_styles_degrades_without_registry(client, monkeypatch):
+    """Unusable sources.yaml → {} styles, endpoint still 200."""
+    import backend.sources_schema as schema_mod
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("no registry")
+    # _zone_styles imports load_sources_merged lazily from sources_schema,
+    # so the patch belongs on that module.
+    monkeypatch.setattr(schema_mod, "load_sources_merged", _boom)
+    body = client.get("/api/zones/styles").json()
+    assert body == {"styles": {}}
+
+
+def test_zones_skips_unparseable_geometry(client, zone_db):
+    """Corrupt geometry_json rows are skipped, not fatal to the response."""
+    conn, _, _ = zone_db
+    conn.execute(
+        "INSERT INTO zones (zone_id, source_key, name, geometry_json) "
+        "VALUES (99, 'wards', 'Broken', 'not-json{{{')"
+    )
+    try:
+        body = client.get("/api/zones").json()
+        assert body["count"] == 2
+        assert {z["name"] for z in body["zones"]} == {"Ward A", "Islands B"}
+    finally:
+        conn.execute("DELETE FROM zones WHERE zone_id = 99")
+
+
+def test_zones_tolerates_unparseable_props(client, zone_db):
+    """Corrupt props_json degrades to props=null on that zone only."""
+    conn, _, _ = zone_db
+    conn.execute(
+        "UPDATE zones SET props_json = 'not-json{{{' WHERE zone_id = 0"
+    )
+    try:
+        body = client.get("/api/zones").json()
+        assert body["count"] == 2
+        ward_a = next(z for z in body["zones"] if z["name"] == "Ward A")
+        assert ward_a["props"] is None
+    finally:
+        conn.execute("UPDATE zones SET props_json = NULL WHERE zone_id = 0")
+
+
 def test_reset_drops_zones(zone_db, monkeypatch):
     conn, _, _ = zone_db
     monkeypatch.setattr(backend.db, "_connection", conn)
@@ -195,7 +292,7 @@ def test_contains_bbox_fallback(client, monkeypatch):
     assert names == {"Ward A"}   # Islands B is far away
 
 
-def test_contains_spatial_exact(monkeypatch):
+def test_contains_spatial_exact(monkeypatch, tmp_path):
     """With spatial loaded, holes exclude points and MultiPolygons still hit."""
     if not _SPATIAL_OK:
         pytest.skip("duckdb spatial extension unavailable")
@@ -218,7 +315,7 @@ zones:
     columns:
       name: { csv: name, type: varchar }
 """
-        p = FIXTURES.parent.parent / "_tmp_zone_sources.yaml"
+        p = tmp_path / "zone_sources.yaml"
         p.write_text(yaml_text)
         sources = load_sources(str(p))
         ingest_zones(conn, "wards", sources.zones["wards"], FIXTURES / "zones.geojson")

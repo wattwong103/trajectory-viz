@@ -157,6 +157,8 @@ export const CompareTab: React.FC<CompareTabProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gridOn, setGridOn] = useState(false);
+  /** Grid-diff cell size in degrees (≈ ×111 km). Backend range 0.0005–1.0. */
+  const [gridCell, setGridCell] = useState(0.005);
 
   // Default = first two sources; keep the user's picks across sources reloads.
   useEffect(() => {
@@ -174,7 +176,7 @@ export const CompareTab: React.FC<CompareTabProps> = ({
       if (prev.includes(id)) {
         return prev.length <= 2 ? prev : prev.filter(x => x !== id);
       }
-      if (prev.length >= COMPARE_MAX_SOURCES || prev.length === 0) return prev;
+      if (prev.length >= COMPARE_MAX_SOURCES) return prev;
       return [...prev, id];
     });
   };
@@ -238,12 +240,12 @@ export const CompareTab: React.FC<CompareTabProps> = ({
       return;
     }
     let cancelled = false;
-    fetchCompareGrid(picked[0], picked[1], filters)
+    fetchCompareGrid(picked[0], picked[1], filters, gridCell)
       .then(res => { if (!cancelled) onCompareGrid(res); })
       .catch(() => { if (!cancelled) onCompareGrid(null); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridOn, pairMode, pickedKey, city, simulationDay, goodsType, minHour,
+  }, [gridOn, pairMode, pickedKey, gridCell, city, simulationDay, goodsType, minHour,
       maxHour, minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio,
       maxDetourRatio, tmKey, scenarioKey]);
 
@@ -349,6 +351,21 @@ export const CompareTab: React.FC<CompareTabProps> = ({
           >
             ⬚ Diff on map
           </button>
+        )}
+        {pairMode && gridOn && (
+          <select
+            value={gridCell}
+            onChange={e => setGridCell(Number(e.target.value))}
+            style={{ ...st.select, maxWidth: 86 }}
+            title="Grid-diff cell size"
+            aria-label="Grid-diff cell size"
+          >
+            {([0.002, 0.005, 0.01, 0.02] as const).map(v => (
+              <option key={v} value={v}>
+                {(v * 111).toFixed(v < 0.01 ? 2 : 1)} km
+              </option>
+            ))}
+          </select>
         )}
       </div>
 
@@ -729,7 +746,7 @@ export const CompareTab: React.FC<CompareTabProps> = ({
               Diff grid on map:{' '}
               <span style={{ color: '#68aaff' }}>■</span> B-heavier ·{' '}
               <span style={{ color: '#fd805d' }}>■</span> A-heavier ·
-              opacity = |Δ| (trip starts, {'\u2248'}{(0.005 * 111).toFixed(1)} km cells)
+              opacity = |Δ| (trip starts, ≈{(gridCell * 111).toFixed(gridCell < 0.01 ? 2 : 1)} km cells)
             </div>
           )}
         </>
@@ -770,6 +787,11 @@ const st: Record<string, React.CSSProperties> = {
     borderWidth: 1, borderStyle: 'solid',
   },
   chipOrder: { fontSize: 8, color: '#888', marginLeft: 2 },
+  select: {
+    background: 'rgba(255,255,255,0.06)', color: '#ddd',
+    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4,
+    padding: '3px 4px', fontSize: 10,
+  },
   swapBtn: {
     background: 'rgba(79,195,247,0.12)', color: '#4fc3f7',
     border: '1px solid rgba(79,195,247,0.35)', borderRadius: 4,

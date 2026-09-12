@@ -59,6 +59,7 @@ __all__ = [
     "normalize_gpx",
     "normalize_ndjson",
     "extract_geojson_polygons",
+    "iter_geojson_features",
 ]
 
 
@@ -206,16 +207,14 @@ def _geojson_feature_rows(
 _FC_ROOT_RE = re.compile(rb'"type"\s*:\s*"FeatureCollection"')
 
 
-def normalize_geojson(
-    path: Path | str,
-    coord_times_prop: str | None = None,
-) -> Iterator[dict]:
-    """Yield canonical staging rows from a GeoJSON file.
+def iter_geojson_features(path: Path | str) -> Iterator[tuple[int, dict]]:
+    """Yield (index, feature dict) from a GeoJSON file.
 
     FeatureCollections stream via ijson when available (one-feature peak
     memory); otherwise the whole document loads first. Bare `Feature`
     documents always take the whole-document path (they are one feature).
-    Both paths share _geojson_feature_rows, so rows are byte-identical.
+    Shared by normalize_geojson, extract_geojson_polygons, and the upload
+    geometry census — one branch to maintain.
     """
     if _HAS_IJSON and _looks_like_feature_collection(path):
         with open(path, "rb") as fh:
@@ -224,15 +223,28 @@ def normalize_geojson(
             for idx, feature in enumerate(
                 ijson.items(fh, "features.item", use_float=True)
             ):
-                if not isinstance(feature, dict):
-                    continue
-                yield from _geojson_feature_rows(idx, feature, coord_times_prop)
+                if isinstance(feature, dict):
+                    yield idx, feature
         return
 
     with open(path, encoding="utf-8") as fh:
         doc = json.load(fh)
 
     for feature_idx, feature in enumerate(_geojson_features(doc)):
+        yield feature_idx, feature
+
+
+def normalize_geojson(
+    path: Path | str,
+    coord_times_prop: str | None = None,
+) -> Iterator[dict]:
+    """Yield canonical staging rows from a GeoJSON file.
+
+    Point features yield one row per feature; LineString features yield one
+    row per coordinate (see _geojson_feature_rows for the time contract).
+    Feature iteration streams via iter_geojson_features.
+    """
+    for feature_idx, feature in iter_geojson_features(path):
         yield from _geojson_feature_rows(feature_idx, feature, coord_times_prop)
 
 
@@ -377,16 +389,5 @@ def extract_geojson_polygons(path: Path | str) -> Iterator[dict]:
             **_flatten_scalars(props),
         }
 
-    if _HAS_IJSON and _looks_like_feature_collection(path):
-        with open(path, "rb") as fh:
-            for idx, feature in enumerate(
-                ijson.items(fh, "features.item", use_float=True)
-            ):
-                if isinstance(feature, dict):
-                    yield from _rows(feature, idx)
-        return
-
-    with open(path, encoding="utf-8") as fh:
-        doc = json.load(fh)
-    for idx, feature in enumerate(_geojson_features(doc)):
+    for idx, feature in iter_geojson_features(path):
         yield from _rows(feature, idx)

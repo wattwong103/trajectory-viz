@@ -169,6 +169,28 @@ In this mode `PFLOW_HOME` is never resolved, so the dashboard runs anywhere the 
 
 ---
 
+## Path D: GUFM vs PFLOW ground-truth fleets
+
+The `data/gufm/` dataset holds two fleets of the same 400 held-out persons
+(ward 13101/Chiyoda): GUFM model-generated trips vs PFLOW ground truth — the
+dataset the ⇄ Compare tab's matched-person workflow was built for. Launchers
+at the repo root wire the three required env vars (`sources.gufm.yaml` +
+`gufm.duckdb` + output root):
+
+```bash
+./start-gufm-viz.sh    # macOS / Linux
+start-gufm-viz.bat     # Windows
+# Dashboard: http://localhost:5173
+```
+
+Details and regeneration notes: [`data/gufm/README.md`](../data/gufm/README.md).
+Caveats worth knowing before reading the map: 91% of GUFM trips are
+same-mesh zero-distance hops (honest free-running model behavior — they
+render as OD dots and stationary follow-dots, not trails); GT has
+pre-midnight starttimes (the animation wraps them mod-86400).
+
+---
+
 ## Adding a new ABM source
 
 The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step, [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook, and [docs/examples/sources-matsim.yaml](examples/sources-matsim.yaml) for a worked MATSim config.
@@ -179,7 +201,8 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 
 | Symptom | Fix |
 |---|---|
-| `pip install -e .` fails with "ImportError: cannot import name '_log' from pip._internal.utils" | Dropbox locked a pip self-upgrade midway. Run `python -m ensurepip --upgrade` then re-run setup. |
+| Dashboard shows a red "Backend unreachable" overlay | The frontend is up but the API isn't (or `PFLOW_VIZ_DB` points nowhere). Start the backend (`trajectory-viz-serve` or `npm run dev`, which launches both), then hit ↻ Retry. |
+| Map shows fleets without labels/colors, Compare tab lists cryptic ids | `PFLOW_VIZ_SOURCES` points at the wrong registry for the DB (e.g. demo registry while serving `gufm.duckdb`). The backend also prints a `[WARN] ... have no entry in the sources registry` line naming the culprits. For GUFM data use `./start-gufm-viz.sh` (or the `.bat`). |
 | `npm run dev` errors with `'vite' is not recognized` | `node_modules/` was synced from a different OS. `rm -rf frontend/node_modules && cd frontend && npm install`. |
 | Backend starts but `/api/stats/filter-options` returns empty arrays | DuckDB exists but no data ingested. Run `trajectory-viz-ingest --reset` (see *Ingest data* above). |
 | `Cannot locate PFLOW project root` error | Either set `PFLOW_HOME=/path/to/PFLOW`, or use standalone mode (`PFLOW_VIZ_DB=...`). |

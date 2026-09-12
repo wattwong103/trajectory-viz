@@ -22,6 +22,7 @@ import type {
   MultiCompareResponse,
   CompareGridResponse,
   ZoneListResponse,
+  ZoneStylesResponse,
 } from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
@@ -272,10 +273,12 @@ export async function fetchTrajectoriesByVehicle(
   vehicleKeys: string[],
   simulationDay?: number,
   includeSegments: boolean = true,
+  includeStationary: boolean = false,
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({
     vehicle_keys: vehicleKeys.join(','),
     include_segments: String(includeSegments),
+    include_stationary: String(includeStationary),
   });
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   return fetchJson(`/api/trajectories/by-vehicle?${params}`);
@@ -776,6 +779,11 @@ export async function fetchPoiCategories(): Promise<PoiCategoriesResponse> {
 // GET /api/zones — static polygon layers from sources.yaml's `zones:` block.
 export async function fetchZones(): Promise<ZoneListResponse> {
   return fetchJson('/api/zones');
+}
+
+// GET /api/zones/styles — per-layer render hints (label + YAML color).
+export async function fetchZoneStyles(): Promise<ZoneStylesResponse> {
+  return fetchJson('/api/zones/styles');
 }
 
 // ─── Upload-and-go ingest ────────────────────────────────

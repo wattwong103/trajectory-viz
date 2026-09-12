@@ -7,6 +7,7 @@ Response formats are designed for direct consumption by DeckGL layers:
 """
 
 
+
 from pydantic import BaseModel, Field
 
 from .filters import ScenarioFields, TripFilters

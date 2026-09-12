@@ -1,9 +1,0 @@
-
-version: 1
-sources: {}
-zones:
-  wards:
-    label: "Service Wards"
-    glob: "zones/*.geojson"
-    columns:
-      name: { csv: name, type: varchar }

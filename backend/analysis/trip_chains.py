@@ -8,8 +8,9 @@ Analyzes how vehicles chain multiple trips together in a day:
 - Commodity-specific patterns (truck only)
 """
 
+
 from fastapi import APIRouter, Depends, Query
-from typing import Optional
+
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
 
@@ -19,7 +20,7 @@ router = APIRouter()
 @router.get("/analysis/trip-chains/length-distribution")
 async def chain_length_distribution(
     f: TripFilters = Depends(trip_filters),
-    min_chain_length: Optional[int] = Query(
+    min_chain_length: int | None = Query(
         None, ge=1, le=100,
         description="Only show vehicles with chain_length >= this (focus the long tail)",
     ),

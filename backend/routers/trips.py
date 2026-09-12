@@ -1,11 +1,11 @@
 """Trip sample / query endpoints."""
 
+
 from fastapi import APIRouter, Depends, Query
-from typing import Optional
 
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
-from ..models import TripQuery, TripResponse, TripPoint
+from ..models import TripQuery, TripResponse
 
 router = APIRouter()
 
@@ -48,7 +48,7 @@ async def sample(
 
 @router.get("/trips/vehicles")
 async def search_vehicles(
-    q: Optional[str] = Query(
+    q: str | None = Query(
         None, min_length=1, max_length=80,
         description="vehicle_key prefix, e.g. 'taxi:tokyo:4'. Omit to list top vehicles.",
     ),

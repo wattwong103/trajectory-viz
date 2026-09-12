@@ -20,7 +20,7 @@ Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the Universit
 | F2 — trip-chain queries | length, dwell, round-trip, commodity | **+ through-zone-bbox, multi-stop chains** |
 | F3 — trajectory detail | trip-level metadata | **+ per-segment link / speed / dwell (opt-in)** |
 | F3 — clustering | OD + distance features | **+ route-similarity (Jaccard on link sets)** |
-| Map overlays | 9 DeckGL layers | 11 (added speed gradient + dwell markers) |
+| Map overlays | 9 DeckGL layers | ~25 (trails + person dots, OD arcs, heatmaps, link density, clusters, F3 speed-gradient + dwell markers, POI glyphs, zones, A/B grid-diff, agents, drill, buildings) |
 | Deployment | dev-only (two processes) | **+ Docker (one-command, single port)** |
 | Backend perf | unindexed table scans | **12 DuckDB indexes on hot filter columns** |
 | Tests | none | **25 pytest unit tests** |

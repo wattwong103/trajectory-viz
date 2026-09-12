@@ -8,8 +8,9 @@ finer resolution.
 Results feed DeckGL HeatmapLayer and HexagonLayer.
 """
 
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
+
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
 
@@ -18,8 +19,8 @@ router = APIRouter()
 
 @router.get("/analysis/spatial/density-hourly")
 async def density_hourly(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
+    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: str | None = Query(None, pattern="^[a-z_]+$"),
     resolution: float = Query(0.005, ge=0.001, le=0.1,
                               description="Grid resolution in degrees (must match a built aggregate)"),
     max_cells_per_hour: int = Query(15000, ge=100, le=50000),

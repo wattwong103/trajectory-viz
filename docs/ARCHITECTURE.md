@@ -26,6 +26,8 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
 │    trips         — one row per trip, 26 cols + 3 F1 derived              │
 │    waypoints     — one row per GPS-like sample, 16 cols                  │
 │    pois          — static POI layers (/api/pois)                         │
+│    zones         — static polygon layers (/api/zones; bbox precomputed)  │
+│    density_hourly — 24h pulse-heatmap aggregate (Phase 2B)               │
 │    viz_meta      — per-DB metadata (epoch_anchor)                        │
 │    validation_runs — per-metric calibration evidence                     │
 │    ingest_log    — file-level row counts + error rows (row_count=-1)     │
@@ -46,6 +48,11 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
 │    /api/analysis/od-flows         grid OD + zone OD                      │
 │    /api/analysis/clustering/*     run (OD features), route-similarity    │
 │                                   (link-set Jaccard)                     │
+│    /api/analysis/compare          A/B fleets (+multi, +grid diff)        │
+│    /api/pois, /api/zones          static layers; zones/contains          │
+│                                   (exact w/ PFLOW_VIZ_SPATIAL=1)         │
+│    /api/trajectories/by-vehicle   full-day chains (+include_stationary)  │
+│    /api/ingest/*                  drag-and-drop upload + job polling     │
 └──────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼  (Vite dev proxy /api → :9999, or
@@ -53,8 +60,11 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  React + DeckGL + MapLibre  (frontend/, Vite dev :5173 or built dist/)   │
-│    MapView      — 11 DeckGL layers (trails, OD arcs, heatmap, link       │
-│                   density, clusters, F3 speed-gradient, dwell markers)   │
+│    MapView      — ~25 DeckGL layers: trajectory trails + person dots,    │
+│                   OD arcs, heatmaps (density/footfall/pulse), link       │
+│                   density, cluster arcs, F3 speed-gradient + dwell       │
+│                   markers, POIs (glyph sprites), zones, A/B grid-diff,   │
+│                   agents, drill + scenario/zone bboxes, buildings        │
 │    FilterPanel  — vehicle type, time, city, day, goods + F1 advanced     │
 │    AnalysisPanel — 8 tabs incl. Σ Summary, ⏰ Temporal, ƒ Metrics, ↗ OD,  │
 │                    █ Density, ◎ Clusters, ⛓ Chains, ⊥ Links             │
@@ -78,6 +88,7 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 | `trips_synthesis` | Points-only sources: synthesize trips from waypoints at ingest — `gap_split` (gap_minutes), `day`, or `single`. Mutually exclusive with `trips_glob`. |
 | `time.epoch_anchor` / `time.coord_times_prop` | Absolute-time handling: anchor ISO timestamp (one per DB, persisted in `viz_meta`) / GeoJSON property holding per-coordinate times. |
 | `pois:` (top-level) | Static POI layers — glob, `columns` (name/category/lon/lat), optional color → `pois` table, served via `/api/pois*`. |
+| `zones:` (top-level) | Static polygon layers — GeoJSON Polygon/MultiPolygon glob, `columns` (name/category from properties), optional color → `zones` table (bbox precomputed), served via `/api/zones*`. |
 
 Required trip columns (validated): `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat`. Required waypoint columns when trajectories_glob is set: `unix_time_ms`, `lon`, `lat`. Everything else is optional.
 
@@ -111,7 +122,7 @@ When designing new endpoints: profile against these budgets; add indexes for fil
 | F3 trajectory detail | trip-level metadata | **+ per-segment link_id, speed_kmh, dwell_sec (opt-in)** |
 | Frontend vehicle types | `'truck' \| 'taxi'` hardcoded | `string`, populated from `/api/stats/filter-options` |
 | Filter UI | basic | + "Advanced filters" disclosure (F1 sliders) |
-| Map overlays | 9 layers | + speed gradient + dwell markers (11 layers) |
+| Map overlays | 9 layers | core trails/OD/heatmaps + F3 speed-gradient + dwell markers + POIs + zones + A/B grid-diff + agents + drill (~25 layers total) |
 | Deployment | dev-only (two processes) | + Docker (single port, single container) |
 | Tests | none | 25 pytest unit tests |
 | Citation | none | CITATION.cff |

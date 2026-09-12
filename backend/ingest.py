@@ -27,7 +27,6 @@ import sys
 import time
 from glob import glob
 from pathlib import Path
-from typing import Optional
 
 # Allow running as `python -m backend.ingest` from trajectory-viz/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -107,7 +106,7 @@ WAYPOINT_COLUMNS: tuple[str, ...] = (
 # --- Path discovery ----------------------------------------------------------
 
 
-def find_latest_run(base_dir: Path) -> Optional[Path]:
+def find_latest_run(base_dir: Path) -> Path | None:
     """Return the most-recent `run_*` subdirectory of `base_dir`, or None."""
     if not base_dir.is_dir():
         return None
@@ -171,7 +170,7 @@ def _sql_string_literal(value: str) -> str:
 def _vehicle_key_sql(
     template: str,
     vehicle_id_col: str,
-    scope_value: Optional[str],
+    scope_value: str | None,
 ) -> str:
     """Convert `vehicle_key_template` into a DuckDB || concat expression.
 
@@ -210,7 +209,7 @@ def _vehicle_key_sql(
     return " || ".join(out)
 
 
-def _column_expr(db_col: str, spec: ColumnSpec, epoch_anchor: Optional[int] = None) -> str:
+def _column_expr(db_col: str, spec: ColumnSpec, epoch_anchor: int | None = None) -> str:
     """Build one SELECT expression for a declared column spec.
 
     Derived SQL may contain the `{epoch_anchor}` placeholder, substituted with
@@ -259,10 +258,10 @@ def _int_or_hash_sql(col: str, duck_type: str) -> str:
 
 def _select_clause(
     src: SourceConfig,
-    scope_value: Optional[str],
+    scope_value: str | None,
     db_columns: tuple[str, ...],
     declared: dict[str, ColumnSpec],
-    epoch_anchor: Optional[int] = None,
+    epoch_anchor: int | None = None,
 ) -> str:
     """Assemble the SELECT clause for one source's INSERT.
 
@@ -445,7 +444,7 @@ def ingest_source_trips(
     csv_path: Path,
     source_key: str,
     src: SourceConfig,
-    epoch_anchor: Optional[int] = None,
+    epoch_anchor: int | None = None,
 ) -> int:
     """Ingest one source's trip file (any format). Returns rows inserted."""
     scope_value = src.discovery.scope.value if src.discovery.scope else None
@@ -479,7 +478,7 @@ def ingest_source_trajectories(
     csv_path: Path,
     source_key: str,
     src: SourceConfig,
-    epoch_anchor: Optional[int] = None,
+    epoch_anchor: int | None = None,
 ) -> int:
     """Ingest one source's trajectory file (any format). Returns rows inserted."""
     if src.columns.waypoints is None:
@@ -517,7 +516,7 @@ def ingest_validation(
     conn,
     run_dir: Path,
     source_id: str,
-    scope_value: Optional[str],
+    scope_value: str | None,
     validation_relative: str = "validation.csv",
 ) -> int:
     """Ingest a validation.csv from a `run_*` directory.
@@ -716,7 +715,7 @@ def resolve_epoch_anchor(sources: SourcesFile) -> int:
     """
     from datetime import datetime
 
-    iso: Optional[str] = None
+    iso: str | None = None
     if sources.time is not None and sources.time.epoch_anchor is not None:
         iso = sources.time.epoch_anchor
     else:
@@ -842,7 +841,8 @@ def ingest_zones(conn, zone_key: str, cfg, path: Path,
             else list(geom["coordinates"])
         )
         flat = [pt for poly in polys for ring in poly for pt in ring]
-        lons = [p[0] for p in flat]; lats = [p[1] for p in flat]
+        lons = [p[0] for p in flat]
+        lats = [p[1] for p in flat]
         rows.append((
             idx,
             _attr(props, name_spec),
@@ -1299,7 +1299,7 @@ def main() -> None:
     # ------- F1 derived metrics (post-ingest pass) -------
     derived_counts: dict[str, int] = {}
     if total_trips > 0:
-        print(f"\n[DERIVED] Computing F1 metrics (speed_avg_kmh, dwell_minutes, detour_ratio)...")
+        print("\n[DERIVED] Computing F1 metrics (speed_avg_kmh, dwell_minutes, detour_ratio)...")
         t = time.time()
         try:
             derived_counts = compute_derived_metrics(conn)
@@ -1313,7 +1313,7 @@ def main() -> None:
 
     # ------- Pulse-heatmap aggregate (Phase 2B) -------
     if total_waypoints > 0:
-        print(f"\n[AGGREGATES] Building density_hourly (pulse heatmap)...")
+        print("\n[AGGREGATES] Building density_hourly (pulse heatmap)...")
         t = time.time()
         try:
             n = build_density_hourly(conn)

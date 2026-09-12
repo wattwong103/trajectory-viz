@@ -9,13 +9,10 @@ to run without the PFLOW monorepo. PFLOW_HOME is never touched in that case.
 """
 
 import os
-import sys
 from pathlib import Path
-from typing import Optional
-
 
 # Lazy-resolved. Raises only if code actually needs PFLOW_HOME.
-_pflow_home: Optional[Path] = None
+_pflow_home: Path | None = None
 
 
 def get_pflow_home() -> Path:

@@ -14,9 +14,7 @@ Row shape (WAYPOINT_COLS order):
 
 from __future__ import annotations
 
-from typing import Optional
-
-from .db import build_trip_filter
+from .db import build_trip_filter, get_epoch_anchor
 
 # Column list used in all waypoint queries.
 # link_id (last) added in Phase 2 Step 2.5 for per-segment annotation.
@@ -47,10 +45,10 @@ TRIPS_JOIN = (
 
 
 def build_trip_vehicle_keys_subquery(
-    vehicle_type: Optional[str],
-    city: Optional[str],
-    simulation_day: Optional[int],
-) -> Optional[str]:
+    vehicle_type: str | None,
+    city: str | None,
+    simulation_day: int | None,
+) -> str | None:
     """Return a SQL subquery string for vehicle_keys from trips, or None if no filter needed.
 
     city and simulation_day live on the trips table only (not waypoints).
@@ -69,12 +67,12 @@ def build_trip_vehicle_keys_subquery(
 
 
 def build_trip_pair_subquery(
-    vehicle_type: Optional[str],
-    city: Optional[str],
-    simulation_day: Optional[int],
-    transport_modes: Optional[list[int]] = None,
-    scenario_clause: Optional[str] = None,
-) -> Optional[str]:
+    vehicle_type: str | None,
+    city: str | None,
+    simulation_day: int | None,
+    transport_modes: list[int] | None = None,
+    scenario_clause: str | None = None,
+) -> str | None:
     """(vehicle_key, trip_id) subquery for TRIP-granular waypoint scoping.
 
     REQUIRED whenever transport_modes or a scenario is set: the per-vehicle
@@ -102,11 +100,11 @@ def build_trip_pair_subquery(
 def sample_waypoint_rows(
     conn,
     n: int,
-    vehicle_type: Optional[str] = None,
-    city: Optional[str] = None,
-    simulation_day: Optional[int] = None,
-    transport_modes: Optional[list[int]] = None,
-    scenario_clause: Optional[str] = None,
+    vehicle_type: str | None = None,
+    city: str | None = None,
+    simulation_day: int | None = None,
+    transport_modes: list[int] | None = None,
+    scenario_clause: str | None = None,
 ) -> list:
     """Sample n random trajectories and return all their waypoint rows
     (WAYPOINT_COLS_WITH_TRIP_MODE shape — trip transport_mode at index 14),
@@ -162,11 +160,19 @@ def _sql_str(value: str) -> str:
 def waypoint_rows_for_vehicles(
     conn,
     vehicle_keys: list[str],
-    simulation_day: Optional[int] = None,
+    simulation_day: int | None = None,
+    include_stationary: bool = False,
 ) -> list:
     """All waypoint rows for the given vehicle_keys (full-day chains).
 
     vehicle_key values may be user-typed — parameterized, never inlined.
+
+    With include_stationary=True, trips of the requested vehicles that have
+    NO waypoints (e.g. zero-distance same-mesh hops — 91% of the GUFM fleet)
+    are synthesized as stationary 2-point trajectories at the trip's OD
+    start. Without this, following such an agent renders nothing at all.
+    Off by default: sampling and export paths keep the waypoints-only
+    contract their tests pin.
     """
     if not vehicle_keys:
         return []
@@ -180,9 +186,68 @@ def waypoint_rows_for_vehicles(
           )"""
         params.append(int(simulation_day))
 
-    return conn.execute(f"""
+    rows = conn.execute(f"""
         SELECT {WAYPOINT_COLS_WITH_TRIP_MODE}
         FROM waypoints w {TRIPS_JOIN}
         WHERE w.vehicle_key IN ({placeholders}) {day_filter}
         ORDER BY w.vehicle_key, w.trip_id, w.unix_time_ms
     """, params).fetchall()
+    if include_stationary:
+        rows = rows + _stationary_rows_for_vehicles(
+            conn, vehicle_keys, simulation_day
+        )
+    return rows
+
+
+# A stationary trip renders as a 60-second dot at the OD start. 60 s is
+# arbitrary but load-bearing in one case: it must not cross the mod-86400
+# midnight seam (positionAtTime treats tN < t0 as "not visible"), so trips
+# departing in the last minute of the day collapse to a single instant.
+_STATIONARY_SPAN_S = 60
+
+
+def _stationary_rows_for_vehicles(
+    conn,
+    vehicle_keys: list[str],
+    simulation_day: int | None = None,
+) -> list:
+    """Pseudo-waypoint rows for waypoint-less trips (see include_stationary).
+
+    Row shape matches WAYPOINT_COLS_WITH_TRIP_MODE exactly (link_id NULL,
+    trip mode from the trips row). unix_time_ms is absolute epoch ms on the
+    DB's anchor so _rows_to_trajectories' mod-86400 math applies unchanged.
+    """
+    placeholders = ", ".join("?" for _ in vehicle_keys)
+    params: list = list(vehicle_keys)
+    day_filter = ""
+    if simulation_day is not None:
+        day_filter = "AND t.simulation_day = ?"
+        params.append(int(simulation_day))
+    trips = conn.execute(f"""
+        SELECT t.vehicle_id, t.trip_id, t.starttime,
+               t.start_lon, t.start_lat, t.vehicle_type, t.transport_mode,
+               t.purpose, t.goods_type, t.vehicle_size,
+               CAST(t.passenger_in AS VARCHAR),
+               t.fare_yen, t.vehicle_key
+        FROM trips t
+        WHERE t.vehicle_key IN ({placeholders}) {day_filter}
+          AND NOT EXISTS (
+              SELECT 1 FROM waypoints w
+              WHERE w.vehicle_key = t.vehicle_key AND w.trip_id = t.trip_id
+          )
+    """, params).fetchall()
+
+    anchor_sec = get_epoch_anchor(conn)
+    rows: list = []
+    for (vid, tid, starttime, lon, lat, vtype, mode, purpose, goods,
+         vsize, pax_in, fare, vkey) in trips:
+        t0 = int(starttime)
+        # Collapse the span when it would cross midnight (see _STATIONARY_SPAN_S).
+        span = 0 if (t0 % 86400) + _STATIONARY_SPAN_S >= 86400 else _STATIONARY_SPAN_S
+        t0_ms = (anchor_sec + t0) * 1000
+        t1_ms = t0_ms + span * 1000
+        base = [vid, tid, None, lon, lat, vtype, mode, purpose, goods,
+                vsize, pax_in, fare, vkey, None, mode]
+        rows.append([*base[:2], t0_ms, *base[3:]])
+        rows.append([*base[:2], t1_ms, *base[3:]])
+    return rows

@@ -7,6 +7,7 @@ Results feed DeckGL ArcLayer for flow visualization.
 """
 
 from fastapi import APIRouter, Depends, Query
+
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
 

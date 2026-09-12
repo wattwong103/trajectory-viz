@@ -3,9 +3,13 @@ Stats endpoint — dataset summary and derived insights for the frontend dashboa
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from ..db import get_table_stats, get_connection
+
+from ..db import get_connection, get_table_stats
 from ..filters import (
-    SCENARIO_EXCLUDED_MODE, TripFilters, scenario_pair_subquery, trip_filters,
+    SCENARIO_EXCLUDED_MODE,
+    TripFilters,
+    scenario_pair_subquery,
+    trip_filters,
 )
 from ..models import StatsResponse
 from ..sources_schema import default_sources_path, load_sources_merged
@@ -352,9 +356,11 @@ def _source_styles(conn) -> list[dict]:
     ).fetchall()}
 
     styles = []
+    covered = set()
     for key, src in sources_file.sources.items():
         if src.source_id not in ingested:
             continue
+        covered.add(src.source_id)
         render = src.render
         styles.append({
             "source_key": key,
@@ -364,4 +370,21 @@ def _source_styles(conn) -> list[dict]:
             "color": list(render.color) if render and render.color else None,
             "has_waypoints": src.source_id in with_waypoints,
         })
+    # Misconfiguration guard: ingested fleets with no registry entry render
+    # with wrong labels/colors/modes (e.g. serving gufm.duckdb while
+    # PFLOW_VIZ_SOURCES still points at the demo registry). Loud once per
+    # process — the frontend degrades silently otherwise.
+    uncovered = ingested - covered
+    global _uncovered_warned
+    if uncovered and not _uncovered_warned:
+        _uncovered_warned = True
+        print(
+            f"[WARN] /api/stats/filter-options: ingested source_id(s) "
+            f"{sorted(uncovered)} have no entry in the sources registry "
+            f"({default_sources_path()}). Check PFLOW_VIZ_SOURCES — the map "
+            f"will show these fleets without labels, colors, or render modes."
+        )
     return styles
+
+
+_uncovered_warned = False

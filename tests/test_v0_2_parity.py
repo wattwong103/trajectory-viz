@@ -29,12 +29,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tempfile
 from pathlib import Path
 
 import duckdb
 import pytest
-
 
 # Make the project root importable when running pytest from anywhere.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -47,7 +45,6 @@ from backend.ingest import (  # noqa: E402
     ingest_source_trips,
 )
 from backend.sources_schema import load_sources  # noqa: E402
-
 
 # --- Fixtures ---------------------------------------------------------------
 
@@ -500,12 +497,12 @@ def _compare_dbs(v1_path: Path, v2_path: Path) -> int:
         print(f"  OK    {len(v1_sample)} rows byte-identical (modulo new source_id column)")
     else:
         mismatches += 1
-        diff_count = sum(1 for a, b in zip(v1_sample, v2_sample) if a != b)
+        diff_count = sum(1 for a, b in zip(v1_sample, v2_sample, strict=False) if a != b)
         print(f"  DIFF  {diff_count} of {min(len(v1_sample), len(v2_sample))} rows differ")
-        for i, (a, b) in enumerate(zip(v1_sample, v2_sample)):
+        for i, (a, b) in enumerate(zip(v1_sample, v2_sample, strict=False)):
             if a != b:
                 # Find the first column that differs
-                for col_name, va, vb in zip(_PARITY_COLUMNS_TRIPS, a, b):
+                for col_name, va, vb in zip(_PARITY_COLUMNS_TRIPS, a, b, strict=False):
                     if va != vb:
                         print(f"    row {i} col {col_name}: v1={va!r} v2={vb!r}")
                         break

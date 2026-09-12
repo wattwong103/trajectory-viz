@@ -305,6 +305,11 @@ time:
 
 GeoJSON and GPX uploads need no guessing — they normalize to the canonical
 staging fields of section 1 (`_lon`/`_lat`/`_time_ms`/`_trk_name`/`_feature_id`).
+One guard runs first: GeoJSON uploads are geometry-censused, and anything but
+**Point/LineString** is rejected with a 422 up front (a `Polygon` upload gets
+"declare polygon layers under `zones:` in sources.yaml instead"). Without the
+census, a polygon file would be accepted and then fail mid-job — after earlier
+files in the same batch already mutated the DB.
 For **CSV, NDJSON, and Parquet** uploads, the first ~100 rows are sampled and
 columns are matched **case-insensitively** against these candidates (first match
 wins; the file's original casing is used downstream):

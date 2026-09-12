@@ -162,6 +162,8 @@ interface MapViewProps {
   poiIconAtlas?: PoiIconAtlas | null;
   /** Static polygon layers (zones feature) — rendered under trajectories. */
   zones?: Zone[];
+  /** Per-layer render hints (YAML color wins, hash fallback). */
+  zoneStyleBySource?: Record<string, { label: string; color: [number, number, number] | null }>;
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
@@ -192,6 +194,7 @@ export const MapView: React.FC<MapViewProps> = ({
   poiSourceLabels = {},
   poiIconAtlas = null,
   zones = [],
+  zoneStyleBySource = {},
   onMapClick,
   onTrajectoryClick,
 }) => {
@@ -445,12 +448,14 @@ export const MapView: React.FC<MapViewProps> = ({
     }
 
     // Layer 1c: Zone/polygon layers (zones feature). Flat translucent fills
-    // with a per-source-key color (hash fallback — YAML colors arrive via a
-    // future styles prop; geometry is pre-parsed server-side). Lowest of the
-    // context layers so POIs and trips read on top.
+    // with the layer's YAML color when declared (/api/zones/styles), hash
+    // fallback otherwise — same discipline as POI category colors. Lowest
+    // of the context layers so POIs and trips read on top.
     if (layerVisibility.zones && zones.length > 0) {
+      const zoneBase = (z: Zone): [number, number, number] =>
+        zoneStyleBySource[z.source_key]?.color ?? sourceFallbackColor(z.source_key);
       const zoneColor = (z: Zone): [number, number, number, number] => {
-        const c = sourceFallbackColor(z.source_key);
+        const c = zoneBase(z);
         return [c[0], c[1], c[2], 40] as [number, number, number, number];
       };
       result.push(
@@ -460,9 +465,10 @@ export const MapView: React.FC<MapViewProps> = ({
           getPolygon: (d: Zone) => d.geometry.coordinates as number[][][],
           getFillColor: zoneColor,
           getLineColor: (d: Zone) => {
-            const c = sourceFallbackColor(d.source_key);
+            const c = zoneBase(d);
             return [c[0], c[1], c[2], 160] as [number, number, number, number];
           },
+          updateTriggers: { getFillColor: [zoneStyleBySource], getLineColor: [zoneStyleBySource] },
           getLineWidth: 1,
           lineWidthMinPixels: 1,
           lineWidthUnits: 'pixels',

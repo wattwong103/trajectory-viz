@@ -145,6 +145,51 @@ def test_upload_rejected_extension(env, client):
     assert "unsupported file type" in str(r.json()["detail"])
 
 
+# --- (d2) Polygon GeoJSON → 422 upfront (not a mid-job failure) ------------------
+
+
+def test_upload_polygon_geojson_422_with_zones_pointer(env, client):
+    """Polygon layers are zones, not trajectories: reject at upload time with
+    a 422 pointing at `zones:` — instead of accepting the job and failing
+    mid-ingest after mutating the DB."""
+    import json as _json
+
+    doc = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"name": "Ward A"},
+            "geometry": {"type": "Polygon", "coordinates": [
+                [[139.0, 35.0], [139.1, 35.0], [139.1, 35.1], [139.0, 35.1], [139.0, 35.0]],
+            ]},
+        }],
+    }
+    r = _upload(client, "wards.geojson", _json.dumps(doc).encode())
+    assert r.status_code == 422
+    reasons = " ".join(r.json()["detail"]["reasons"])
+    assert "Polygon" in reasons
+    assert "zones:" in reasons
+    # Nothing staged, nothing ingested, no job created.
+    assert not (env.tmp / "uploads").exists() or not list((env.tmp / "uploads").iterdir())
+    assert env.conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] == 0
+
+
+def test_upload_point_geojson_passes_census(env, client):
+    """Point/LineString GeoJSON still uploads fine (census is allowlist-based)."""
+    import json as _json
+
+    doc = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"name": "p1", "time": "2024-05-01T09:00:00+09:00"},
+            "geometry": {"type": "Point", "coordinates": [139.5, 35.5]},
+        }],
+    }
+    r = _upload(client, "points.geojson", _json.dumps(doc).encode())
+    assert r.status_code == 202, r.text
+
+
 # --- (e) Uploads registry written + style lookup merge ----------------------------
 
 

@@ -37,6 +37,7 @@ from ..ingest import (
 from ..sources_schema import TimeConfig
 from ..upload_config import (
     UploadConfigError,
+    census_geojson_geometry,
     generate_source_config,
     load_uploads_registry_ids,
     slugify_source_id,
@@ -287,6 +288,11 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
             sniff = None
             if fmt not in ("geojson", "gpx"):
                 sniff = sniff_columns(staged_path, fmt)
+            if fmt == "geojson":
+                # Upfront geometry census: polygon layers must not reach the
+                # background job, where one bad file would abort the whole
+                # batch after earlier files already mutated the DB.
+                census_geojson_geometry(staged_path)
             cfg = generate_source_config(
                 source_id=source_id,
                 fmt=fmt,

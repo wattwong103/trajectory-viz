@@ -32,6 +32,7 @@ import {
   type RouteSimilarityResponse,
 } from '../api';
 import type { CompareGridResponse } from '../types';
+import { friendlyFetchError } from '../friendlyError';
 import { AgentTab } from './AgentTab';
 import { CompareTab } from './CompareTab';
 
@@ -68,6 +69,7 @@ interface AnalysisPanelProps {
   hasData: boolean;
   insights: InsightsResponse | null;
   insightsLoading: boolean;
+  insightsError?: string | null;
   onODFlows: (flows: ODFlow[]) => void;
   onDensity: (points: DensityPoint[]) => void;
   onClusters: (result: ClusterResult | null) => void;
@@ -333,7 +335,7 @@ const SkeletonLines: React.FC = () => (
 
 export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   vehicleType, city, simulationDay, goodsType, minHour, maxHour,
-  hasData, insights, insightsLoading,
+  hasData, insights, insightsLoading, insightsError = null,
   onODFlows, onDensity, onClusters, onLinkDensity, onCompareGrid,
   selectedTrajectory, onClearSelectedTrajectory,
   zoneBBox, zoneTrips, onZoneResult, onClearZone,
@@ -345,7 +347,13 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
+  // Shared failure line for all button-triggered loaders (rendered once
+  // above the tab content); each loader clears it on start.
+  const [actionError, setActionError] = useState<string | null>(null);
   const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
+  // Shared failure line for the temporal tab's three parallel fetches —
+  // without it a backend error leaves three empty charts and no explanation.
+  const [temporalError, setTemporalError] = useState<string | null>(null);
   const [chainData, setChainData] = useState<Array<{ chain_length: number; vehicle_count: number }>>([]);
   const [clusterResult, setClusterResult] = useState<ClusterResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -376,6 +384,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   const [metricsDwell,  setMetricsDwell]  = useState<MetricsDistribution | null>(null);
   const [metricsDetour, setMetricsDetour] = useState<MetricsDistribution | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
 
   // Multi-stop sub-section (Sprint A1c) — within Chains tab
   const [multiStopMinStops, setMultiStopMinStops] = useState(3);
@@ -404,9 +413,12 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   // Auto-load temporal data when panel opens
   useEffect(() => {
     if (hasData && tab === 'temporal') {
-      fetchHourlyDepartures(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setHourlyData).catch(console.error);
-      fetchTemporalPeaks(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setPeaksData).catch(console.error);
-      fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour).then(setDurationData).catch(console.error);
+      setTemporalError(null);
+      const onFail = (e: unknown) =>
+        setTemporalError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
+      fetchHourlyDepartures(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setHourlyData).catch(onFail);
+      fetchTemporalPeaks(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setPeaksData).catch(onFail);
+      fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour).then(setDurationData).catch(onFail);
     }
   }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
 
@@ -420,6 +432,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   useEffect(() => {
     if (!hasData || tab !== 'metrics') return;
     setMetricsLoading(true);
+    setMetricsError(null);
     const args = [vehicleType, city, simulationDay, 20, goodsType, minHour, maxHour] as const;
     Promise.all([
       fetchMetricsDistribution('speed_avg_kmh', ...args),
@@ -431,20 +444,22 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         setMetricsDwell(d);
         setMetricsDetour(dr);
       })
-      .catch(console.error)
+      .catch(e => setMetricsError(friendlyFetchError(String((e as Error)?.message ?? e)).text))
       .finally(() => setMetricsLoading(false));
   }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
 
   const loadODFlows = useCallback(async () => {
+    setActionError(null);
     setLoading(true);
     try {
       const res = await fetchODFlows(vehicleType, 80, city, simulationDay, goodsType, minHour, maxHour);
       onODFlows(res.flows);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour, onODFlows]);
 
   const loadDensity = useCallback(async (source: 'od' | 'waypoint') => {
+    setActionError(null);
     setLoading(true);
     try {
       if (source === 'waypoint') {
@@ -454,48 +469,53 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         const res = await fetchSpatialDensity(vehicleType, 'both', 0.01, city, simulationDay, goodsType, minHour, maxHour);
         onDensity(res.points);
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour, onDensity]);
 
   const loadHotspots = useCallback(async () => {
+    setActionError(null);
     setHotspotsLoading(true);
     try {
       const data = await fetchSpatialHotspots(vehicleType, city, simulationDay, 20, 'origin', goodsType);
       setHotspotsData(data);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setHotspotsLoading(false);
   }, [vehicleType, city, simulationDay, goodsType]);
 
   const loadDwellTimes = useCallback(async () => {
+    setActionError(null);
     setDwellLoading(true);
     try {
       const data = await fetchDwellTimes(vehicleType, city, simulationDay, 1000, goodsType, minHour, maxHour);
       setDwellData(data);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setDwellLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour]);
 
   const loadRoundTrips = useCallback(async () => {
+    setActionError(null);
     setRoundTripLoading(true);
     try {
       const data = await fetchRoundTrips(vehicleType, city, simulationDay, 2.0, goodsType, minHour, maxHour);
       setRoundTripData(data);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setRoundTripLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour]);
 
   const loadCommodityPatterns = useCallback(async () => {
+    setActionError(null);
     setCommodityLoading(true);
     try {
       const data = await fetchCommodityPatterns(city, simulationDay, 20, goodsType, minHour, maxHour);
       setCommodityData(data);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setCommodityLoading(false);
   }, [city, simulationDay, goodsType, minHour, maxHour]);
 
   // Sprint A1d — fire the route-similarity clustering query
   const loadRouteSimilarity = useCallback(async () => {
+    setActionError(null);
     setRouteSimLoading(true);
     try {
       const res = await runRouteSimilarity(
@@ -505,6 +525,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       setRouteSimResult(res);
     } catch (e) {
       console.error('[route-similarity]', e);
+      setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
       setRouteSimResult(null);
     } finally {
       setRouteSimLoading(false);
@@ -513,6 +534,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
   // Sprint A1c — fire the multi-stop chains query
   const loadMultiStop = useCallback(async () => {
+    setActionError(null);
     setMultiStopLoading(true);
     try {
       const res = await fetchMultiStopChains(
@@ -521,6 +543,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       setMultiStopVehicles(res.vehicles);
     } catch (e) {
       console.error('[multi-stop]', e);
+      setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
       setMultiStopVehicles([]);
     } finally {
       setMultiStopLoading(false);
@@ -557,31 +580,34 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   }, [zoneFormW, zoneFormS, zoneFormE, zoneFormN, vehicleType, city, simulationDay, onZoneResult]);
 
   const loadLinkDensity = useCallback(async () => {
+    setActionError(null);
     setLinkLoading(true);
     try {
       const res = await fetchLinkDensity(vehicleType, city, simulationDay, 500, 50, goodsType);
       setLinkData(res);
       onLinkDensity(res.links);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLinkLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, onLinkDensity]);
 
   const loadClusters = useCallback(async () => {
+    setActionError(null);
     setLoading(true);
     try {
       const res = await runClustering(vehicleType, 5000, city, simulationDay, goodsType, minHour, maxHour);
       setClusterResult(res);
       onClusters(res);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour, onClusters]);
 
   const loadChains = useCallback(async () => {
+    setActionError(null);
     setLoading(true);
     try {
       const data = await fetchChainLengths(vehicleType, city, simulationDay, goodsType, minHour, maxHour);
       setChainData(data);
-    } catch (e) { console.error(e); }
+    } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
   }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour]);
 
@@ -611,7 +637,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
           <button
             key={t}
             style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}
-            onClick={() => setTab(t)}
+            onClick={() => { setTab(t); setActionError(null); }}
             title={t.charAt(0).toUpperCase() + t.slice(1)}
           >
             {TAB_LABELS[t]}
@@ -621,11 +647,22 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
       {/* Tab content */}
       <div style={styles.content}>
+        {/* Shared failure line for the button-triggered loaders below
+            (OD/density/chains/clusters/...): without it a backend error
+            after clicking "Load" leaves an empty tab and no explanation. */}
+        {actionError !== null && (
+          <div style={styles.errorBox}>{actionError}</div>
+        )}
 
         {/* ── Summary Tab ── */}
         {tab === 'summary' && (
           <div>
             {insightsLoading && <SkeletonLines />}
+            {insightsError !== null && !insightsLoading && (
+              <div style={styles.errorBox}>
+                {friendlyFetchError(insightsError).text}
+              </div>
+            )}
             {insights && (
               <>
                 {/* Metric cards — row 1 */}
@@ -709,6 +746,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         {tab === 'temporal' && (
           <div>
             <div style={styles.subtitle}>Hourly Departures</div>
+            {temporalError !== null && (
+              <div style={styles.errorBox}>{temporalError}</div>
+            )}
             {peaksData && (
               <div style={styles.peakRibbon}>
                 <span style={{ color: '#fd805d' }}>&#9650;</span>{' '}
@@ -775,6 +815,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
               dwell time before next trip, and route detour vs straight-line.
             </p>
             {metricsLoading && <SkeletonLines />}
+            {metricsError !== null && !metricsLoading && (
+              <div style={styles.errorBox}>{metricsError}</div>
+            )}
             {!metricsLoading && (
               <>
                 <MetricHistogram title="Speed (km/h)"      dist={metricsSpeed}  precision={0} />
@@ -1501,6 +1544,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#666',
     textAlign: 'center' as const,
     padding: 20,
+  },
+  errorBox: {
+    fontSize: 11, color: '#ff9a9a',
+    background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.35)',
+    borderRadius: 4, padding: '4px 8px', marginBottom: 8, lineHeight: 1.4,
   },
   actionBtn: {
     width: '100%',

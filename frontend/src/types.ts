@@ -251,6 +251,12 @@ export interface PoiCategoriesResponse {
 export interface ZoneListResponse {
   zones: Zone[];
   count: number;
+  truncated: boolean;
+}
+
+/** Render hints per zone layer (source_key → label + optional YAML color). */
+export interface ZoneStylesResponse {
+  styles: Record<string, { label: string; color: [number, number, number] | null }>;
 }
 
 export interface Zone {

@@ -11,7 +11,6 @@ for the 24h animation loop (matching traj-mining's 86400-second cycle).
 
 import math
 import re
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -77,10 +76,10 @@ def _compute_segments(waypoints: list) -> list[TrajectorySegment]:
         dt_sec = (w2[2] - w1[2]) / 1000.0
         dist_km = _haversine_km(w1[3], w1[4], w2[3], w2[4])
         if dt_sec > 0:
-            speed_kmh: Optional[float] = dist_km / (dt_sec / 3600.0)
+            speed_kmh: float | None = dist_km / (dt_sec / 3600.0)
         else:
             speed_kmh = None
-        dwell_sec: Optional[float] = None
+        dwell_sec: float | None = None
         if speed_kmh is not None and speed_kmh < _F3_IDLE_KMH:
             dwell_sec = dt_sec
         segments.append(TrajectorySegment(
@@ -170,19 +169,19 @@ def _rows_to_trajectories(
 @router.get("/trajectories/sample")
 async def sample_trajectories(
     n: int = Query(100, ge=1, le=5000),
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    transport_modes: Optional[str] = Query(
+    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: str | None = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: int | None = Query(None, ge=0),
+    transport_modes: str | None = Query(
         None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
         description="Comma-separated transport-mode ids ('0,3'); filters by the trip's mode"),
     include_segments: bool = Query(False,
         description="Opt into per-segment link/speed/dwell (Phase 2 F3)"),
-    scenario: Optional[str] = Query(None, pattern="^pedestrianize$"),
-    sc_w: Optional[float] = Query(None, ge=-180, le=180),
-    sc_s: Optional[float] = Query(None, ge=-90, le=90),
-    sc_e: Optional[float] = Query(None, ge=-180, le=180),
-    sc_n: Optional[float] = Query(None, ge=-90, le=90),
+    scenario: str | None = Query(None, pattern="^pedestrianize$"),
+    sc_w: float | None = Query(None, ge=-180, le=180),
+    sc_s: float | None = Query(None, ge=-90, le=90),
+    sc_e: float | None = Query(None, ge=-180, le=180),
+    sc_n: float | None = Query(None, ge=-90, le=90),
 ):
     """Return n random trajectories (sampled by vehicle_key+trip_id).
 
@@ -225,9 +224,13 @@ async def trajectories_by_vehicle(
             "(the full-day chain) for agent-playback."
         ),
     ),
-    simulation_day: Optional[int] = Query(None, ge=0),
+    simulation_day: int | None = Query(None, ge=0),
     include_segments: bool = Query(True,
         description="Include per-segment link/speed/dwell (F3)"),
+    include_stationary: bool = Query(False,
+        description="Synthesize stationary 2-point trajectories for the "
+                    "vehicles' waypoint-less trips (e.g. zero-distance hops) "
+                    "so followed agents always render. Off by default."),
 ):
     """Return all trajectories for the requested vehicles (Phase 2A agent playback).
 
@@ -251,7 +254,9 @@ async def trajectories_by_vehicle(
             )
 
     conn = get_connection()
-    rows = waypoint_rows_for_vehicles(conn, keys, simulation_day)
+    rows = waypoint_rows_for_vehicles(
+        conn, keys, simulation_day, include_stationary=include_stationary
+    )
     trajectories = _rows_to_trajectories(
         rows, include_segments=include_segments, anchor_sec=get_epoch_anchor(conn)
     )

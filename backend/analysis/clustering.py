@@ -14,7 +14,9 @@ is the primary clustering signal for mobility data.
 """
 
 import math
+
 from fastapi import APIRouter, Depends, Query
+
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
 
@@ -217,8 +219,8 @@ async def route_similarity(
     that source) are dropped from the sample.
     """
     try:
-        from sklearn.cluster import DBSCAN
         import numpy as np
+        from sklearn.cluster import DBSCAN
     except ImportError:
         return {"error": "scikit-learn not installed", "algorithm": "none"}
 

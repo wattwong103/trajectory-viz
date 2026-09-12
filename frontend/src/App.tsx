@@ -33,6 +33,7 @@ import { unionBboxes, type Bbox } from './utils/bbox';
 import { UploadDropzone } from './components/UploadDropzone';
 import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
 import { exportCompositePng } from './utils/exportPng';
+import { friendlyFetchError } from './friendlyError';
 import type { LayerAvailabilityContext } from './layerCatalog';
 import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
@@ -231,12 +232,16 @@ export default function App() {
   // Initialise filter from URL hash on first load
   const [filter, setFilter] = useState<FilterState>(() => decodeHash(window.location.hash));
   const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
+  // Set when the filter-options fetch fails (backend down, DB missing, ...).
+  // Renders the backend-error overlay instead of an eternal empty screen.
+  const [filterOptionsError, setFilterOptionsError] = useState<string | null>(null);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VIS);
 
   // Drill-down state (map-click radius query)
   const [drillTrajectories, setDrillTrajectories] = useState<Trajectory[]>([]);
   const [drillPoint, setDrillPoint] = useState<[number, number] | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  const [drillError, setDrillError] = useState<string | null>(null);
 
   // Selected-trajectory state (click a trajectory on the map → Detail tab).
   // Sprint A1a: surfaces the segments[] data F3 already attaches.
@@ -276,7 +281,15 @@ export default function App() {
   const [zoneTrips, setZoneTrips] = useState<TripPoint[]>([]);
 
   const reloadFilterOptions = useCallback(() => {
-    fetchFilterOptions().then(setFilterOptions).catch(console.error);
+    fetchFilterOptions()
+      .then(res => {
+        setFilterOptions(res);
+        setFilterOptionsError(null);
+      })
+      .catch(e => {
+        console.error(e);
+        setFilterOptionsError(friendlyFetchError(String(e?.message ?? e)).text);
+      });
   }, []);
 
   useEffect(() => {
@@ -319,7 +332,9 @@ export default function App() {
     }
     let cancelled = false;
     setAgentLoading(true);
-    fetchTrajectoriesByVehicle(selectedAgents, filter.simulationDay)
+    // includeStationary: followed agents with waypoint-less (zero-distance)
+    // trips still render as stationary dots instead of vanishing.
+    fetchTrajectoriesByVehicle(selectedAgents, filter.simulationDay, true, true)
       .then(res => { if (!cancelled) setAgentTrajectories(res.trajectories); })
       .catch(e => { console.error('Agent trajectory fetch failed:', e); })
       .finally(() => { if (!cancelled) setAgentLoading(false); });
@@ -351,18 +366,24 @@ export default function App() {
 
   const animation = useAnimation();
 
+  // Zones/polygon layers — static per DB, fetched once on mount. Declared
+  // here (above handleUploaded) so the upload-completion refetch can reload.
+  const { zones, styles: zoneStyles, reload: reloadZones } = useZones();
+
   // Upload-and-go: on ingest completion, re-run exactly what Refresh does
   // (useTrajectories refetch) plus filter-options, so the new source appears
-  // as a vehicle-type button + legend entry without a reload.
+  // as a vehicle-type button + legend entry without a reload. Zones reload
+  // too — an upload bundle may carry zone layers.
   const handleUploaded = useCallback(() => {
     refetch();
     reloadFilterOptions();
-  }, [refetch, reloadFilterOptions]);
+    void reloadZones();
+  }, [refetch, reloadFilterOptions, reloadZones]);
 
   const uploader = useUpload({ onDone: handleUploaded });
 
   const hasData = (stats?.trips?.row_count ?? 0) > 0;
-  const { insights, loading: insightsLoading } = useInsights(
+  const { insights, loading: insightsLoading, error: insightsError } = useInsights(
     filter.vehicleType, filter.city, filter.simulationDay, hasData,
     filter.goodsType, filter.minHour, filter.maxHour,
     filter.transportModes, filter.scenario,
@@ -404,9 +425,6 @@ export default function App() {
     initialDisabled: disabledPoiCategories,
     onDisabledChange: setDisabledPoiCategories,
   });
-
-  // Zones/polygon layers — static per DB, fetched once on mount.
-  const { zones, loading: zonesLoading } = useZones();
 
   // Category → color map (YAML color wins; deterministic hash fallback) and
   // POI source_key → label map for MapView dots + tooltips. Categories arrive
@@ -469,6 +487,7 @@ export default function App() {
   // Map click handler — fires radius query on empty-map clicks
   const handleMapClick = useCallback(async (lon: number, lat: number) => {
     setDrillLoading(true);
+    setDrillError(null);
     setDrillPoint([lon, lat]);
     try {
       const res = await queryTrajectoriesPoint(
@@ -482,6 +501,7 @@ export default function App() {
     } catch (e) {
       console.error('Drill query failed:', e);
       setDrillTrajectories([]);
+      setDrillError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
     }
     setDrillLoading(false);
   }, [filter.vehicleType, filter.city, filter.simulationDay]);
@@ -489,6 +509,7 @@ export default function App() {
   const clearDrill = useCallback(() => {
     setDrillTrajectories([]);
     setDrillPoint(null);
+    setDrillError(null);
   }, []);
 
   const handleTrajectoryClick = useCallback((traj: Trajectory) => {
@@ -593,6 +614,7 @@ export default function App() {
         poiColorByCategory={poiColorByCategory}
         poiIconAtlas={poiIconAtlas}
         zones={zones}
+        zoneStyleBySource={zoneStyles}
         poiSourceLabels={poiSourceLabels}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
@@ -615,6 +637,36 @@ export default function App() {
         <EmptyState onUploadFiles={uploader.upload} />
       )}
 
+      {/* Backend unreachable (or DB missing) — filter-options failed, so no
+          source list, stats, or trajectories can load. Shown instead of an
+          eternal empty screen; Retry re-fires the fetch. */}
+      {filterOptions === null && filterOptionsError !== null && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          background: 'rgba(20,20,30,0.95)', border: '1px solid #a55',
+          borderRadius: 8, padding: '16px 20px', fontSize: 12, color: '#f0c0c0',
+          zIndex: 10, maxWidth: 360, textAlign: 'center', lineHeight: 1.5,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+            ⚠ {filterOptionsError}
+          </div>
+          <div style={{ color: '#999', marginBottom: 10 }}>
+            The map, filters, and analysis all need the API. If you launched
+            only the frontend, start the backend too (port 9999).
+          </div>
+          <button
+            onClick={() => reloadFilterOptions()}
+            style={{
+              background: 'rgba(79,195,247,0.15)', color: '#4fc3f7',
+              border: '1px solid rgba(79,195,247,0.4)', borderRadius: 4,
+              padding: '5px 14px', fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            ↻ Retry
+          </button>
+        </div>
+      )}
+
       {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
       {layerVisibility.pulse && pulse.error && (
         <div style={{
@@ -624,6 +676,18 @@ export default function App() {
           zIndex: 5,
         }}>
           Pulse layer unavailable: {pulse.error}
+        </div>
+      )}
+
+      {/* Drill query failure — same overlay pattern, stacked above pulse */}
+      {drillError !== null && (
+        <div style={{
+          position: 'absolute', bottom: 148, right: 12, maxWidth: 320,
+          background: 'rgba(60,20,20,0.9)', border: '1px solid #a55',
+          borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f0c0c0',
+          zIndex: 5,
+        }}>
+          Area query failed: {drillError}
         </div>
       )}
 
@@ -681,6 +745,7 @@ export default function App() {
         hasData={hasData}
         insights={insights}
         insightsLoading={insightsLoading}
+        insightsError={insightsError}
         onODFlows={handleODFlows}
         onDensity={handleDensity}
         onClusters={handleClusters}

@@ -203,16 +203,18 @@ def _wilcoxon_signed_rank(pairs: list[tuple[int, int]]) -> dict | None:
 
     Lazy scipy import (transitively guaranteed by scikit-learn, but not at
         module load). Nonparametric — appropriate for skewed ABM count data.
-    Returns None when the test is undefined (too few non-zero differences).
+    Returns None when the test is undefined (too few pairs, or all
+    differences zero — identical fleets have no direction to test).
     """
     if len(pairs) < 8:
+        return None
+    if all(b == a for a, b in pairs):
         return None
     try:
         from scipy.stats import wilcoxon
 
         result = wilcoxon([b for _, b in pairs], [a for a, _ in pairs])
     except (ImportError, ValueError):
-        # ValueError: all differences are zero (identical fleets) — no test.
         return None
     return {
         "statistic": round(float(result.statistic), 1),

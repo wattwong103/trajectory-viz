@@ -66,6 +66,42 @@ class UploadConfigError(Exception):
         super().__init__("; ".join(reasons))
 
 
+# Geometry types upload-and-go can ingest as trajectories. Anything else
+# (Polygon/MultiPolygon/...) is rejected upfront by census_geojson_geometry
+# instead of failing mid-job after earlier batch files already mutated the DB.
+_TRAJECTORY_GEOM_TYPES = frozenset({"Point", "LineString"})
+
+
+def census_geojson_geometry(path: Path) -> None:
+    """Reject GeoJSON files upload-and-go cannot ingest — right now, at
+    upload time (422 with reasons), not mid-job.
+
+    Streams every feature's geometry type via formats.iter_geojson_features
+    (ijson when available, whole-doc fallback otherwise). Raises
+    UploadConfigError naming the offending types, with the zones: pointer
+    for the polygon case.
+    """
+    from backend.formats import iter_geojson_features
+
+    types: set[str] = set()
+    for _idx, feature in iter_geojson_features(path):
+        geom = feature.get("geometry") or {}
+        types.add(geom.get("type"))
+
+    bad = {t for t in types if t not in _TRAJECTORY_GEOM_TYPES}
+    if not bad:
+        return
+    names = ", ".join(sorted(str(t) for t in bad))
+    hint = (
+        "declare polygon layers under `zones:` in sources.yaml instead"
+        if bad & {"Polygon", "MultiPolygon"}
+        else "upload-and-go ingests Point/LineString trajectory geometries only"
+    )
+    raise UploadConfigError(
+        [f"unsupported GeoJSON geometry type(s): {names} — {hint}"]
+    )
+
+
 @dataclass
 class ColumnSniff:
     """Sniffed column roles. Names keep the file's original casing."""
@@ -128,7 +164,9 @@ def sniff_columns(path: Path, fmt: str) -> ColumnSniff:
     """Sniff a staged CSV/NDJSON/Parquet file for lon/lat/time/id columns.
 
     GeoJSON/GPX are NOT sniffed — they normalize to the canonical staging
-    fields (_lon/_lat/_time_ms/_trk_name/_feature_id) at ingest.
+    fields (_lon/_lat/_time_ms/_trk_name/_feature_id) at ingest. GeoJSON
+    geometry compatibility is checked separately by census_geojson_geometry
+    (called by the upload endpoint before accepting the file).
     """
     import json
 

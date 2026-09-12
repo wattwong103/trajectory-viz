@@ -5,10 +5,11 @@ Queries the trips table grouped by hour to produce histograms suitable
 for Recharts BarChart rendering in the frontend.
 """
 
+
 from fastapi import APIRouter, Depends, Query
+
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
-import traceback
 
 router = APIRouter()
 

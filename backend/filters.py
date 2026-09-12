@@ -21,7 +21,6 @@ trip_filters() + threading inside where(). Every migrated endpoint
 accepts it with no further changes.
 """
 
-from typing import Optional
 
 from fastapi import Query
 from pydantic import BaseModel, Field, model_validator
@@ -65,11 +64,11 @@ class ScenarioFields(BaseModel):
     trips entering the bbox are excluded query-time — every endpoint riding
     these fields reflects the scenario, which IS the before/after mechanism."""
 
-    scenario: Optional[str] = Field(None, pattern="^pedestrianize$")
-    sc_w: Optional[float] = Field(None, ge=-180, le=180)
-    sc_s: Optional[float] = Field(None, ge=-90, le=90)
-    sc_e: Optional[float] = Field(None, ge=-180, le=180)
-    sc_n: Optional[float] = Field(None, ge=-90, le=90)
+    scenario: str | None = Field(None, pattern="^pedestrianize$")
+    sc_w: float | None = Field(None, ge=-180, le=180)
+    sc_s: float | None = Field(None, ge=-90, le=90)
+    sc_e: float | None = Field(None, ge=-180, le=180)
+    sc_n: float | None = Field(None, ge=-90, le=90)
 
     @model_validator(mode="after")
     def _scenario_bbox_all_or_none(self):
@@ -83,7 +82,7 @@ class ScenarioFields(BaseModel):
             raise ValueError("scenario bbox requires sc_w < sc_e and sc_s < sc_n")
         return self
 
-    def scenario_clause(self) -> Optional[str]:
+    def scenario_clause(self) -> str | None:
         """The trips-side exclusion condition, or None when scenario unset."""
         if not self.scenario:
             return None
@@ -95,10 +94,10 @@ class TripFilters(ScenarioFields):
     the individual routers used. Patterns are load-bearing: values are
     f-string'd into SQL by build_trip_filter."""
 
-    vehicle_type: Optional[str] = Field(None, pattern="^[a-z][a-z0-9_]*$")
-    city: Optional[str] = Field(None, pattern="^[a-z_]+$")
-    simulation_day: Optional[int] = Field(None, ge=0)
-    goods_type: Optional[str] = Field(None, pattern="^[a-z_]+$")
+    vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
+    city: str | None = Field(None, pattern="^[a-z_]+$")
+    simulation_day: int | None = Field(None, ge=0)
+    goods_type: str | None = Field(None, pattern="^[a-z_]+$")
     # Comma-separated PFLOW transport-mode ids, e.g. "0,3" (0=walk, 1=bike,
     # 2=bus, 3=car, 4=train; 8=taxi). String form (not list[int]) so GET query
     # params and POST bodies share one representation — mirrors the
@@ -106,17 +105,17 @@ class TripFilters(ScenarioFields):
     # INVARIANT: transport_mode is per-TRIP. It is filtered exclusively from
     # trips.transport_mode; waypoints.transport_mode is display-only garbage
     # for router-generated trajectories (uniform per source).
-    transport_modes: Optional[str] = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
-    min_hour: Optional[int] = Field(None, ge=0, le=23)
-    max_hour: Optional[int] = Field(None, ge=0, le=23)
+    transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
+    min_hour: int | None = Field(None, ge=0, le=23)
+    max_hour: int | None = Field(None, ge=0, le=23)
     # F1 derived-metric filters (Phase 2 Step 2.2)
-    min_speed: Optional[float] = Field(None, ge=0, le=300)
-    max_speed: Optional[float] = Field(None, ge=0, le=300)
-    max_dwell_minutes: Optional[float] = Field(None, ge=0, le=10080)
-    min_detour_ratio: Optional[float] = Field(None, ge=1.0, le=20.0)
-    max_detour_ratio: Optional[float] = Field(None, ge=1.0, le=20.0)
+    min_speed: float | None = Field(None, ge=0, le=300)
+    max_speed: float | None = Field(None, ge=0, le=300)
+    max_dwell_minutes: float | None = Field(None, ge=0, le=10080)
+    min_detour_ratio: float | None = Field(None, ge=1.0, le=20.0)
+    max_detour_ratio: float | None = Field(None, ge=1.0, le=20.0)
 
-    def transport_mode_list(self) -> Optional[list[int]]:
+    def transport_mode_list(self) -> list[int] | None:
         """Parsed transport_modes, or None when unset. Pattern-validated ints."""
         if not self.transport_modes:
             return None
@@ -136,7 +135,7 @@ class TripFilters(ScenarioFields):
             extra.append(f"goods_type = '{self.goods_type}'")
         return extra
 
-    def where(self, extra: Optional[list[str]] = None) -> str:
+    def where(self, extra: list[str] | None = None) -> str:
         """WHERE clause for the trips table ('' or 'WHERE a AND b AND ...').
 
         `extra` carries endpoint-specific conditions (zone equality,
@@ -160,30 +159,30 @@ class TripFilters(ScenarioFields):
 
 
 def trip_filters(
-    vehicle_type: Optional[str] = Query(None, pattern="^[a-z][a-z0-9_]*$"),
-    city: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: Optional[int] = Query(None, ge=0),
-    goods_type: Optional[str] = Query(None, pattern="^[a-z_]+$"),
-    transport_modes: Optional[str] = Query(
+    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    city: str | None = Query(None, pattern="^[a-z_]+$"),
+    simulation_day: int | None = Query(None, ge=0),
+    goods_type: str | None = Query(None, pattern="^[a-z_]+$"),
+    transport_modes: str | None = Query(
         None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
         description="Comma-separated transport-mode ids, e.g. '0,3' (0=walk 1=bike 2=bus 3=car 4=train 8=taxi)"),
-    min_hour: Optional[int] = Query(None, ge=0, le=23),
-    max_hour: Optional[int] = Query(None, ge=0, le=23),
-    min_speed: Optional[float] = Query(None, ge=0, le=300,
+    min_hour: int | None = Query(None, ge=0, le=23),
+    max_hour: int | None = Query(None, ge=0, le=23),
+    min_speed: float | None = Query(None, ge=0, le=300,
                                        description="km/h, speed_avg_kmh >= this"),
-    max_speed: Optional[float] = Query(None, ge=0, le=300,
+    max_speed: float | None = Query(None, ge=0, le=300,
                                        description="km/h, speed_avg_kmh <= this"),
-    max_dwell_minutes: Optional[float] = Query(None, ge=0, le=10080,
+    max_dwell_minutes: float | None = Query(None, ge=0, le=10080,
                                                description="minutes; dwell_minutes <= this"),
-    min_detour_ratio: Optional[float] = Query(None, ge=1.0, le=20.0),
-    max_detour_ratio: Optional[float] = Query(None, ge=1.0, le=20.0),
-    scenario: Optional[str] = Query(
+    min_detour_ratio: float | None = Query(None, ge=1.0, le=20.0),
+    max_detour_ratio: float | None = Query(None, ge=1.0, le=20.0),
+    scenario: str | None = Query(
         None, pattern="^pedestrianize$",
         description="Query-time scenario: 'pedestrianize' excludes car trips entering the sc_* bbox"),
-    sc_w: Optional[float] = Query(None, ge=-180, le=180),
-    sc_s: Optional[float] = Query(None, ge=-90, le=90),
-    sc_e: Optional[float] = Query(None, ge=-180, le=180),
-    sc_n: Optional[float] = Query(None, ge=-90, le=90),
+    sc_w: float | None = Query(None, ge=-180, le=180),
+    sc_s: float | None = Query(None, ge=-90, le=90),
+    sc_e: float | None = Query(None, ge=-180, le=180),
+    sc_n: float | None = Query(None, ge=-90, le=90),
 ) -> TripFilters:
     """FastAPI dependency: shared filters as GET query params.
 

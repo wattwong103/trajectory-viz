@@ -228,6 +228,53 @@ def test_wilcoxon_needs_enough_pairs(client):
     assert body["matched"]["significance"] is None
 
 
+def test_two_proportion_edge_cases():
+    """Direct unit tests for the z-test guards."""
+    from backend.analysis.compare import _two_proportion_pvalue, _wilcoxon_signed_rank
+
+    assert _two_proportion_pvalue(0, 0, 5, 10) is None   # empty side
+    assert _two_proportion_pvalue(5, 10, 0, 0) is None
+    assert _two_proportion_pvalue(8, 8, 6, 6) == 1.0     # unanimous both sides
+    assert _two_proportion_pvalue(0, 8, 0, 6) == 1.0     # absent both sides
+    # Identical fleets (≥8 pairs, all diffs zero) → scipy raises → None.
+    assert _wilcoxon_signed_rank([(3, 3)] * 10) is None
+
+
+def test_matched_null_when_no_shared_ids(monkeypatch):
+    """Both sides have trips but disjoint persons → matched is None."""
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        _insert(conn, "gufm", [(1, 8, 4, 5.0), (2, 9, 4, 5.0)])
+        _insert(conn, "pflow", [(3, 8, 4, 5.0), (4, 9, 4, 5.0)])
+        monkeypatch.setattr(backend.db, "_connection", conn)
+        client = TestClient(app)
+        body = _compare(client, source_a="gufm", source_b="pflow")
+        assert body["matched"] is None
+    finally:
+        conn.close()
+
+
+def test_alignment_empty_when_no_shared_persons(monkeypatch):
+    """_alignment directly: no shared persons → zeroed response, not a crash."""
+    from backend.analysis.compare import _alignment
+
+    conn = duckdb.connect(":memory:")
+    try:
+        _init_schema(conn)
+        _insert(conn, "gufm", [(1, 8, 4, 5.0)])
+        al = _alignment(conn, "WHERE vehicle_type = 'gufm'", "WHERE vehicle_type = 'nope'")
+        assert al == {"persons": 0, "pairs": 0, "mean": None, "median": None,
+                      "histogram": []}
+    finally:
+        conn.close()
+
+
+def test_grid_same_source_422(client):
+    r = client.get("/api/analysis/compare/grid", params={"source_a": "gufm", "source_b": "gufm"})
+    assert r.status_code == 422
+
+
 # --- Per-trip alignment (matched persons) ---------------------------------------
 
 

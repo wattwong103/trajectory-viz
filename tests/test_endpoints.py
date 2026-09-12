@@ -146,6 +146,36 @@ def test_stats_filter_options(client):
         assert set(body["metrics_available"][src].keys()) == {"speed", "dwell", "detour"}
 
 
+def test_filter_options_warns_on_uncovered_source(client, capsys, monkeypatch):
+    """Ingested source_ids missing from the registry trigger a one-time
+    server-side warning (the map would otherwise degrade silently)."""
+    import backend.routers.stats as stats_mod
+
+    monkeypatch.setattr(stats_mod, "_uncovered_warned", False)
+    # Insert a trip whose source_id no registry block declares.
+    import backend.db as dbmod
+    db = dbmod.get_connection()
+    db.execute(
+        """INSERT INTO trips (vehicle_id, trip_id, starttime, start_lon,
+                              start_lat, end_lon, end_lat, vehicle_type,
+                              vehicle_key, source_id, transport_mode)
+           VALUES (777, 1, 36000, 139.0, 35.0, 139.1, 35.1,
+                   'ghost', 'ghost:777', 'ghost-fleet', 4)"""
+    )
+    try:
+        r = client.get("/api/stats/filter-options")
+        assert r.status_code == 200
+        out = capsys.readouterr().out
+        assert "ghost-fleet" in out
+        assert "PFLOW_VIZ_SOURCES" in out
+        # Second call stays quiet (warn-once per process).
+        r = client.get("/api/stats/filter-options")
+        assert capsys.readouterr().out == ""
+    finally:
+        db.execute("DELETE FROM trips WHERE vehicle_key = 'ghost:777'")
+        monkeypatch.setattr(stats_mod, "_uncovered_warned", False)
+
+
 def test_stats_filter_options_metrics_truck_has_speed(client):
     """Synthetic truck data includes a 3-waypoint trajectory for trip 1001/1, so
     speed_avg_kmh is populated for at least one truck row → has_speed is true."""
@@ -287,6 +317,80 @@ def test_by_vehicle_simulation_day_filter(client):
     })
     assert r.status_code == 200
     assert r.json()["count"] == 0
+
+
+def test_by_vehicle_stationary_off_by_default(client):
+    """Waypoint-less vehicles return nothing unless opted in (pinned contract)."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "taxi:tokyo:47",
+    })
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+
+def test_waypoint_rows_for_vehicles_empty_keys():
+    """Empty key list short-circuits to [] without touching the DB."""
+    from backend.trajectory_queries import waypoint_rows_for_vehicles
+
+    assert waypoint_rows_for_vehicles(None, []) == []
+    assert waypoint_rows_for_vehicles(None, [], include_stationary=True) == []
+
+
+def test_by_vehicle_stationary_respects_simulation_day(client):
+    """The stationary path applies the day filter like the waypoint path."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "taxi:tokyo:47", "simulation_day": 0,
+        "include_stationary": "true",
+    })
+    assert r.status_code == 200
+    assert r.json()["count"] == 3
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "taxi:tokyo:47", "simulation_day": 1,
+        "include_stationary": "true",
+    })
+    assert r.json()["count"] == 0
+
+
+def test_by_vehicle_stationary_synthesis(client):
+    """include_stationary=true: taxi:tokyo:47's 3 waypoint-less trips come
+    back as stationary 2-point trajectories at their OD starts."""
+    r = client.get("/api/trajectories/by-vehicle", params={
+        "vehicle_keys": "taxi:tokyo:47", "include_stationary": "true",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 3
+    for t in body["trajectories"]:
+        assert t["metadata"]["vehicle_key"] == "taxi:tokyo:47"
+        assert len(t["path"]) == 2
+        assert t["path"][0] == t["path"][1]          # stationary
+        assert t["timestamps"][1] - t["timestamps"][0] == 60
+    # First trip departs 08:00 from (139.7, 35.7).
+    first = min(body["trajectories"], key=lambda t: t["timestamps"][0])
+    assert first["timestamps"][0] == 28800
+    assert first["path"][0] == [139.7, 35.7]
+
+
+def test_by_vehicle_stationary_midnight_clamp(client):
+    """A 23:59 departure must not wrap the 60 s span past midnight (the
+    frontend treats tN < t0 as invisible) — it collapses to one instant."""
+    import backend.db as dbmod
+    from backend.trajectory_queries import _stationary_rows_for_vehicles
+
+    conn = dbmod.get_connection()
+    conn.execute(
+        """INSERT INTO trips (vehicle_id, trip_id, starttime, start_lon,
+                              start_lat, end_lon, end_lat, vehicle_type,
+                              vehicle_key, source_id, transport_mode)
+           VALUES (999, 1, 86350, 139.0, 35.0, 139.0, 35.0,
+                   'taxi', 'taxi:tokyo:999', 'taxi', 4)"""
+    )
+    try:
+        rows = _stationary_rows_for_vehicles(conn, ["taxi:tokyo:999"])
+        assert len(rows) == 2
+        assert rows[0][2] == rows[1][2]              # same instant, no wrap
+    finally:
+        conn.execute("DELETE FROM trips WHERE vehicle_key = 'taxi:tokyo:999'")
 
 
 def test_by_vehicle_rejects_too_many_keys(client):

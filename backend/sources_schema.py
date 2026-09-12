@@ -17,7 +17,7 @@ import os
 import sys
 from glob import glob
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -67,15 +67,15 @@ class ColumnSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    csv: Optional[str] = Field(
+    csv: str | None = Field(
         default=None,
         description="CSV column name to read (when not a derived column).",
     )
-    type: Optional[ColumnType] = Field(
+    type: ColumnType | None = Field(
         default=None,
         description="DuckDB type (int|bigint|double|varchar|bool). Required if `csv` is set.",
     )
-    transform: Optional[str] = Field(
+    transform: str | None = Field(
         default=None,
         description=(
             "Optional SQL expression applied to the CSV column. "
@@ -83,7 +83,7 @@ class ColumnSpec(BaseModel):
             "Example for boolean coercion: \"lower(value) = 'true'\"."
         ),
     )
-    derived: Optional[str] = Field(
+    derived: str | None = Field(
         default=None,
         description=(
             "SQL expression computed from other CSV columns. "
@@ -93,7 +93,7 @@ class ColumnSpec(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _exactly_one_source(self) -> "ColumnSpec":
+    def _exactly_one_source(self) -> ColumnSpec:
         has_csv = self.csv is not None
         has_derived = self.derived is not None
         if has_csv == has_derived:
@@ -127,13 +127,13 @@ class RenderConfig(BaseModel):
         default="trails",
         description="Visual treatment: trails | points | arcs.",
     )
-    color: Optional[tuple[int, int, int]] = Field(
+    color: tuple[int, int, int] | None = Field(
         default=None,
         description="RGB color triple (0-255 each). Omit for palette fallback.",
     )
 
     @model_validator(mode="after")
-    def _validate_color_range(self) -> "RenderConfig":
+    def _validate_color_range(self) -> RenderConfig:
         if self.color is not None:
             for c in self.color:
                 if not (0 <= c <= 255):
@@ -157,7 +157,7 @@ class DiscoveryConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    trips_glob: Optional[str] = Field(
+    trips_glob: str | None = Field(
         default=None,
         description=(
             "Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching this source's "
@@ -166,11 +166,11 @@ class DiscoveryConfig(BaseModel):
             "synthesized from waypoints at ingest (see trips_synthesis)."
         ),
     )
-    trajectories_glob: Optional[str] = Field(
+    trajectories_glob: str | None = Field(
         default=None,
         description="Glob for trajectory/waypoint files. Optional.",
     )
-    format: Optional[FormatType] = Field(
+    format: FormatType | None = Field(
         default=None,
         description=(
             "Ingest format applied to both trips and trajectories files "
@@ -178,11 +178,11 @@ class DiscoveryConfig(BaseModel):
             "extension when omitted; `.json` files require an explicit format."
         ),
     )
-    trips_format: Optional[FormatType] = Field(
+    trips_format: FormatType | None = Field(
         default=None,
         description="Per-side format override for trips files (wins over `format`).",
     )
-    trajectories_format: Optional[FormatType] = Field(
+    trajectories_format: FormatType | None = Field(
         default=None,
         description="Per-side format override for trajectory files (wins over `format`).",
     )
@@ -190,11 +190,11 @@ class DiscoveryConfig(BaseModel):
         default=True,
         description="If True, use only the most recent matching run_* directory.",
     )
-    scope: Optional[ScopeConfig] = Field(
+    scope: ScopeConfig | None = Field(
         default=None,
         description="Optional scope value (used in vehicle_key_template and city column).",
     )
-    validation_relative: Optional[str] = Field(
+    validation_relative: str | None = Field(
         default=None,
         description=(
             "Filename of the validation CSV relative to each trips CSV's directory. "
@@ -208,7 +208,7 @@ class ColumnsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    trip_id_col: Optional[str] = Field(
+    trip_id_col: str | None = Field(
         default=None,
         description=(
             "Column whose value becomes trips.trip_id. Required unless "
@@ -222,7 +222,7 @@ class ColumnsConfig(BaseModel):
         default_factory=dict,
         description="Map of DB column name -> ColumnSpec for the `trips` table.",
     )
-    waypoints: Optional[dict[str, ColumnSpec]] = Field(
+    waypoints: dict[str, ColumnSpec] | None = Field(
         default=None,
         description="Map of DB column name -> ColumnSpec for the `waypoints` table.",
     )
@@ -256,7 +256,7 @@ class TimeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    epoch_anchor: Optional[str] = Field(
+    epoch_anchor: str | None = Field(
         default=None,
         description=(
             "ISO-8601 timestamp (must be timezone-aware) anchoring unix_time_ms "
@@ -264,7 +264,7 @@ class TimeConfig(BaseModel):
             "one distinct anchor across the whole file; stored in viz_meta."
         ),
     )
-    coord_times_prop: Optional[str] = Field(
+    coord_times_prop: str | None = Field(
         default=None,
         description=(
             "GeoJSON LineString property holding the per-coordinate time array "
@@ -318,24 +318,24 @@ class SourceConfig(BaseModel):
         )
     )
     columns: ColumnsConfig
-    render: Optional[RenderConfig] = Field(
+    render: RenderConfig | None = Field(
         default=None,
         description="Optional frontend rendering hints (mode + color).",
     )
-    trips_synthesis: Optional[TripsSynthesisConfig] = Field(
+    trips_synthesis: TripsSynthesisConfig | None = Field(
         default=None,
         description=(
             "Points-only source: synthesize trips from waypoints at ingest. "
             "Mutually exclusive with discovery.trips_glob."
         ),
     )
-    time: Optional[TimeConfig] = Field(
+    time: TimeConfig | None = Field(
         default=None,
         description="Optional absolute-time handling (epoch anchor, coord-times prop).",
     )
 
     @model_validator(mode="after")
-    def _validate_template(self) -> "SourceConfig":
+    def _validate_template(self) -> SourceConfig:
         # Verify required placeholders.
         if "{vehicle_id}" not in self.vehicle_key_template:
             raise ValueError(
@@ -356,7 +356,7 @@ class SourceConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_discovery_and_synthesis(self) -> "SourceConfig":
+    def _validate_discovery_and_synthesis(self) -> SourceConfig:
         """Points-only sources: trips_glob omitted ⇒ trips synthesized at ingest."""
         d = self.discovery
         if d.trips_glob is None and d.trajectories_glob is None:
@@ -380,7 +380,7 @@ class SourceConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_formats(self) -> "SourceConfig":
+    def _validate_formats(self) -> SourceConfig:
         """Every globbed side must resolve to a format without ambiguity.
 
         `.json` files cannot be auto-detected (geojson vs ndjson) — an
@@ -409,13 +409,13 @@ class SourceConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_time(self) -> "SourceConfig":
+    def _validate_time(self) -> SourceConfig:
         if self.time is not None and self.time.epoch_anchor is not None:
             _validate_epoch_anchor(self.time.epoch_anchor)
         return self
 
     @model_validator(mode="after")
-    def _validate_required_columns(self) -> "SourceConfig":
+    def _validate_required_columns(self) -> SourceConfig:
         if self.trips_synthesis is not None:
             # Synthesized trips derive starttime/endpoints from waypoints at
             # ingest — no trip column mapping required (empty allowed).
@@ -444,8 +444,8 @@ class PoiColumnsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[ColumnSpec] = Field(default=None)
-    category: Optional[ColumnSpec] = Field(default=None)
+    name: ColumnSpec | None = Field(default=None)
+    category: ColumnSpec | None = Field(default=None)
     lon: ColumnSpec
     lat: ColumnSpec
 
@@ -463,18 +463,18 @@ class PoiConfig(BaseModel):
     glob: str = Field(
         description="Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching POI files."
     )
-    format: Optional[FormatType] = Field(
+    format: FormatType | None = Field(
         default=None,
         description="Ingest format; auto-detected from extension when omitted.",
     )
     columns: PoiColumnsConfig
-    color: Optional[tuple[int, int, int]] = Field(
+    color: tuple[int, int, int] | None = Field(
         default=None,
         description="RGB color triple (0-255 each). Omit for palette fallback.",
     )
 
     @model_validator(mode="after")
-    def _validate_color_range(self) -> "PoiConfig":
+    def _validate_color_range(self) -> PoiConfig:
         if self.color is not None:
             for c in self.color:
                 if not (0 <= c <= 255):
@@ -484,7 +484,7 @@ class PoiConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_format_unambiguous(self) -> "PoiConfig":
+    def _validate_format_unambiguous(self) -> PoiConfig:
         if self.format is None and Path(self.glob).suffix.lower() == ".json":
             raise ValueError(
                 f"pois glob {self.glob!r} has a `.json` extension, which is "
@@ -499,8 +499,8 @@ class ZoneColumnsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[ColumnSpec] = Field(default=None)
-    category: Optional[ColumnSpec] = Field(default=None)
+    name: ColumnSpec | None = Field(default=None)
+    category: ColumnSpec | None = Field(default=None)
 
 
 class ZoneConfig(BaseModel):
@@ -516,18 +516,18 @@ class ZoneConfig(BaseModel):
     glob: str = Field(
         description="Glob (relative to PFLOW_VIZ_OUTPUT_ROOT) matching zone files."
     )
-    format: Optional[FormatType] = Field(
+    format: FormatType | None = Field(
         default=None,
         description="Ingest format; auto-detected from extension when omitted.",
     )
     columns: ZoneColumnsConfig
-    color: Optional[tuple[int, int, int]] = Field(
+    color: tuple[int, int, int] | None = Field(
         default=None,
         description="RGB color triple (0-255 each). Omit for palette fallback.",
     )
 
     @model_validator(mode="after")
-    def _validate_color_range(self) -> "ZoneConfig":
+    def _validate_color_range(self) -> ZoneConfig:
         if self.color is not None:
             for c in self.color:
                 if not (0 <= c <= 255):
@@ -537,12 +537,30 @@ class ZoneConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_format_unambiguous(self) -> "ZoneConfig":
+    def _validate_format_unambiguous(self) -> ZoneConfig:
         if self.format is None and Path(self.glob).suffix.lower() == ".json":
             raise ValueError(
                 f"zones glob {self.glob!r} has a `.json` extension, which is "
                 f"ambiguous (geojson vs ndjson). Set an explicit `format:`."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_columns_csv_only(self) -> ZoneConfig:
+        """Zone name/category must map plain `csv:` properties.
+
+        Zones ingest through a pure-Python path (no staged SQL table), so
+        `derived:`/`transform:` expressions — evaluated in SQL for trips,
+        waypoints, and POIs — cannot run here. Fail at validation time with
+        a clear message instead of silently dropping the mapping at ingest.
+        """
+        for dim in ("name", "category"):
+            spec = getattr(self.columns, dim)
+            if spec is not None and (spec.derived is not None or spec.transform is not None):
+                raise ValueError(
+                    f"zones columns.{dim} must use a plain `csv:` property — "
+                    f"`derived:`/`transform:` are not supported on zone layers."
+                )
         return self
 
 
@@ -555,21 +573,21 @@ class SourcesFile(BaseModel):
     sources: dict[str, SourceConfig] = Field(
         description="Map of source key (e.g. 'pflow-truck') -> SourceConfig."
     )
-    pois: Optional[dict[str, PoiConfig]] = Field(
+    pois: dict[str, PoiConfig] | None = Field(
         default=None,
         description="Optional map of POI layer key -> PoiConfig.",
     )
-    zones: Optional[dict[str, ZoneConfig]] = Field(
+    zones: dict[str, ZoneConfig] | None = Field(
         default=None,
         description="Optional map of zone/polygon layer key -> ZoneConfig.",
     )
-    time: Optional[TimeConfig] = Field(
+    time: TimeConfig | None = Field(
         default=None,
         description="Optional top-level default epoch anchor for all sources.",
     )
 
     @model_validator(mode="after")
-    def _validate_version(self) -> "SourcesFile":
+    def _validate_version(self) -> SourcesFile:
         if self.version != 1:
             raise ValueError(
                 f"Unsupported sources.yaml schema version {self.version}. "
@@ -578,7 +596,7 @@ class SourcesFile(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_single_epoch_anchor(self) -> "SourcesFile":
+    def _validate_single_epoch_anchor(self) -> SourcesFile:
         """At most one distinct epoch_anchor across the whole file.
 
         The anchor is per-DB (viz_meta), not per-source — mixing anchors would
@@ -604,7 +622,7 @@ def load_sources(path: Path | str) -> SourcesFile:
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"sources.yaml not found: {path}")
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     return SourcesFile.model_validate(raw)
 
@@ -817,7 +835,7 @@ def _cli_validate(path: str) -> int:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 2
     except ValidationError as e:
-        print(f"[ERROR] sources.yaml is invalid:", file=sys.stderr)
+        print("[ERROR] sources.yaml is invalid:", file=sys.stderr)
         print(e, file=sys.stderr)
         return 1
     except yaml.YAMLError as e:
@@ -841,7 +859,7 @@ def _cli_validate(path: str) -> int:
     return 0
 
 
-def _cli_discovery(path: str, output_root_str: Optional[str]) -> int:
+def _cli_discovery(path: str, output_root_str: str | None) -> int:
     rc = _cli_validate(path)
     if rc != 0:
         return rc

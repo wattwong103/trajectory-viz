@@ -29,7 +29,6 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -170,9 +169,9 @@ def pack_trajectories(trajectories: list[dict], sources: list[dict]) -> tuple[di
     return block, meta
 
 
-def pack_pulse(conn, vehicle_type: Optional[str], city: Optional[str],
+def pack_pulse(conn, vehicle_type: str | None, city: str | None,
                origin: tuple[float, float], resolution: float = 0.005,
-               max_cells_per_hour: int = 15000) -> Optional[tuple[dict, dict]]:
+               max_cells_per_hour: int = 15000) -> tuple[dict, dict] | None:
     """Pack density_hourly rows; None when the aggregate isn't built."""
     built = conn.execute(
         "SELECT COUNT(*) FROM density_hourly WHERE resolution = ?", [resolution]
@@ -255,15 +254,15 @@ def export_html(
     vendor_js: str,
     *,
     title: str = "trajectory-viz export",
-    vehicle_type: Optional[str] = None,
-    city: Optional[str] = None,
-    simulation_day: Optional[int] = None,
+    vehicle_type: str | None = None,
+    city: str | None = None,
+    simulation_day: int | None = None,
     sample_n: int = 2000,
-    agents: Optional[list[str]] = None,
+    agents: list[str] | None = None,
     include_pulse: bool = True,
-    buildings_bin: Optional[bytes] = None,
-    camera: Optional[dict] = None,
-    loop: Optional[dict] = None,
+    buildings_bin: bytes | None = None,
+    camera: dict | None = None,
+    loop: dict | None = None,
 ) -> str:
     """Assemble the export HTML string. Raises ValueError when nothing matches."""
     notes: list[str] = []

@@ -9,7 +9,8 @@ get_buildings_dir(). The frontend's baked-mode buildings layer fetches
 import json
 import struct
 
-from fastapi import APIRouter, HTTPException, Path as PathParam
+from fastapi import APIRouter, HTTPException
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 
 from ..config import get_buildings_dir
