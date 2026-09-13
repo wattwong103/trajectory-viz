@@ -89,6 +89,5 @@ openspec/
 .ai-sdlc/state/
 .ai-sdlc/audit.jsonl
 
-# ai-sdlc worktrees are local; the project-level sentinel is shared (standing external-write allowlist)
-.worktrees/*
-!.worktrees/.active-task
+# ai-sdlc worktrees and the active-task sentinel are per clone (sh .githooks/setup.sh)
+.worktrees/
