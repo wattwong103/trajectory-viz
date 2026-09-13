@@ -3,10 +3,10 @@ id: TASK-3
 title: >-
   Fix CI: Docker (build + smoke) job fails in image build (README.md missing for
   pip install -e .)
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-09-13 19:30'
-updated_date: '2026-09-13 19:38'
+updated_date: '2026-09-13 20:42'
 labels:
   - ci
 dependencies: []
