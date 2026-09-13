@@ -70,3 +70,16 @@ H[:]Dropbox*
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# ── Agent / spec tooling (per-tool scratch, never committed) ──
+.claude/
+.grok/
+.codex/
+.agents/
+.mcp.json
+AGENTS.md
+openspec/
+.mavis/
+.harness/
+.cursor/
+.aider*
