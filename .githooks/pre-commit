@@ -1,0 +1,12 @@
+#!/bin/sh
+# Refuse direct commits on the default branch. Humans and agents alike work on a task branch
+# and a human merges. Emergency override (humans only): ALLOW_MAIN_COMMIT=1 git commit ...
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+case "$branch" in
+  main|master)
+    if [ "${ALLOW_MAIN_COMMIT:-0}" != "1" ]; then
+      echo "pre-commit: direct commits to '$branch' are blocked. Use: git switch -c <task-branch>" >&2
+      exit 1
+    fi ;;
+esac
+exit 0

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Refuse pushes that update the default branch directly. Override (humans only): ALLOW_MAIN_PUSH=1 git push ...
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      if [ "${ALLOW_MAIN_PUSH:-0}" != "1" ]; then
+        echo "pre-push: pushing to '$remote_ref' directly is blocked. Push a task branch and open a PR." >&2
+        exit 1
+      fi ;;
+  esac
+done
+exit 0
