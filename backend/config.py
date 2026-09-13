@@ -13,6 +13,10 @@ from pathlib import Path
 
 # Lazy-resolved. Raises only if code actually needs PFLOW_HOME.
 _pflow_home: Path | None = None
+# Warn about a dangling PFLOW_HOME once per process. When neither the env
+# path nor the fallback exists, resolution raises and nothing is cached, so
+# without this flag every caller re-warns (CI saw one line per request).
+_pflow_home_env_warned = False
 
 
 def get_pflow_home() -> Path:
@@ -25,7 +29,7 @@ def get_pflow_home() -> Path:
     Raises FileNotFoundError if none of the candidates exist.
     Only called when PFLOW_VIZ_DB / PFLOW_VIZ_OUTPUT_ROOT are not set.
     """
-    global _pflow_home
+    global _pflow_home, _pflow_home_env_warned
     if _pflow_home is not None:
         return _pflow_home
 
@@ -35,7 +39,9 @@ def get_pflow_home() -> Path:
         if p.is_dir():
             _pflow_home = p
             return _pflow_home
-        print(f"[WARN] PFLOW_HOME={env} does not exist, falling back to auto-detect")
+        if not _pflow_home_env_warned:
+            _pflow_home_env_warned = True
+            print(f"[WARN] PFLOW_HOME={env} does not exist, falling back to auto-detect")
 
     # Generic cross-platform default. Users on other disks/paths set PFLOW_HOME.
     candidates = [

@@ -3,9 +3,10 @@ id: TASK-2
 title: >-
   Fix CI: test_filter_options_warns_on_uncovered_source fails on a PFLOW_HOME
   warning
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-09-13 18:42'
+updated_date: '2026-09-13 19:24'
 labels:
   - ci
 dependencies: []
