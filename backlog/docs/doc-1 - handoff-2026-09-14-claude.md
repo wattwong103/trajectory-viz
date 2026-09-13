@@ -17,15 +17,15 @@ TASK-2: make the backend CI jobs green (test_filter_options_warns_on_uncovered_s
 - CI on PR #3: Backend py3.11 and py3.12 green, Frontend green, sources.yaml validation green.
 
 ## Files changed
-`backend/config.py`, `tests/test_config.py`, this handoff, backlog TASK-2 (In Progress) and new TASK-4.
+`backend/config.py`, `tests/test_config.py`, this handoff, backlog TASK-2 (In Progress) and new TASK-3.
 
 ## Verify next
 - Merge PR #3 (human). After merge, mark TASK-2 Done (its acceptance criterion is green on main).
-- The Docker (build + smoke) job now runs for the first time and fails in the image build: TASK-4.
+- The Docker (build + smoke) job now runs for the first time and fails in the image build: TASK-3.
 - Operator follow-up outside agent scope: `ci.yml` sets PFLOW_HOME to a path that never exists; a `mkdir -p` before pytest would match the comment's intent.
 
 ## Open questions
 None for this task.
 
 ## Who owns next
-Human: merge #3, decide on TASK-4 priority. Any harness: TASK-4 on a new branch.
+Human: merge #3, decide on TASK-3 priority. Any harness: TASK-3 on a new branch.

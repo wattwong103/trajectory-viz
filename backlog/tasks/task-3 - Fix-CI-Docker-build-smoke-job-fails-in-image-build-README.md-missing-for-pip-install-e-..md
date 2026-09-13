@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-09-13 19:30'
+updated_date: '2026-09-13 19:31'
 labels:
   - ci
 dependencies: []
@@ -16,7 +17,7 @@ ordinal: 3000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Unmasked by TASK-2 (PR #3): the Docker job needs the backend job and had been skipped on every main run since 2026-08-28, so it never ran. First run fails in 'Build image': pip install -e . raises 'OSError: Readme file does not exist: README.md' (hatchling reads pyproject readme) plus 'hatchling.build has no attribute prepare_metadata_for_build_editable'. Likely the Dockerfile copies pyproject.toml before README.md, or pins an old hatchling. Fix the Dockerfile COPY order or pin hatchling, then confirm the smoke step passes.
+Unmasked by TASK-2 (PR #3): the Docker job needs the backend job and had been skipped on every main run since 2026-08-28, so it never ran. First run fails in 'Build image': Dockerfile lines 42-44 copy only pyproject.toml and backend/__init__.py before 'pip install -e .', but pyproject declares readme = README.md, so hatchling raises 'OSError: Readme file does not exist: README.md' (and the editable-metadata hook error follows). Fix: COPY README.md alongside pyproject.toml (or drop the readme field for the image build), then confirm the smoke step passes.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

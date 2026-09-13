@@ -1,9 +1,10 @@
 ---
 id: TASK-1
 title: Review the ai-sdlc pilot config and open the PR
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-09-13 18:30'
+updated_date: '2026-09-13 19:31'
 labels:
   - governance
 dependencies: []
