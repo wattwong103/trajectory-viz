@@ -38,8 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps first (layer-cache).
-COPY pyproject.toml ./
+# Install Python deps first (layer-cache). pyproject declares `readme = "README.md"`,
+# so hatchling needs the file present to build the editable metadata.
+COPY pyproject.toml README.md ./
 COPY backend/__init__.py ./backend/__init__.py
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e .
@@ -47,7 +48,6 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Now copy the rest of the source.
 COPY backend/ ./backend/
 COPY sources.yaml ./sources.yaml
-COPY README.md ./README.md
 COPY LICENSE ./LICENSE
 
 # Copy the built frontend from stage 1 into the location app.py mounts.
