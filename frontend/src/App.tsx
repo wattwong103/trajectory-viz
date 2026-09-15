@@ -351,6 +351,7 @@ export default function App() {
 
   // Zoomed-in bbox sample (architecture budget 500). Null = use the city-wide
   // sample. Cleared when filters change so a stale viewport set can't linger.
+  const [linkLoadNonce, setLinkLoadNonce] = useState(0);
   const [viewportTrajs, setViewportTrajs] = useState<Trajectory[] | null>(null);
   const VIEWPORT_ZOOM = 12;
   useEffect(() => { setViewportTrajs(null); }, [
@@ -535,6 +536,17 @@ export default function App() {
         filter.city,
         filter.simulationDay,
         200,
+        true,
+        filter.transportModes,
+        filter.scenario,
+        filter.goodsType,
+        filter.minHour,
+        filter.maxHour,
+        filter.minSpeed,
+        filter.maxSpeed,
+        filter.maxDwellMinutes,
+        filter.minDetourRatio,
+        filter.maxDetourRatio,
       );
       setDrillTrajectories(res.trajectories);
     } catch (e) {
@@ -543,7 +555,7 @@ export default function App() {
       setDrillError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
     }
     setDrillLoading(false);
-  }, [filter.vehicleType, filter.city, filter.simulationDay]);
+  }, [filter]);
 
   const clearDrill = useCallback(() => {
     setDrillTrajectories([]);
@@ -791,7 +803,10 @@ export default function App() {
         onRefetch={refetch}
         onClearDrill={clearDrill}
         onLayerToggle={(key) => setLayerVisibility(prev => ({ ...prev, [key]: !prev[key] }))}
-        onApplyPreset={(vis) => setLayerVisibility(prev => ({ ...prev, ...vis }))}
+        onApplyPreset={(vis) => {
+          setLayerVisibility(prev => ({ ...prev, ...vis }));
+          if (vis.linkDensity) setLinkLoadNonce(n => n + 1);
+        }}
         onBuildingExaggeration={setBuildingExaggeration}
         onScreenshot={handleScreenshot}
       />
@@ -844,6 +859,7 @@ export default function App() {
             : (filterOptions?.transport_modes ?? []).map(m => m.mode)
         }
         colorBy={filter.colorBy ?? 'source'}
+        linkLoadNonce={linkLoadNonce}
       />
 
       <TimeSlider

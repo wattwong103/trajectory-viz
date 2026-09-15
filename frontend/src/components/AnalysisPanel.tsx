@@ -114,6 +114,8 @@ interface AnalysisPanelProps {
   /** Mode ids present in the dataset (not the active filter selection). */
   datasetTransportModes?: number[];
   colorBy?: 'source' | 'transportMode';
+  /** Increment to force a link-density fetch (Network preset). */
+  linkLoadNonce?: number;
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -355,6 +357,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
   attrKeys = [], modeLabels = [], datasetTransportModes = [],
   colorBy = 'source',
+  linkLoadNonce = 0,
 }) => {
   const showCommodityPatterns = hasLabAttr({ attrKeys }, 'goods_type');
   const showPedestrianize = hasCarMode({
@@ -619,6 +622,11 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     if (!linkLoadedRef.current) return;
     void loadLinkDensity();
   }, [loadLinkDensity]);
+
+  useEffect(() => {
+    if (!linkLoadNonce) return;
+    void loadLinkDensity();
+  }, [linkLoadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadClusters = useCallback(async () => {
     setActionError(null);
@@ -1350,6 +1358,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             onAddAgent={onAddAgent}
             onRemoveAgent={onRemoveAgent}
             onClearAgents={onClearAgents}
+            colorBy={colorBy}
           />
         )}
 
