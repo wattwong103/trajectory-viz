@@ -12,11 +12,11 @@ for the 24h animation loop (matching traj-mining's 86400-second cycle).
 import math
 import re
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..config import BASE_EPOCH_SEC
 from ..db import get_connection, get_epoch_anchor
-from ..filters import ScenarioFields
+from ..filters import TripFilters, trip_filters
 from ..models import (
     BBoxQuery,
     PointQuery,
@@ -169,43 +169,26 @@ def _rows_to_trajectories(
 @router.get("/trajectories/sample")
 async def sample_trajectories(
     n: int = Query(100, ge=1, le=5000),
-    source_id: str | None = Query(
-        None, pattern="^[a-z][a-z0-9_]*$",
-        description="Canonical source filter (preferred). Alias of vehicle_type."),
-    vehicle_type: str | None = Query(
-        None, pattern="^[a-z][a-z0-9_]*$",
-        description="Deprecated alias of source_id."),
-    city: str | None = Query(None, pattern="^[a-z_]+$"),
-    simulation_day: int | None = Query(None, ge=0),
-    transport_modes: str | None = Query(
-        None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
-        description="Comma-separated transport-mode ids ('0,3'); filters by the trip's mode"),
     include_segments: bool = Query(False,
         description="Opt into per-segment link/speed/dwell (Phase 2 F3)"),
-    scenario: str | None = Query(None, pattern="^pedestrianize$"),
-    sc_w: float | None = Query(None, ge=-180, le=180),
-    sc_s: float | None = Query(None, ge=-90, le=90),
-    sc_e: float | None = Query(None, ge=-180, le=180),
-    sc_n: float | None = Query(None, ge=-90, le=90),
+    f: TripFilters = Depends(trip_filters),
 ):
     """Return n random trajectories (sampled by vehicle_key+trip_id).
 
     Uses a subquery to sample trip IDs first, then fetches all waypoints
     for those trips. This avoids returning fragmented partial trajectories.
 
-    city and simulation_day are applied by filtering on trips.vehicle_id,
-    since those columns live on trips (not waypoints).
+    Shared TripFilters (hour/goods/F1/mode/scenario + Phase A source_id) are
+    trip-granular — OD-only sources simply contribute no rows.
     """
-    from ..filters import resolve_source_id
-    vtype = resolve_source_id(source_id, vehicle_type)
     conn = get_connection()
-    modes = [int(m) for m in transport_modes.split(",")] if transport_modes else None
-    # Validates all-or-none + w<e/s<n and builds the trips-side exclusion.
-    sc_clause = ScenarioFields(
-        scenario=scenario, sc_w=sc_w, sc_s=sc_s, sc_e=sc_e, sc_n=sc_n,
-    ).scenario_clause()
-    rows = sample_waypoint_rows(conn, n, vtype, city, simulation_day, modes,
-                                scenario_clause=sc_clause)
+    vtype = f.effective_source_id()
+    rows = sample_waypoint_rows(
+        conn, n, vtype, f.city, f.simulation_day,
+        f.transport_mode_list(),
+        scenario_clause=f.scenario_clause(),
+        trip_where=f.where() or None,
+    )
     if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
     trajectories = _rows_to_trajectories(
@@ -311,14 +294,19 @@ async def query_trajectories_bbox(q: BBoxQuery):
 def _waypoint_scope_filter(q) -> str:
     """Trip-attribute scoping for waypoint step-1 queries (bbox/point).
 
-    Mode filtering and the pedestrianize scenario REQUIRE trip granularity —
-    the per-vehicle vehicle_key subquery over-selects (any vehicle with one
-    matching trip would return all its trips). Without either, keep the
-    cheaper vehicle_key path.
+    When q is a TripFilters subclass, use trip-granular pair scope for every
+    dimension (hour/goods/F1/mode/scenario). PointQuery is still ScenarioFields
+    + a few fields — keep the vehicle_key path unless mode/scenario is set.
     """
-    vtype = q.effective_source_id()
+    pair = getattr(q, "pair_scope_sql", None)
+    if callable(pair):
+        scoped = pair()
+        if scoped:
+            return scoped
+    vtype = (q.effective_source_id()
+             if hasattr(q, "effective_source_id") else getattr(q, "vehicle_type", None))
     modes = ([int(m) for m in q.transport_modes.split(",")]
-             if q.transport_modes else None)
+             if getattr(q, "transport_modes", None) else None)
     sc_clause = q.scenario_clause()
     if modes or sc_clause:
         pair_subq = _build_trip_pair_subquery(

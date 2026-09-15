@@ -186,6 +186,23 @@ class TripFilters(ScenarioFields):
             max_detour_ratio=self.max_detour_ratio,
         )
 
+    def pair_scope_sql(self, table: str = "") -> str:
+        """Waypoint-side AND-clause: restrict to matching (vehicle_key, trip_id).
+
+        Hour/goods/F1/mode/scenario are per-TRIP. A vehicle_key IN subquery
+        over-selects (one matching trip would drag in the vehicle's others).
+        Empty string when no trip filter is set. `table` qualifies the outer
+        columns when the FROM has a join (e.g. 'w').
+        """
+        where = self.where()
+        if not where:
+            return ""
+        prefix = f"{table}." if table else ""
+        return (
+            f"AND ({prefix}vehicle_key, {prefix}trip_id) IN "
+            f"(SELECT vehicle_key, trip_id FROM trips {where})"
+        )
+
 
 def trip_filters(
     source_id: str | None = Query(

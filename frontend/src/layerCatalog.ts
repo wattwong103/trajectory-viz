@@ -224,3 +224,41 @@ export function visibleLayerGroups(ctx: LayerAvailabilityContext): LayerGroup[] 
     }))
     .filter(g => g.layers.length > 0);
 }
+
+export type LayerPresetId = 'trails' | 'network' | 'cinematic';
+
+/** One-click layer recipes. Network keeps origins/destinations — some
+ *  datasets are trips-only (no waypoints) and those layers ARE the map. */
+export const LAYER_PRESETS: Record<LayerPresetId, {
+  label: string;
+  visibility: Record<string, boolean>;
+}> = {
+  trails: {
+    label: 'Trails',
+    visibility: {
+      trajectories: true, origins: true, destinations: true,
+      sourceArcs: true, agents: true, pois: true, zones: true,
+      linkDensity: false, odFlows: false, density: false, pulse: false,
+      buildings: false, footfall: false, speedSegments: false, dwellMarkers: false,
+    },
+  },
+  network: {
+    label: 'Network',
+    visibility: {
+      trajectories: true, origins: true, destinations: true,
+      sourceArcs: true, odFlows: true, linkDensity: true, agents: true,
+      pois: true, zones: true,
+      density: false, pulse: false, buildings: false, footfall: false,
+      speedSegments: false, dwellMarkers: false, clusters: false, compareGrid: false,
+    },
+  },
+  cinematic: {
+    label: 'Cinematic',
+    visibility: {
+      trajectories: true, agents: true, pulse: true, buildings: true,
+      sourceArcs: true, pois: true, zones: true,
+      origins: false, destinations: false,
+      linkDensity: false, odFlows: false, density: false, footfall: false,
+    },
+  },
+};

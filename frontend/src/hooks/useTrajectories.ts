@@ -38,22 +38,29 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
       const transportModes = filter.transportModes;
       const scenario = filter.scenario;
 
-      // Always fetch trips (OD points) — they exist even without trajectory generation
+      // Always fetch trips (OD points) — they exist even without trajectory
+      // generation. Hour/goods/F1 ride along so the map matches Analysis.
       if (s.trips.row_count > 0) {
         const tripRes = await fetchTripSample(
           2000, vtype, city, simulationDay,
-          undefined, undefined, undefined, transportModes, scenario,
+          filter.goodsType, filter.minHour, filter.maxHour,
+          transportModes, scenario,
+          filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
+          filter.minDetourRatio, filter.maxDetourRatio,
         );
         setTrips(tripRes.trips);
       }
 
       // Fetch trajectories only if available. include_segments=true populates
       // per-segment link_id + speed_kmh + dwell_sec on each Trajectory; needed
-      // by the F3 speed-gradient and dwell-marker overlays. Roughly doubles
-      // the JSON payload — acceptable at sample=200; reconsider if we raise n.
+      // by the F3 speed-gradient and dwell-marker overlays. Sample cap 500
+      // is the architecture budget for one render.
       if (s.has_trajectories) {
         const trajRes = await fetchTrajectorySample(
-          200, vtype, city, simulationDay, true, transportModes, scenario,
+          500, vtype, city, simulationDay, true, transportModes, scenario,
+          filter.goodsType, filter.minHour, filter.maxHour,
+          filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
+          filter.minDetourRatio, filter.maxDetourRatio,
         );
         setTrajectories(trajRes.trajectories);
       } else {
@@ -68,6 +75,9 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
     }
     // Arrays/objects serialized to strings — identity changes per toggle.
   }, [filter.vehicleType, filter.city, filter.simulationDay,
+      filter.goodsType, filter.minHour, filter.maxHour,
+      filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
+      filter.minDetourRatio, filter.maxDetourRatio,
       filter.transportModes?.join(','),
       filter.scenario && JSON.stringify(filter.scenario.bbox)]);
 
