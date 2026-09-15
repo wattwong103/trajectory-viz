@@ -521,6 +521,8 @@ export async function fetchHourlyDensity(
   city?: string,
   resolution: number = 0.005,
   maxCellsPerHour: number = 15000,
+  minHour?: number,
+  maxHour?: number,
 ): Promise<HourlyDensity> {
   const params = new URLSearchParams({
     resolution: String(resolution),
@@ -528,6 +530,8 @@ export async function fetchHourlyDensity(
   });
   appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
+  if (minHour !== undefined) params.set('min_hour', String(minHour));
+  if (maxHour !== undefined) params.set('max_hour', String(maxHour));
   return fetchJson(`/api/analysis/spatial/density-hourly?${params}`);
 }
 
@@ -642,12 +646,13 @@ export async function fetchSpatialHotspots(
   topN: number = 20,
   pointType: 'origin' | 'destination' = 'origin',
   goodsType?: string,
+  minHour?: number,
+  maxHour?: number,
 ): Promise<Array<{ lon: number; lat: number; volume: number; unique_vehicles: number; rank: number }>> {
   const params = new URLSearchParams({ top_n: String(Math.max(5, topN)), point_type: pointType });
-  appendSourceParam(params, vehicleType);
-  if (city) params.set('city', city);
-  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
-  if (goodsType) params.set('goods_type', goodsType);
+  appendTripFilters(params, {
+    vehicleType, city, simulationDay, goodsType, minHour, maxHour,
+  });
   return fetchJson(`/api/analysis/spatial/hotspots?${params}`);
 }
 
