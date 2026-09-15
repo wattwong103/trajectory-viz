@@ -31,10 +31,11 @@ import { poiColor } from './poiColors';
 import { buildPoiIconAtlas } from './poiSprites';
 import { unionBboxes, type Bbox } from './utils/bbox';
 import { UploadDropzone } from './components/UploadDropzone';
-import { fetchFilterOptions, queryTrajectoriesPoint, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
+import { fetchFilterOptions, queryTrajectoriesPoint, queryTrajectoriesBBox, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
 import { exportCompositePng } from './utils/exportPng';
 import { friendlyFetchError } from './friendlyError';
 import type { LayerAvailabilityContext } from './layerCatalog';
+import { MAX_AGENTS } from './components/AgentTab';
 import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 
@@ -173,8 +174,8 @@ function decodeDisabledPoiCategories(hash: string): string[] {
 // pasted link restores the whole scene. Kept separate from FilterState — the
 // selection must survive filter changes without retriggering useTrajectories.
 
-const MAX_AGENTS = 8;
 // Mirrors the backend's by-vehicle key validation (routers/trajectories.py).
+// Cap is AgentTab.MAX_AGENTS (matches /api/trajectories/by-vehicle).
 const AGENT_KEY_RE = /^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$/;
 
 function encodeAgents(agents: string[]): string {
@@ -346,6 +347,42 @@ export default function App() {
     loading, error, refetch,
   } = useTrajectories(filter);
 
+  // Zoomed-in bbox sample (architecture budget 500). Null = use the city-wide
+  // sample. Cleared when filters change so a stale viewport set can't linger.
+  const [viewportTrajs, setViewportTrajs] = useState<Trajectory[] | null>(null);
+  const VIEWPORT_ZOOM = 12;
+  useEffect(() => { setViewportTrajs(null); }, [
+    filter.vehicleType, filter.city, filter.simulationDay, filter.goodsType,
+    filter.minHour, filter.maxHour,
+    filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
+    filter.minDetourRatio, filter.maxDetourRatio,
+    filter.transportModes?.join(','),
+    filter.scenario && JSON.stringify(filter.scenario.bbox),
+  ]);
+  const handleViewIdle = useCallback(async (
+    info: { zoom: number; bbox: { w: number; s: number; e: number; n: number } },
+  ) => {
+    if (info.zoom < VIEWPORT_ZOOM) {
+      setViewportTrajs(null);
+      return;
+    }
+    const vtype = filter.vehicleType === 'all' ? undefined : filter.vehicleType;
+    try {
+      const res = await queryTrajectoriesBBox(
+        info.bbox.w, info.bbox.s, info.bbox.e, info.bbox.n,
+        vtype, filter.city, filter.simulationDay,
+        500, true, filter.transportModes, filter.scenario,
+        filter.goodsType, filter.minHour, filter.maxHour,
+        filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
+        filter.minDetourRatio, filter.maxDetourRatio,
+      );
+      setViewportTrajs(res.trajectories);
+    } catch (e) {
+      console.error('Viewport trajectory fetch failed:', e);
+    }
+  }, [filter]);
+  const displayedTrajectories = viewportTrajs ?? trajectories;
+
   // First-load auto-fit (universal-trajectory Phase 2 UX fix): freeze the
   // union bbox across vehicle types from the FIRST stats response that
   // carries per-source bboxes. The lock ref guarantees this fires once per
@@ -472,7 +509,7 @@ export default function App() {
     setODFlows([]);
     setDensityPoints([]);
     setClusterResult(null);
-    setLinkDensity([]);
+    // link density auto-refetches from AnalysisPanel once the user has loaded it
     setDrillTrajectories([]);
     setDrillPoint(null);
     // Fleet-comparison grid diff is filter-scoped too
@@ -584,7 +621,7 @@ export default function App() {
   return (
     <div ref={mapContainerRef} style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <MapView
-        trajectories={trajectories}
+        trajectories={displayedTrajectories}
         trips={trips}
         currentTime={animation.currentTime}
         trailLength={animation.trailLength}
@@ -618,6 +655,7 @@ export default function App() {
         poiSourceLabels={poiSourceLabels}
         onMapClick={handleMapClick}
         onTrajectoryClick={handleTrajectoryClick}
+        onViewIdle={handleViewIdle}
       />
 
       <SourceLegend
@@ -712,7 +750,7 @@ export default function App() {
         stats={stats}
         loading={loading}
         error={error}
-        trajectoryCount={trajectories.length}
+        trajectoryCount={displayedTrajectories.length}
         tripCount={trips.length}
         filterOptions={filterOptions}
         drillTrajectories={drillTrajectories}
@@ -731,6 +769,7 @@ export default function App() {
         onRefetch={refetch}
         onClearDrill={clearDrill}
         onLayerToggle={(key) => setLayerVisibility(prev => ({ ...prev, [key]: !prev[key] }))}
+        onApplyPreset={(vis) => setLayerVisibility(prev => ({ ...prev, ...vis }))}
         onBuildingExaggeration={setBuildingExaggeration}
         onScreenshot={handleScreenshot}
       />
@@ -775,6 +814,7 @@ export default function App() {
         maxDwellMinutes={filter.maxDwellMinutes}
         minDetourRatio={filter.minDetourRatio}
         maxDetourRatio={filter.maxDetourRatio}
+        colorBy={filter.colorBy ?? 'source'}
       />
 
       <TimeSlider

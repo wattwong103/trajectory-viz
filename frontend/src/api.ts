@@ -136,6 +136,11 @@ export async function fetchTripSample(
   maxHour?: number,
   transportModes?: number[],
   scenario?: Scenario,
+  minSpeed?: number,
+  maxSpeed?: number,
+  maxDwellMinutes?: number,
+  minDetourRatio?: number,
+  maxDetourRatio?: number,
 ): Promise<TripResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
@@ -147,6 +152,11 @@ export async function fetchTripSample(
   const tm = transportModesParam(transportModes);
   if (tm) params.set('transport_modes', tm);
   appendScenarioParams(params, scenario);
+  if (minSpeed !== undefined) params.set('min_speed', String(minSpeed));
+  if (maxSpeed !== undefined) params.set('max_speed', String(maxSpeed));
+  if (maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(maxDwellMinutes));
+  if (minDetourRatio !== undefined) params.set('min_detour_ratio', String(minDetourRatio));
+  if (maxDetourRatio !== undefined) params.set('max_detour_ratio', String(maxDetourRatio));
   return fetchJson(`/api/trips/sample?${params}`);
 }
 
@@ -183,6 +193,14 @@ export async function fetchTrajectorySample(
   includeSegments: boolean = false,
   transportModes?: number[],
   scenario?: Scenario,
+  goodsType?: string,
+  minHour?: number,
+  maxHour?: number,
+  minSpeed?: number,
+  maxSpeed?: number,
+  maxDwellMinutes?: number,
+  minDetourRatio?: number,
+  maxDetourRatio?: number,
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
@@ -192,6 +210,14 @@ export async function fetchTrajectorySample(
   const tm = transportModesParam(transportModes);
   if (tm) params.set('transport_modes', tm);
   appendScenarioParams(params, scenario);
+  if (goodsType) params.set('goods_type', goodsType);
+  if (minHour !== undefined) params.set('min_hour', String(minHour));
+  if (maxHour !== undefined) params.set('max_hour', String(maxHour));
+  if (minSpeed !== undefined) params.set('min_speed', String(minSpeed));
+  if (maxSpeed !== undefined) params.set('max_speed', String(maxSpeed));
+  if (maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(maxDwellMinutes));
+  if (minDetourRatio !== undefined) params.set('min_detour_ratio', String(minDetourRatio));
+  if (maxDetourRatio !== undefined) params.set('max_detour_ratio', String(maxDetourRatio));
   return fetchJson(`/api/trajectories/sample?${params}`);
 }
 
@@ -205,6 +231,14 @@ export async function queryTrajectoriesBBox(
   includeSegments: boolean = false,
   transportModes?: number[],
   scenario?: Scenario,
+  goodsType?: string,
+  minHour?: number,
+  maxHour?: number,
+  minSpeed?: number,
+  maxSpeed?: number,
+  maxDwellMinutes?: number,
+  minDetourRatio?: number,
+  maxDetourRatio?: number,
 ): Promise<TrajectoryResponse> {
   return fetchJson('/api/trajectories/query-bbox', {
     method: 'POST',
@@ -215,6 +249,14 @@ export async function queryTrajectoriesBBox(
       city: city || null,
       simulation_day: simulationDay ?? null,
       transport_modes: transportModesParam(transportModes) ?? null,
+      goods_type: goodsType || null,
+      min_hour: minHour,
+      max_hour: maxHour,
+      min_speed: minSpeed ?? null,
+      max_speed: maxSpeed ?? null,
+      max_dwell_minutes: maxDwellMinutes ?? null,
+      min_detour_ratio: minDetourRatio ?? null,
+      max_detour_ratio: maxDetourRatio ?? null,
       ...scenarioBody(scenario),
       limit,
       include_segments: includeSegments,
@@ -343,11 +385,21 @@ export interface DensityPoint {
   weight: number;
 }
 
+export interface LinkGroupCount {
+  key: string;
+  waypoint_count: number;
+  unique_vehicles: number;
+}
+
 export interface LinkDensityItem {
   link_id: string;
   waypoint_count: number;
   unique_vehicles: number;
   centroid: [number, number];
+  /** Reconstructed polyline; null/short when the link is a single point. */
+  path?: [number, number][] | null;
+  /** Present when group_by=source_id|transport_mode. */
+  by_group?: LinkGroupCount[];
 }
 
 export async function fetchLinkDensity(
@@ -357,7 +409,17 @@ export async function fetchLinkDensity(
   topN: number = 500,
   minWaypoints: number = 50,
   goodsType?: string,
-): Promise<{ links: LinkDensityItem[]; count: number; total_links: number }> {
+  minHour?: number,
+  maxHour?: number,
+  transportModes?: number[],
+  scenario?: Scenario,
+  groupBy?: 'source_id' | 'transport_mode' | 'none',
+  minSpeed?: number,
+  maxSpeed?: number,
+  maxDwellMinutes?: number,
+  minDetourRatio?: number,
+  maxDetourRatio?: number,
+): Promise<{ links: LinkDensityItem[]; count: number; total_links: number; group_by?: string }> {
   const params = new URLSearchParams({
     top_n: String(topN),
     min_waypoints: String(minWaypoints),
@@ -366,6 +428,17 @@ export async function fetchLinkDensity(
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
+  if (minHour !== undefined) params.set('min_hour', String(minHour));
+  if (maxHour !== undefined) params.set('max_hour', String(maxHour));
+  const tm = transportModesParam(transportModes);
+  if (tm) params.set('transport_modes', tm);
+  appendScenarioParams(params, scenario);
+  if (groupBy && groupBy !== 'none') params.set('group_by', groupBy);
+  if (minSpeed !== undefined) params.set('min_speed', String(minSpeed));
+  if (maxSpeed !== undefined) params.set('max_speed', String(maxSpeed));
+  if (maxDwellMinutes !== undefined) params.set('max_dwell_minutes', String(maxDwellMinutes));
+  if (minDetourRatio !== undefined) params.set('min_detour_ratio', String(minDetourRatio));
+  if (maxDetourRatio !== undefined) params.set('max_detour_ratio', String(maxDetourRatio));
   return fetchJson(`/api/analysis/spatial/link-density?${params}`);
 }
 

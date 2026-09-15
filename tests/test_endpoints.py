@@ -261,6 +261,33 @@ def test_trajectories_sample_with_segments(client):
         assert len(traj["segments"]) == len(traj["path"]) - 1
 
 
+def test_trajectories_sample_respects_hour(client):
+    """Hour filter is trip-granular: truck trip 1 is hour 8, trip 2 is hour 10."""
+    morning = client.get("/api/trajectories/sample", params={
+        "n": 10, "vehicle_type": "truck", "min_hour": 8, "max_hour": 8,
+    })
+    assert morning.status_code == 200
+    morning_ids = {t["metadata"]["trip_id"] for t in morning.json()["trajectories"]}
+    assert morning_ids == {1}
+
+    later = client.get("/api/trajectories/sample", params={
+        "n": 10, "vehicle_type": "truck", "min_hour": 10, "max_hour": 10,
+    })
+    assert later.status_code == 200
+    later_ids = {t["metadata"]["trip_id"] for t in later.json()["trajectories"]}
+    assert later_ids == {2}
+
+
+def test_trajectories_sample_od_only_source_returns_empty(client):
+    """Taxi trips in the fixture have no waypoints — sample stays empty (OD-only)."""
+    r = client.get("/api/trajectories/sample", params={
+        "n": 10, "vehicle_type": "taxi",
+    })
+    assert r.status_code == 200
+    assert r.json()["trajectories"] == []
+    assert r.json()["count"] == 0
+
+
 def test_trajectories_query_bbox(client):
     """POST /api/trajectories/query-bbox — bbox around the truck waypoint trail."""
     r = client.post("/api/trajectories/query-bbox", json={
@@ -270,6 +297,17 @@ def test_trajectories_query_bbox(client):
     })
     assert r.status_code == 200
     assert "trajectories" in r.json()
+
+
+def test_trajectories_query_bbox_respects_hour(client):
+    r = client.post("/api/trajectories/query-bbox", json={
+        "min_lon": 139.5, "min_lat": 35.55,
+        "max_lon": 139.8, "max_lat": 35.75,
+        "min_hour": 8, "max_hour": 8, "limit": 100,
+    })
+    assert r.status_code == 200
+    ids = {t["metadata"]["trip_id"] for t in r.json()["trajectories"]}
+    assert ids <= {1}
 
 
 def test_trajectories_query_point(client):
@@ -523,6 +561,39 @@ def test_spatial_link_density(client):
     r = client.get("/api/analysis/spatial/link-density", params={"min_waypoints": 1})
     assert r.status_code == 200
     assert "links" in r.json()
+
+
+def test_link_density_respects_hour(client):
+    """Trip 1 (hour 8) uses L100-L102; trip 2 (hour 10) uses L103-L104."""
+    morning = client.get("/api/analysis/spatial/link-density", params={
+        "min_waypoints": 1, "min_hour": 8, "max_hour": 8,
+    })
+    assert morning.status_code == 200
+    morning_ids = {row["link_id"] for row in morning.json()["links"]}
+    assert morning_ids <= {"L100", "L101", "L102"}
+    assert morning_ids  # at least one morning link
+    assert "L103" not in morning_ids
+    assert "L104" not in morning_ids
+
+
+def test_link_density_path_and_group_by_source(client):
+    """Reconstructed polylines + per-source breakdown (trajectory sources)."""
+    r = client.get("/api/analysis/spatial/link-density", params={
+        "min_waypoints": 1, "group_by": "source_id",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["group_by"] == "source_id"
+    assert body["links"]
+    paths = [row.get("path") for row in body["links"]
+             if row.get("path") and len(row["path"]) >= 2]
+    assert paths, "expected at least one reconstructed polyline"
+    for link in body["links"]:
+        assert "by_group" in link
+        assert {g["key"] for g in link["by_group"]} <= {"truck"}
+        for g in link["by_group"]:
+            assert g["waypoint_count"] >= 1
+            assert g["unique_vehicles"] >= 1
 
 
 # --- Analysis: density-hourly (Phase 2B pulse heatmap) ------------------------

@@ -29,23 +29,15 @@ class TripQuery(TripFilters):
     limit: int = Field(1000, ge=1, le=50000)
 
 
-class BBoxQuery(ScenarioFields):
+class BBoxQuery(TripFilters):
     """Bounding box spatial query for trajectories.
 
-    Inherits the pedestrianize-scenario fields (scenario, sc_*) so the
-    scenario also drops excluded trips from trajectory renders."""
+    Inherits shared TripFilters (hour/goods/F1/mode/scenario) so a zoomed-in
+    viewport sample matches the rest of the map."""
     min_lon: float
     min_lat: float
     max_lon: float
     max_lat: float
-    vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
-    city: str | None = Field(None, pattern="^[a-z_]+$")
-    simulation_day: int | None = Field(None, ge=0)
-    # Comma-separated transport-mode ids ("0,3"). Filters by the TRIP's mode
-    # via the (vehicle_key, trip_id) subquery — see filters.TripFilters.
-    transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
-    min_hour: int | None = None
-    max_hour: int | None = None
     limit: int = Field(500, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics (link_id/speed/dwell)
     include_segments: bool = False

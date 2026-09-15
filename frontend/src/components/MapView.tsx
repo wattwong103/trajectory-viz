@@ -27,6 +27,7 @@ import { DataFilterExtension } from '@deck.gl/extensions';
 
 import type { Trajectory, TripPoint, SourceStyle, Poi, CompareGridCell, Zone } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
+import { strokesFromLinks, type LinkStroke } from '../utils/linkNetwork';
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
 import {
@@ -167,6 +168,8 @@ interface MapViewProps {
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
+  /** Debounced after pan/zoom. Used to swap the city-wide sample for a bbox query. */
+  onViewIdle?: (info: { zoom: number; bbox: { w: number; s: number; e: number; n: number } }) => void;
 }
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -197,6 +200,7 @@ export const MapView: React.FC<MapViewProps> = ({
   zoneStyleBySource = {},
   onMapClick,
   onTrajectoryClick,
+  onViewIdle,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
 
@@ -207,6 +211,8 @@ export const MapView: React.FC<MapViewProps> = ({
   // `autoFitDoneRef` makes the fit strictly one-shot per mount.
   const userInteractedRef = useRef(false);
   const autoFitDoneRef = useRef(false);
+  const onViewIdleRef = useRef(onViewIdle);
+  onViewIdleRef.current = onViewIdle;
 
   // ── Phase 2C: 3D buildings ────────────────────────────────────────────
   // The buildings layer lives in its OWN memo, prepended below — an MVTLayer
@@ -373,6 +379,80 @@ export const MapView: React.FC<MapViewProps> = ({
     }));
   }, [fitToBBox, cityCenter]);
 
+  // Viewport-idle callback for bbox sampling. Skip until the user has
+  // actually panned/zoomed so the first-load auto-fit doesn't fire a query.
+  useEffect(() => {
+    if (!onViewIdleRef.current || !userInteractedRef.current) return;
+    const handle = window.setTimeout(() => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const vp = new WebMercatorViewport({
+        ...viewState, width, height,
+      });
+      const [w, n] = vp.unproject([0, 0]);
+      const [e, s] = vp.unproject([width, height]);
+      onViewIdleRef.current?.({
+        zoom: viewState.zoom,
+        bbox: { w, s, e, n },
+      });
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [viewState.longitude, viewState.latitude, viewState.zoom]);
+
+  // Link-network PathLayer is static (no currentTime). Keep it out of the
+  // per-RAF layers memo so playback doesn't rebuild hundreds of polylines.
+  const linkLayers = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.linkDensity && linkDensityPoints && linkDensityPoints.length > 0) {
+      const { strokes, centroids } = strokesFromLinks(linkDensityPoints, {
+        colorBy, hiddenSources: hidden, colorFor,
+      });
+      if (strokes.length > 0) {
+        result.push(
+          new PathLayer<LinkStroke>({
+            id: 'link-network',
+            data: strokes,
+            getPath: (d) => d.path,
+            getColor: (d) => d.color,
+            getWidth: (d) => d.width,
+            widthUnits: 'pixels',
+            widthMinPixels: 1,
+            widthMaxPixels: 8,
+            jointRounded: true,
+            capRounded: true,
+            pickable: true,
+            updateTriggers: { getColor: [colorBy, hidden, sourceStyles] },
+          }),
+        );
+      }
+      if (centroids.length > 0) {
+        const maxCount = Math.max(...centroids.map(l => l.waypoint_count), 1);
+        result.push(
+          new ScatterplotLayer<LinkDensityItem>({
+            id: 'link-density',
+            data: centroids,
+            getPosition: (d: LinkDensityItem) => d.centroid,
+            getFillColor: (d: LinkDensityItem) => {
+              const t = Math.log2(1 + d.waypoint_count) / Math.log2(1 + maxCount);
+              return [
+                Math.round(68 + t * (253 - 68)),
+                Math.round(1 + t * (231 - 1)),
+                Math.round(84 + t * (37 - 84)),
+                200,
+              ] as [number, number, number, number];
+            },
+            getRadius: (d: LinkDensityItem) => 30 + 20 * Math.log2(1 + d.waypoint_count),
+            radiusMinPixels: 3,
+            radiusMaxPixels: 20,
+            stroked: false,
+            pickable: true,
+          }),
+        );
+      }
+    }
+    return result;
+  }, [layerVisibility.linkDensity, linkDensityPoints, colorBy, hidden, sourceStyles, styleBySource]);
+
   const layers = useMemo(() => {
     const result: any[] = [];
 
@@ -481,31 +561,7 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
-    // Layer 2: Link density scatterplot (above heatmap, below trajectories)
-    if (layerVisibility.linkDensity && linkDensityPoints && linkDensityPoints.length > 0) {
-      const maxCount = Math.max(...linkDensityPoints.map(l => l.waypoint_count));
-      result.push(
-        new ScatterplotLayer<LinkDensityItem>({
-          id: 'link-density',
-          data: linkDensityPoints,
-          getPosition: (d: LinkDensityItem) => d.centroid,
-          getFillColor: (d: LinkDensityItem) => {
-            const t = Math.log2(1 + d.waypoint_count) / Math.log2(1 + maxCount);
-            return [
-              Math.round(68 + t * (253 - 68)),
-              Math.round(1 + t * (231 - 1)),
-              Math.round(84 + t * (37 - 84)),
-              200,
-            ] as [number, number, number, number];
-          },
-          getRadius: (d: LinkDensityItem) => 30 + 20 * Math.log2(1 + d.waypoint_count),
-          radiusMinPixels: 3,
-          radiusMaxPixels: 20,
-          stroked: false,
-          pickable: true,
-        }),
-      );
-    }
+    result.push(...linkLayers);
 
     // Layer 2b: A/B grid-diff (fleet comparison). Diverging scatterplot:
     // blue cells = B-heavier, orange = A-heavier; opacity scales with the
@@ -1031,7 +1087,7 @@ export const MapView: React.FC<MapViewProps> = ({
     return result;
   }, [
     trajectories, trips, currentTime, trailLength,
-    odFlows, densityPoints, clusterResult, linkDensityPoints,
+    odFlows, densityPoints, clusterResult, linkLayers,
     drillTrajectories, drillPoint, zoneBBox, scenarioBBox,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
@@ -1093,8 +1149,10 @@ export const MapView: React.FC<MapViewProps> = ({
         }
         // Link density tooltip
         if ('link_id' in object && 'waypoint_count' in object) {
+          const grp = 'group' in object && object.group && object.group !== '_all'
+            ? `\n${object.group}` : '';
           return {
-            text: `Link #${object.link_id}\n${(object.waypoint_count as number).toLocaleString()} waypoints\n${(object.unique_vehicles as number).toLocaleString()} unique vehicles`,
+            text: `Link #${object.link_id}${grp}\n${(object.waypoint_count as number).toLocaleString()} waypoints\n${(object.unique_vehicles as number).toLocaleString()} unique vehicles`,
           };
         }
         // OD flow tooltip

@@ -11,7 +11,7 @@ import type { LayerVisibility } from '../App';
 import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
 import { poiColor } from '../poiColors';
-import { LAYER_GROUPS, type LayerAvailabilityContext } from '../layerCatalog';
+import { LAYER_GROUPS, LAYER_PRESETS, type LayerAvailabilityContext, type LayerPresetId } from '../layerCatalog';
 import { friendlyFetchError } from '../friendlyError';
 import { ACCEPT_ATTR } from '../uploadUtils';
 import type { ScenarioImpact } from '../hooks/useScenarioImpact';
@@ -48,6 +48,7 @@ interface FilterPanelProps {
   onRefetch: () => void;
   onClearDrill: () => void;
   onLayerToggle: (key: string) => void;
+  onApplyPreset?: (visibility: Record<string, boolean>) => void;
   onBuildingExaggeration: (v: number) => void;
   onScreenshot: () => void;
 }
@@ -79,7 +80,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onTogglePoiCategory,
   onSetAllPoiCategories,
   onUploadFiles,
-  onChange, onRefetch, onClearDrill, onLayerToggle,
+  onChange, onRefetch, onClearDrill, onLayerToggle, onApplyPreset,
   onBuildingExaggeration, onScreenshot,
 }) => {
   const [layersExpanded, setLayersExpanded] = useState(false);
@@ -605,6 +606,22 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </button>
         {layersExpanded && (
           <div style={styles.layersList}>
+            {onApplyPreset && (
+              <div style={{ display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+                {(Object.keys(LAYER_PRESETS) as LayerPresetId[]).map(id => (
+                  <button
+                    key={id}
+                    onClick={() => onApplyPreset(LAYER_PRESETS[id].visibility)}
+                    style={styles.presetBtn}
+                    title={id === 'network'
+                      ? 'Polylines when trajectories exist; origins/destinations/arcs always stay on'
+                      : undefined}
+                  >
+                    {LAYER_PRESETS[id].label}
+                  </button>
+                ))}
+              </div>
+            )}
             {LAYER_GROUPS.map(group => (
               <div key={group.key} style={{ marginBottom: 4 }}>
                 <button
@@ -893,6 +910,15 @@ const styles: Record<string, React.CSSProperties> = {
   layersList: {
     marginTop: 4,
     paddingLeft: 2,
+  },
+  presetBtn: {
+    padding: '2px 8px',
+    border: '1px solid #555',
+    borderRadius: 4,
+    background: 'rgba(255,255,255,0.06)',
+    color: '#bbb',
+    cursor: 'pointer',
+    fontSize: 10,
   },
   layerRow: {
     display: 'flex',

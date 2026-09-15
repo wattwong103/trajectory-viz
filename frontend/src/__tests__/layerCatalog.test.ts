@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  LAYER_GROUPS, ALL_LAYER_KEYS, type LayerAvailabilityContext,
+  LAYER_GROUPS, ALL_LAYER_KEYS, LAYER_PRESETS, type LayerAvailabilityContext,
 } from '../layerCatalog';
 
 // Mirror of App.tsx's DEFAULT_LAYER_VIS keys. If you add/rename a layer,
@@ -99,6 +99,15 @@ describe('layer availability', () => {
     expect(reason('odFlows', empty)).toBe('Generate OD flows from the Analysis panel first');
     expect(reason('density', empty)).toBe('Generate a density grid from the Analysis panel first');
     expect(reason('linkDensity', empty)).toBe('Run link-density from the Analysis panel first');
+  });
+
+  it('Network preset keeps origins and destinations (OD-only datasets)', () => {
+    const vis = LAYER_PRESETS.network.visibility;
+    expect(vis.origins).toBe(true);
+    expect(vis.destinations).toBe(true);
+    expect(vis.sourceArcs).toBe(true);
+    expect(vis.linkDensity).toBe(true);
+    expect(vis.trajectories).toBe(true);
   });
 
   it('trajectory-dependent layers disabled for trips-only datasets', () => {
