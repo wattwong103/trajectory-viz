@@ -471,7 +471,12 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     setLoading(true);
     try {
       if (source === 'waypoint') {
-        const res = await fetchWaypointDensity(vehicleType, city, simulationDay, 0.005, 5000);
+        const res = await fetchWaypointDensity(
+          vehicleType, city, simulationDay, 0.005, 5000, transportModes,
+          goodsType, minHour, maxHour,
+          minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+          scenario,
+        );
         onDensity(res.points);
       } else {
         const res = await fetchSpatialDensity(vehicleType, 'both', 0.01, city, simulationDay, goodsType, minHour, maxHour);
@@ -479,7 +484,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       }
     } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
-  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour, onDensity]);
+  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour,
+      transportModes, scenario, minSpeed, maxSpeed, maxDwellMinutes,
+      minDetourRatio, maxDetourRatio, onDensity]);
 
   const loadHotspots = useCallback(async () => {
     setActionError(null);

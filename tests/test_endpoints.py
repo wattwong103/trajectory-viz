@@ -556,6 +556,24 @@ def test_temporal_metrics_distribution_detour(client):
 # --- Analysis: spatial ------------------------------------------------------
 
 
+def test_waypoint_density_respects_hour(client):
+    """Hour is trip-granular: trip 2's 139.70 waypoint must drop at hour 8."""
+    all_r = client.get("/api/analysis/spatial/waypoint-density", params={
+        "resolution": 0.005, "limit": 5000,
+    })
+    assert all_r.status_code == 200
+    all_lons = {round(p["lon"], 2) for p in all_r.json()["points"]}
+    assert 139.7 in all_lons
+
+    morning = client.get("/api/analysis/spatial/waypoint-density", params={
+        "resolution": 0.005, "limit": 5000, "min_hour": 8, "max_hour": 8,
+    })
+    assert morning.status_code == 200
+    morning_lons = {round(p["lon"], 2) for p in morning.json()["points"]}
+    assert 139.7 not in morning_lons
+    assert morning.json()["count"] < all_r.json()["count"]
+
+
 def test_spatial_density_grid(client):
     r = client.get("/api/analysis/spatial/density-grid", params={"point_type": "origin"})
     assert r.status_code == 200

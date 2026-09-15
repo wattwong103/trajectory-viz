@@ -178,19 +178,9 @@ async def waypoint_density(
     Requires trajectory data to be ingested.
     """
     conn = get_connection()
-
-    trip_where = f.where()
-
-    # INVARIANT: transport_mode is per-TRIP. With a mode filter set, per-vehicle
-    # scoping over-selects (one walk trip drags in the vehicle's car waypoints
-    # too), so switch to trip-granular (vehicle_key, trip_id) scoping. The
-    # vehicle_key path stays for the common no-mode case (identical to before).
-    if trip_where and f.transport_mode_list():
-        waypoint_where = f"WHERE (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
-    elif trip_where:
-        waypoint_where = f"WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
-    else:
-        waypoint_where = ""
+    # Trip-granular for every TripFilters dimension (hour/goods/F1/mode/…).
+    # vehicle_key IN over-selects when one matching trip would drag in others.
+    scope = f.pair_scope_sql()
 
     rows = conn.execute(f"""
         SELECT
@@ -198,7 +188,7 @@ async def waypoint_density(
             ROUND(lat / {resolution}) * {resolution} AS grid_lat,
             COUNT(*) AS weight
         FROM waypoints
-        {waypoint_where}
+        WHERE 1=1 {scope}
         GROUP BY grid_lon, grid_lat
         ORDER BY weight DESC
         LIMIT {limit}

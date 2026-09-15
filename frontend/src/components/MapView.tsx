@@ -308,6 +308,18 @@ export const MapView: React.FC<MapViewProps> = ({
   // Phase 1 — per-source visibility (legend row toggles). Data-level filter,
   // not layer `visible`: sources share single layers.
   const hidden = useMemo(() => new Set(hiddenSources), [hiddenSources]);
+  const visibleTrajs = useMemo(
+    () => hidden.size > 0
+      ? trajectories.filter(t => !hidden.has(t.metadata.vehicle_type))
+      : trajectories,
+    [trajectories, hidden],
+  );
+  const visibleTrips = useMemo(
+    () => hidden.size > 0
+      ? trips.filter(d => !hidden.has(d.vehicle_type))
+      : trips,
+    [trips, hidden],
+  );
 
   useEffect(() => {
     if (cityCenter) {
@@ -605,6 +617,199 @@ export const MapView: React.FC<MapViewProps> = ({
     linkLayers, compareGridCells, compareGridCellDeg, trajectories,
   ]);
 
+  const chromeMid = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.pois && pois.length > 0) {
+      if (poiIconAtlas) {
+        result.push(
+          new IconLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getIcon: (d: Poi) => {
+              const cat = d.category ?? '';
+              if (cat in poiIconAtlas.iconFor) return cat;
+              return Object.keys(poiIconAtlas.iconFor)[0] ?? '';
+            },
+            iconAtlas: poiIconAtlas.url,
+            iconMapping: poiIconAtlas.iconFor,
+            getSize: 22,
+            sizeUnits: 'pixels',
+            sizeMinPixels: 10,
+            sizeMaxPixels: 34,
+            opacity: 0.95,
+            pickable: true,
+            updateTriggers: { getIcon: [poiIconAtlas] },
+          }),
+        );
+      } else {
+        result.push(
+          new ScatterplotLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getFillColor: (d: Poi) => {
+              const key = d.category ?? '';
+              const c = poiColorByCategory[key] ?? poiFallbackColor(key);
+              return [c[0], c[1], c[2], 230];
+            },
+            updateTriggers: { getFillColor: [poiColorByCategory] },
+            getRadius: 60,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 8,
+            opacity: 0.85,
+            stroked: true,
+            getLineColor: [255, 255, 255, 90],
+            lineWidthMinPixels: 1,
+            pickable: true,
+          }),
+        );
+      }
+    }
+    if (layerVisibility.origins && visibleTrips.length > 0) {
+      result.push(
+        new ScatterplotLayer<TripPoint>({
+          id: 'origins',
+          data: visibleTrips,
+          getPosition: (d: TripPoint) => [d.start_lon, d.start_lat],
+          getFillColor: COLORS.origin,
+          getRadius: 80,
+          radiusMinPixels: 1,
+          radiusMaxPixels: 4,
+          opacity: 0.4,
+          pickable: true,
+        }),
+      );
+    }
+    if (layerVisibility.destinations && visibleTrips.length > 0) {
+      result.push(
+        new ScatterplotLayer<TripPoint>({
+          id: 'destinations',
+          data: visibleTrips,
+          getPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
+          getFillColor: COLORS.dest,
+          getRadius: 80,
+          radiusMinPixels: 1,
+          radiusMaxPixels: 4,
+          opacity: 0.3,
+          pickable: true,
+        }),
+      );
+    }
+    return result;
+  }, [layerVisibility, pois, poiIconAtlas, poiColorByCategory, visibleTrips]);
+
+  const chromeLate = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.odFlows && odFlows.length > 0) {
+      result.push(
+        new ArcLayer<ODFlow>({
+          id: 'od-flows',
+          data: odFlows,
+          getSourcePosition: (d: ODFlow) => d.source,
+          getTargetPosition: (d: ODFlow) => d.target,
+          getSourceColor: COLORS.arcSource,
+          getTargetColor: COLORS.arcTarget,
+          getWidth: (d: ODFlow) => Math.max(1, Math.log2(d.volume)),
+          widthMinPixels: 1,
+          widthMaxPixels: 8,
+          opacity: 0.6,
+          pickable: true,
+        }),
+      );
+    }
+    if (layerVisibility.clusters && clusterResult && clusterResult.clusters.length > 0) {
+      const clusterArcs = clusterResult.clusters.map(c => ({
+        source: c.centroid.start,
+        target: c.centroid.end,
+        size: c.size,
+        clusterId: c.cluster_id,
+      }));
+      result.push(
+        new ArcLayer({
+          id: 'cluster-arcs',
+          data: clusterArcs,
+          getSourcePosition: (d: any) => d.source,
+          getTargetPosition: (d: any) => d.target,
+          getSourceColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
+          getTargetColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
+          getWidth: (d: any) => Math.max(2, Math.log2(d.size) * 2),
+          widthMinPixels: 2,
+          widthMaxPixels: 12,
+          opacity: 0.8,
+          pickable: true,
+        }),
+      );
+    }
+    return result;
+  }, [layerVisibility, odFlows, clusterResult]);
+
+  const chromeTop = useMemo(() => {
+    const result: any[] = [];
+    if (drillPoint) {
+      result.push(
+        new ScatterplotLayer({
+          id: 'drill-point',
+          data: [{ position: drillPoint }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [0, 0, 0, 0],
+          getLineColor: [255, 230, 100, 220],
+          getRadius: 1000,
+          radiusMinPixels: 8,
+          radiusMaxPixels: 48,
+          stroked: true,
+          filled: true,
+          lineWidthMinPixels: 2,
+        }),
+      );
+    }
+    if (zoneBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [zoneBBox.w, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'zone-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [255, 230, 100, 40],
+          getLineColor: [255, 230, 100, 220],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+    if (scenarioBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [scenarioBBox.w, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'scenario-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [231, 76, 60, 25],
+          getLineColor: [231, 76, 60, 230],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+    return result;
+  }, [drillPoint, zoneBBox, scenarioBBox]);
+
   const layers = useMemo(() => {
     const result: any[] = [];
 
@@ -648,12 +853,6 @@ export const MapView: React.FC<MapViewProps> = ({
     // dots + a faint short trail; everything else stays a full TripsLayer
     // trail. When agents are followed, background layers dim to alpha 40.
     const dimmed = selectedAgents.length > 0;
-    const visibleTrajs = hidden.size > 0
-      ? trajectories.filter(t => !hidden.has(t.metadata.vehicle_type))
-      : trajectories;
-    const visibleTrips = hidden.size > 0
-      ? trips.filter(d => !hidden.has(d.vehicle_type))
-      : trips;
     const trailTrajs = visibleTrajs.filter(
       t => styleBySource[t.metadata.vehicle_type]?.mode !== 'points',
     );
@@ -747,93 +946,7 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 3a-3 (universal-trajectory Phase 2): POI context layer. Sits below
-    // origins/destinations so trip endpoints stay visually dominant. Data is
-    // pre-filtered to enabled categories by usePois; colors come from the
-    // category map (YAML override → deterministic hash fallback). With a
-    // sprite atlas (poiSprites.ts) each category renders its glyph; without
-    // one (or in canvas-less environments) plain colored dots are kept.
-    if (layerVisibility.pois && pois.length > 0) {
-      if (poiIconAtlas) {
-        result.push(
-          new IconLayer<Poi>({
-            id: 'pois',
-            data: pois,
-            getPosition: (d: Poi) => [d.lon, d.lat],
-            getIcon: (d: Poi) => {
-              const cat = d.category ?? '';
-              if (cat in poiIconAtlas.iconFor) return cat;
-              return Object.keys(poiIconAtlas.iconFor)[0] ?? '';
-            },
-            iconAtlas: poiIconAtlas.url,
-            iconMapping: poiIconAtlas.iconFor,
-            getSize: 22,
-            sizeUnits: 'pixels',
-            sizeMinPixels: 10,
-            sizeMaxPixels: 34,
-            opacity: 0.95,
-            pickable: true,
-            updateTriggers: { getIcon: [poiIconAtlas] },
-          }),
-        );
-      } else {
-        result.push(
-          new ScatterplotLayer<Poi>({
-            id: 'pois',
-            data: pois,
-            getPosition: (d: Poi) => [d.lon, d.lat],
-            getFillColor: (d: Poi) => {
-              const key = d.category ?? '';
-              const c = poiColorByCategory[key] ?? poiFallbackColor(key);
-              return [c[0], c[1], c[2], 230];
-            },
-            updateTriggers: { getFillColor: [poiColorByCategory] },
-            getRadius: 60,
-            radiusMinPixels: 2,
-            radiusMaxPixels: 8,
-            opacity: 0.85,
-            stroked: true,
-            getLineColor: [255, 255, 255, 90],
-            lineWidthMinPixels: 1,
-            pickable: true,
-          }),
-        );
-      }
-    }
-
-    // Layer 3b: Trip origins
-    if (layerVisibility.origins && visibleTrips.length > 0) {
-      result.push(
-        new ScatterplotLayer<TripPoint>({
-          id: 'origins',
-          data: visibleTrips,
-          getPosition: (d: TripPoint) => [d.start_lon, d.start_lat],
-          getFillColor: COLORS.origin,
-          getRadius: 80,
-          radiusMinPixels: 1,
-          radiusMaxPixels: 4,
-          opacity: 0.4,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 3c: Trip destinations
-    if (layerVisibility.destinations && visibleTrips.length > 0) {
-      result.push(
-        new ScatterplotLayer<TripPoint>({
-          id: 'destinations',
-          data: visibleTrips,
-          getPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
-          getFillColor: COLORS.dest,
-          getRadius: 80,
-          radiusMinPixels: 1,
-          radiusMaxPixels: 4,
-          opacity: 0.3,
-          pickable: true,
-        }),
-      );
-    }
+    result.push(...chromeMid);
 
     // Layer 3d (Phase 2A): time-windowed arcs for 'arcs' render-mode sources
     // (trip-only populations with no waypoints). DataFilterExtension applies
@@ -875,49 +988,7 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 4: OD Flow arcs (Phase 2)
-    if (layerVisibility.odFlows && odFlows.length > 0) {
-      result.push(
-        new ArcLayer<ODFlow>({
-          id: 'od-flows',
-          data: odFlows,
-          getSourcePosition: (d: ODFlow) => d.source,
-          getTargetPosition: (d: ODFlow) => d.target,
-          getSourceColor: COLORS.arcSource,
-          getTargetColor: COLORS.arcTarget,
-          getWidth: (d: ODFlow) => Math.max(1, Math.log2(d.volume)),
-          widthMinPixels: 1,
-          widthMaxPixels: 8,
-          opacity: 0.6,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 5: Cluster representative arcs (Phase 3)
-    if (layerVisibility.clusters && clusterResult && clusterResult.clusters.length > 0) {
-      const clusterArcs = clusterResult.clusters.map(c => ({
-        source: c.centroid.start,
-        target: c.centroid.end,
-        size: c.size,
-        clusterId: c.cluster_id,
-      }));
-      result.push(
-        new ArcLayer({
-          id: 'cluster-arcs',
-          data: clusterArcs,
-          getSourcePosition: (d: any) => d.source,
-          getTargetPosition: (d: any) => d.target,
-          getSourceColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
-          getTargetColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
-          getWidth: (d: any) => Math.max(2, Math.log2(d.size) * 2),
-          widthMinPixels: 2,
-          widthMaxPixels: 12,
-          opacity: 0.8,
-          pickable: true,
-        }),
-      );
-    }
+    result.push(...chromeLate);
 
     // Layer 6: Drill-down trajectories (bright yellow, map-click radius query)
     if (layerVisibility.drill && drillTrajectories.length > 0) {
@@ -1016,86 +1087,17 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 7: Drill click-point ring marker
-    if (drillPoint) {
-      result.push(
-        new ScatterplotLayer({
-          id: 'drill-point',
-          data: [{ position: drillPoint }],
-          getPosition: (d: any) => d.position,
-          getFillColor: [0, 0, 0, 0],         // transparent fill (hollow)
-          getLineColor: [255, 230, 100, 220],  // yellow ring
-          getRadius: 1000,                     // ~1 km radius
-          radiusMinPixels: 8,
-          radiusMaxPixels: 48,
-          stroked: true,
-          filled: true,
-          lineWidthMinPixels: 2,
-        }),
-      );
-    }
-
-    // Layer 8: Through-zone bbox (Sprint A1b — F2 UI).
-    // Translucent yellow rectangle showing the user's query bounds.
-    if (zoneBBox) {
-      type Poly = { polygon: [number, number][] };
-      const polygon: [number, number][] = [
-        [zoneBBox.w, zoneBBox.s],
-        [zoneBBox.e, zoneBBox.s],
-        [zoneBBox.e, zoneBBox.n],
-        [zoneBBox.w, zoneBBox.n],
-        [zoneBBox.w, zoneBBox.s],
-      ];
-      result.push(
-        new PolygonLayer<Poly>({
-          id: 'zone-bbox',
-          data: [{ polygon }],
-          getPolygon: (d) => d.polygon,
-          getFillColor: [255, 230, 100, 40],   // translucent yellow fill
-          getLineColor: [255, 230, 100, 220],
-          lineWidthMinPixels: 2,
-          stroked: true,
-          filled: true,
-        }),
-      );
-    }
-
-    // Layer 9: Pedestrianize-scenario bbox (Phase 4) — red, so it reads as
-    // "cars excluded here" and stays distinct from the yellow query zone.
-    if (scenarioBBox) {
-      type Poly = { polygon: [number, number][] };
-      const polygon: [number, number][] = [
-        [scenarioBBox.w, scenarioBBox.s],
-        [scenarioBBox.e, scenarioBBox.s],
-        [scenarioBBox.e, scenarioBBox.n],
-        [scenarioBBox.w, scenarioBBox.n],
-        [scenarioBBox.w, scenarioBBox.s],
-      ];
-      result.push(
-        new PolygonLayer<Poly>({
-          id: 'scenario-bbox',
-          data: [{ polygon }],
-          getPolygon: (d) => d.polygon,
-          getFillColor: [231, 76, 60, 25],
-          getLineColor: [231, 76, 60, 230],
-          lineWidthMinPixels: 2,
-          stroked: true,
-          filled: true,
-        }),
-      );
-    }
+    result.push(...chromeTop);
 
     return result;
   }, [
-    trajectories, trips, currentTime, trailLength,
-    odFlows, clusterResult, groundOverlays,
-    drillTrajectories, drillPoint, zoneBBox, scenarioBBox,
+    visibleTrajs, visibleTrips, currentTime, trailLength,
+    groundOverlays, chromeMid, chromeLate, chromeTop,
+    drillTrajectories,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
     pulseData,
     colorBy, hidden,
-    pois, poiColorByCategory, poiIconAtlas, poiSourceLabels,
-    zones, zoneStyleBySource,
   ]);
 
   return (

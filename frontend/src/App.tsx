@@ -455,6 +455,7 @@ export default function App() {
   // Footfall — walk-trip waypoint density (fetched when the layer is on)
   const footfall = useFootfall(
     !!layerVisibility.footfall, filter.vehicleType, filter.city, filter.simulationDay,
+    filter.minHour, filter.maxHour, filter.goodsType,
   );
 
   // Universal-trajectory Phase 2 — POI catalogue + points for the enabled

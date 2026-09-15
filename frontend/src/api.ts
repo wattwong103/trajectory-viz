@@ -651,16 +651,25 @@ export async function fetchWaypointDensity(
   resolution: number = 0.005,
   limit: number = 5000,
   transportModes?: number[],
+  goodsType?: string,
+  minHour?: number,
+  maxHour?: number,
+  minSpeed?: number,
+  maxSpeed?: number,
+  maxDwellMinutes?: number,
+  minDetourRatio?: number,
+  maxDetourRatio?: number,
+  scenario?: Scenario,
 ): Promise<{ points: DensityPoint[]; count: number; resolution_deg: number }> {
   const params = new URLSearchParams({
     resolution: String(resolution),
     limit: String(Math.max(100, limit)),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
-  if (city) params.set('city', city);
-  if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
-  const tm = transportModesParam(transportModes);
-  if (tm) params.set('transport_modes', tm);
+  appendTripFilters(params, {
+    vehicleType, city, simulationDay, goodsType, minHour, maxHour,
+    transportModes, scenario, minSpeed, maxSpeed, maxDwellMinutes,
+    minDetourRatio, maxDetourRatio,
+  });
   return fetchJson(`/api/analysis/spatial/waypoint-density?${params}`);
 }
 

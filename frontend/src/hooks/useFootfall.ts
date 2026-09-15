@@ -23,6 +23,9 @@ export function useFootfall(
   vehicleType?: string,
   city?: string,
   simulationDay?: number,
+  minHour?: number,
+  maxHour?: number,
+  goodsType?: string,
 ) {
   const [points, setPoints] = useState<DensityPoint[]>([]);
   const [fallback, setFallback] = useState(false);
@@ -37,6 +40,7 @@ export function useFootfall(
     fetchWaypointDensity(
       vehicleType || undefined, city, simulationDay,
       FOOTFALL_RESOLUTION, FOOTFALL_LIMIT, [WALK_MODE],
+      goodsType, minHour, maxHour,
     )
       .then(async d => {
         if (cancelled) return;
@@ -62,7 +66,7 @@ export function useFootfall(
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [enabled, vehicleType, city, simulationDay]);
+  }, [enabled, vehicleType, city, simulationDay, minHour, maxHour, goodsType]);
 
   return { points, fallback, loading, error };
 }
