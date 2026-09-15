@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..db import get_connection
 from ..filters import TripFilters, trip_filters
+from ..trajectory_queries import _sql_str
 
 router = APIRouter()
 
@@ -21,6 +22,8 @@ router = APIRouter()
 async def density_hourly(
     vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: str | None = Query(None, pattern="^[a-z_]+$"),
+    min_hour: int | None = Query(None, ge=0, le=23),
+    max_hour: int | None = Query(None, ge=0, le=23),
     resolution: float = Query(0.005, ge=0.001, le=0.1,
                               description="Grid resolution in degrees (must match a built aggregate)"),
     max_cells_per_hour: int = Query(15000, ge=100, le=50000),
@@ -58,6 +61,12 @@ async def density_hourly(
     if city:
         conds.append("city = ?")
         params.append(city)
+    if min_hour is not None:
+        conds.append("hour >= ?")
+        params.append(min_hour)
+    if max_hour is not None:
+        conds.append("hour <= ?")
+        params.append(max_hour)
     where = " AND ".join(conds)
 
     # Cells can repeat across (source_id, city) when no filter is set —
@@ -177,19 +186,9 @@ async def waypoint_density(
     Requires trajectory data to be ingested.
     """
     conn = get_connection()
-
-    trip_where = f.where()
-
-    # INVARIANT: transport_mode is per-TRIP. With a mode filter set, per-vehicle
-    # scoping over-selects (one walk trip drags in the vehicle's car waypoints
-    # too), so switch to trip-granular (vehicle_key, trip_id) scoping. The
-    # vehicle_key path stays for the common no-mode case (identical to before).
-    if trip_where and f.transport_mode_list():
-        waypoint_where = f"WHERE (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
-    elif trip_where:
-        waypoint_where = f"WHERE vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
-    else:
-        waypoint_where = ""
+    # Trip-granular for every TripFilters dimension (hour/goods/F1/mode/…).
+    # vehicle_key IN over-selects when one matching trip would drag in others.
+    scope = f.pair_scope_sql()
 
     rows = conn.execute(f"""
         SELECT
@@ -197,7 +196,7 @@ async def waypoint_density(
             ROUND(lat / {resolution}) * {resolution} AS grid_lat,
             COUNT(*) AS weight
         FROM waypoints
-        {waypoint_where}
+        WHERE 1=1 {scope}
         GROUP BY grid_lon, grid_lat
         ORDER BY weight DESC
         LIMIT {limit}
@@ -218,6 +217,9 @@ async def link_density(
     top_n: int = Query(500, ge=10, le=5000),
     min_waypoints: int = Query(50, ge=1, le=10000,
                                description="Skip links with fewer than this many waypoints"),
+    group_by: str | None = Query(
+        None, pattern="^(source_id|transport_mode|none)$",
+        description="Split usage by source_id or trip transport_mode"),
     f: TripFilters = Depends(trip_filters),
 ):
     """DRM link-level waypoint density.
@@ -228,21 +230,20 @@ async def link_density(
     than random shortcuts.
 
     Returns each top link with its waypoint count, unique-vehicle count,
-    unique-trip count, and a centroid (AVG lon/lat) for map placement.
+    a centroid, a reconstructed polyline (`path`, consecutive on-link
+    segments from the densest trip; null when the link is a single point),
+    and optional `by_group` counts.
+
+    OD-only sources (no waypoints) contribute nothing here — origins,
+    destinations, and OD arcs remain the map representation for those.
 
     `min_waypoints` filters out sparse links so the top-N list highlights
     consistently-used corridors rather than outliers.
     """
     conn = get_connection()
 
-    trip_where = f.where()
-    # Same trip-granular scoping rule as waypoint-density (see comment there).
-    if trip_where and f.transport_mode_list():
-        waypoint_scope = f"AND (vehicle_key, trip_id) IN (SELECT vehicle_key, trip_id FROM trips {trip_where})"
-    elif trip_where:
-        waypoint_scope = f"AND vehicle_key IN (SELECT DISTINCT vehicle_key FROM trips {trip_where})"
-    else:
-        waypoint_scope = ""
+    # Trip-granular for every TripFilters dimension (hour/goods/F1/mode/…).
+    waypoint_scope = f.pair_scope_sql()
 
     # Note: no COUNT DISTINCT on (vehicle_id, trip_id) — that composite is
     # ~30-60s on 289M truck waypoints. unique_vehicles alone is almost as
@@ -272,18 +273,32 @@ async def link_density(
           {waypoint_scope}
     """).fetchone()[0]
 
+    link_ids = [r[0] for r in rows]
+    paths = _reconstruct_link_paths(conn, link_ids, waypoint_scope)
+    groups = (
+        _link_group_counts(conn, link_ids, waypoint_scope, group_by)
+        if group_by and group_by != "none" else {}
+    )
+
+    links = []
+    for r in rows:
+        lid = r[0]
+        item = {
+            "link_id": lid,
+            "waypoint_count": r[1],
+            "unique_vehicles": r[2],
+            "centroid": [round(r[3], 6), round(r[4], 6)],
+            "path": paths.get(lid),
+        }
+        if group_by and group_by != "none":
+            item["by_group"] = groups.get(lid, [])
+        links.append(item)
+
     return {
-        "links": [
-            {
-                "link_id": r[0],
-                "waypoint_count": r[1],
-                "unique_vehicles": r[2],
-                "centroid": [round(r[3], 6), round(r[4], 6)],
-            }
-            for r in rows
-        ],
-        "count": len(rows),
+        "links": links,
+        "count": len(links),
         "total_links": total_links,
+        "group_by": group_by or "none",
     }
 
 
@@ -327,3 +342,127 @@ async def hotspots(
         }
         for i, r in enumerate(rows)
     ]
+
+
+def _link_id_list_sql(link_ids: list[str]) -> str:
+    return ", ".join(_sql_str(lid) for lid in link_ids)
+
+
+def _reconstruct_link_paths(conn, link_ids: list[str], waypoint_scope: str) -> dict:
+    """Representative polyline per link from consecutive on-link segments.
+
+    For each link, pick the trip with the most consecutive waypoint pairs
+    whose *second* point has that link_id (same convention as F3 segments),
+    then stitch those pairs into a path. Links with no predecessor waypoint
+    (first point of a trip) have no path — callers fall back to centroid.
+    """
+    if not link_ids:
+        return {}
+    ids = _link_id_list_sql(link_ids)
+    rows = conn.execute(f"""
+        WITH trips_on_links AS (
+            SELECT DISTINCT vehicle_key, trip_id
+            FROM waypoints
+            WHERE link_id IN ({ids})
+              {waypoint_scope}
+        ),
+        ordered AS (
+            SELECT w.vehicle_key, w.trip_id, w.unix_time_ms, w.lon, w.lat, w.link_id,
+                   LAG(w.lon) OVER (
+                       PARTITION BY w.vehicle_key, w.trip_id ORDER BY w.unix_time_ms
+                   ) AS prev_lon,
+                   LAG(w.lat) OVER (
+                       PARTITION BY w.vehicle_key, w.trip_id ORDER BY w.unix_time_ms
+                   ) AS prev_lat
+            FROM waypoints w
+            WHERE (w.vehicle_key, w.trip_id) IN (
+                SELECT vehicle_key, trip_id FROM trips_on_links
+            )
+        ),
+        segs AS (
+            SELECT link_id, vehicle_key, trip_id, unix_time_ms,
+                   prev_lon, prev_lat, lon, lat
+            FROM ordered
+            WHERE prev_lon IS NOT NULL
+              AND link_id IN ({ids})
+        ),
+        best AS (
+            SELECT link_id, vehicle_key, trip_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY link_id ORDER BY COUNT(*) DESC
+                   ) AS rn
+            FROM segs
+            GROUP BY link_id, vehicle_key, trip_id
+        )
+        SELECT s.link_id, s.prev_lon, s.prev_lat, s.lon, s.lat
+        FROM segs s
+        JOIN best b
+          ON s.link_id = b.link_id
+         AND s.vehicle_key = b.vehicle_key
+         AND s.trip_id = b.trip_id
+        WHERE b.rn = 1
+        ORDER BY s.link_id, s.unix_time_ms
+    """).fetchall()
+
+    paths: dict[str, list[list[float]]] = {}
+    for lid, prev_lon, prev_lat, lon, lat in rows:
+        pt0 = [float(prev_lon), float(prev_lat)]
+        pt1 = [float(lon), float(lat)]
+        path = paths.get(lid)
+        if not path:
+            paths[lid] = [pt0, pt1]
+        else:
+            path.append(pt1)
+    return paths
+
+
+def _link_group_counts(
+    conn, link_ids: list[str], waypoint_scope: str, group_by: str,
+) -> dict:
+    """Per-link usage split by source_id (waypoints.vehicle_type) or trip mode."""
+    if not link_ids:
+        return {}
+    ids = _link_id_list_sql(link_ids)
+    if group_by == "transport_mode":
+        # Qualify the pair-scope columns — both w and t have vehicle_key/trip_id.
+        scoped = waypoint_scope.replace(
+            "AND (vehicle_key, trip_id)",
+            "AND (w.vehicle_key, w.trip_id)",
+            1,
+        )
+        rows = conn.execute(f"""
+            SELECT w.link_id,
+                   CAST(t.transport_mode AS VARCHAR) AS grp,
+                   COUNT(*)                    AS waypoint_count,
+                   COUNT(DISTINCT w.vehicle_key) AS unique_vehicles
+            FROM waypoints w
+            LEFT JOIN trips t
+              ON w.vehicle_key = t.vehicle_key AND w.trip_id = t.trip_id
+            WHERE w.link_id IN ({ids})
+              {scoped}
+            GROUP BY 1, 2
+        """).fetchall()
+    else:
+        rows = conn.execute(f"""
+            SELECT link_id,
+                   vehicle_type AS grp,
+                   COUNT(*)                    AS waypoint_count,
+                   COUNT(DISTINCT vehicle_key) AS unique_vehicles
+            FROM waypoints
+            WHERE link_id IN ({ids})
+              {waypoint_scope}
+            GROUP BY 1, 2
+        """).fetchall()
+
+    out: dict[str, list[dict]] = {}
+    for lid, grp, count, vehicles in rows:
+        if grp is None:
+            continue
+        out.setdefault(lid, []).append({
+            "key": str(grp),
+            "waypoint_count": count,
+            "unique_vehicles": vehicles,
+        })
+    for groups in out.values():
+        groups.sort(key=lambda g: g["waypoint_count"], reverse=True)
+    return out

@@ -294,7 +294,7 @@ describe('hidden-sources hash encoding', () => {
 // Mirror of App.tsx's encodeAgents/decodeAgents (same convention as above:
 // a shape change in App.tsx must break this test).
 
-const MAX_AGENTS = 8;
+const MAX_AGENTS = 20;
 const AGENT_KEY_RE = /^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$/;
 
 function encodeAgents(agents: string[]): string {
@@ -331,7 +331,7 @@ describe('agent-selection hash encoding (Phase 2A)', () => {
   });
 
   it('caps at MAX_AGENTS on decode', () => {
-    const many = Array.from({ length: 12 }, (_, i) => `truck:${i}`);
+    const many = Array.from({ length: 25 }, (_, i) => `truck:${i}`);
     expect(decodeAgents('#' + encodeAgents(many))).toHaveLength(MAX_AGENTS);
   });
 

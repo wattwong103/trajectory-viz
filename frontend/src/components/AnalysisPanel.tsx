@@ -10,7 +10,7 @@
  * 5. Chains — trip chain length distribution
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -33,6 +33,8 @@ import {
 } from '../api';
 import type { CompareGridResponse } from '../types';
 import { friendlyFetchError } from '../friendlyError';
+import { sourceFallbackColor } from '../sourceColors';
+import { transportModeColor } from '../transportModes';
 import { AgentTab } from './AgentTab';
 import { CompareTab } from './CompareTab';
 
@@ -105,6 +107,9 @@ interface AnalysisPanelProps {
   maxDwellMinutes?: number;
   minDetourRatio?: number;
   maxDetourRatio?: number;
+  colorBy?: 'source' | 'transportMode';
+  /** Increment to force a link-density fetch (Network preset). */
+  linkLoadNonce?: number;
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -344,6 +349,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   onAddAgent, onRemoveAgent, onClearAgents,
   sources = [], transportModes, scenario,
   minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+  colorBy = 'source',
+  linkLoadNonce = 0,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -377,6 +384,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
   // Links tab
   const [linkData, setLinkData] = useState<{ links: LinkDensityItem[]; count: number; total_links: number } | null>(null);
+  const linkLoadedRef = useRef(false);
   const [linkLoading, setLinkLoading] = useState(false);
 
   // Metrics tab (Phase 2 Step 2.2e) — three F1 distributions
@@ -463,7 +471,12 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     setLoading(true);
     try {
       if (source === 'waypoint') {
-        const res = await fetchWaypointDensity(vehicleType, city, simulationDay, 0.005, 5000);
+        const res = await fetchWaypointDensity(
+          vehicleType, city, simulationDay, 0.005, 5000, transportModes,
+          goodsType, minHour, maxHour,
+          minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+          scenario,
+        );
         onDensity(res.points);
       } else {
         const res = await fetchSpatialDensity(vehicleType, 'both', 0.01, city, simulationDay, goodsType, minHour, maxHour);
@@ -471,17 +484,21 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
       }
     } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLoading(false);
-  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour, onDensity]);
+  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour,
+      transportModes, scenario, minSpeed, maxSpeed, maxDwellMinutes,
+      minDetourRatio, maxDetourRatio, onDensity]);
 
   const loadHotspots = useCallback(async () => {
     setActionError(null);
     setHotspotsLoading(true);
     try {
-      const data = await fetchSpatialHotspots(vehicleType, city, simulationDay, 20, 'origin', goodsType);
+      const data = await fetchSpatialHotspots(
+        vehicleType, city, simulationDay, 20, 'origin', goodsType, minHour, maxHour,
+      );
       setHotspotsData(data);
     } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setHotspotsLoading(false);
-  }, [vehicleType, city, simulationDay, goodsType]);
+  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour]);
 
   const loadDwellTimes = useCallback(async () => {
     setActionError(null);
@@ -583,12 +600,30 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     setActionError(null);
     setLinkLoading(true);
     try {
-      const res = await fetchLinkDensity(vehicleType, city, simulationDay, 500, 50, goodsType);
+      const groupBy = colorBy === 'transportMode' ? 'transport_mode' : 'source_id';
+      const res = await fetchLinkDensity(
+        vehicleType, city, simulationDay, 500, 10, goodsType,
+        minHour, maxHour, transportModes, scenario, groupBy,
+        minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+      );
       setLinkData(res);
       onLinkDensity(res.links);
+      linkLoadedRef.current = true;
     } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setLinkLoading(false);
-  }, [vehicleType, city, simulationDay, goodsType, onLinkDensity]);
+  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour,
+      transportModes, scenario, colorBy, minSpeed, maxSpeed, maxDwellMinutes,
+      minDetourRatio, maxDetourRatio, onLinkDensity]);
+
+  useEffect(() => {
+    if (!linkLoadedRef.current) return;
+    void loadLinkDensity();
+  }, [loadLinkDensity]);
+
+  useEffect(() => {
+    if (!linkLoadNonce) return;
+    void loadLinkDensity();
+  }, [linkLoadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadClusters = useCallback(async () => {
     setActionError(null);
@@ -1217,7 +1252,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
           <div>
             <div style={styles.subtitle}>Link-Level Road Density</div>
             <p style={styles.desc}>
-              Top DRM road links by waypoint count — where trajectories actually travel.
+              Top DRM road links by waypoint count — polylines when trajectories
+              exist, colored by source or transport mode. Origin/destination-only
+              sources have no links; keep Origins / Destinations / O-D arcs on.
             </p>
             {(vehicleType === 'truck' || vehicleType === 'all') && (
               <div style={styles.warnRibbon}>
@@ -1228,7 +1265,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
               {linkLoading ? 'Loading...' : 'Load Top 500 Links'}
             </button>
             <button
-              onClick={() => { onLinkDensity([]); setLinkData(null); }}
+              onClick={() => { onLinkDensity([]); setLinkData(null); linkLoadedRef.current = false; }}
               style={styles.clearBtn}
             >
               Clear
@@ -1241,8 +1278,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                 {linkData.links.slice(0, 20).map((link, i) => {
                   const intensity = Math.max(0, 1 - i / 20);
                   const dotColor = `rgba(${Math.round(68 + intensity * (253 - 68))}, ${Math.round(1 + intensity * (231 - 1))}, ${Math.round(84 + intensity * (37 - 84))}, 0.9)`;
+                  const groups = link.by_group ?? [];
                   return (
-                    <div key={link.link_id} style={styles.clusterRow}>
+                    <div key={link.link_id} style={{ ...styles.clusterRow, flexWrap: 'wrap' as const }}>
                       <span style={{ ...styles.clusterDot, background: dotColor }} />
                       <span style={{ minWidth: 18, color: '#888' }}>#{i + 1}</span>
                       <span style={{ flex: 1, color: '#bbb', fontSize: 9 }}>
@@ -1250,6 +1288,22 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                       </span>
                       <span style={{ color: '#4fc3f7' }}>{formatCompact(link.waypoint_count)}</span>
                       <span style={{ color: '#888', marginLeft: 4 }}>{formatCompact(link.unique_vehicles)}v</span>
+                      {groups.length > 0 && (
+                        <div style={{ flexBasis: '100%', display: 'flex', height: 4, margin: '3px 0 0 22px', borderRadius: 2, overflow: 'hidden' }}>
+                          {groups.map(g => {
+                            const rgb = colorBy === 'transportMode'
+                              ? transportModeColor(Number(g.key))
+                              : sourceFallbackColor(g.key);
+                            return (
+                              <div
+                                key={g.key}
+                                title={`${g.key}: ${g.waypoint_count}`}
+                                style={{ flex: g.waypoint_count, background: `rgb(${rgb[0]},${rgb[1]},${rgb[2]})` }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1301,6 +1355,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             onAddAgent={onAddAgent}
             onRemoveAgent={onRemoveAgent}
             onClearAgents={onClearAgents}
+            colorBy={colorBy}
           />
         )}
 
