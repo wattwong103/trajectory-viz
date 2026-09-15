@@ -22,6 +22,8 @@ router = APIRouter()
 async def density_hourly(
     vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
     city: str | None = Query(None, pattern="^[a-z_]+$"),
+    min_hour: int | None = Query(None, ge=0, le=23),
+    max_hour: int | None = Query(None, ge=0, le=23),
     resolution: float = Query(0.005, ge=0.001, le=0.1,
                               description="Grid resolution in degrees (must match a built aggregate)"),
     max_cells_per_hour: int = Query(15000, ge=100, le=50000),
@@ -59,6 +61,12 @@ async def density_hourly(
     if city:
         conds.append("city = ?")
         params.append(city)
+    if min_hour is not None:
+        conds.append("hour >= ?")
+        params.append(min_hour)
+    if max_hour is not None:
+        conds.append("hour <= ?")
+        params.append(max_hour)
     where = " AND ".join(conds)
 
     # Cells can repeat across (source_id, city) when no filter is set —

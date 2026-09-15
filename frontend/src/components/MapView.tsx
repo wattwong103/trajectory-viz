@@ -550,10 +550,10 @@ export const MapView: React.FC<MapViewProps> = ({
         }),
       );
     }
-    if (layerVisibility.speedSegments && trajectories.length > 0) {
+    if (layerVisibility.speedSegments && visibleTrajs.length > 0) {
       type SegPath = { path: [number, number][]; color: [number, number, number, number] };
       const segData: SegPath[] = [];
-      for (const t of trajectories) {
+      for (const t of visibleTrajs) {
         if (!t.segments) continue;
         for (let i = 0; i < t.segments.length; i++) {
           segData.push({
@@ -578,10 +578,10 @@ export const MapView: React.FC<MapViewProps> = ({
         );
       }
     }
-    if (layerVisibility.dwellMarkers && trajectories.length > 0) {
+    if (layerVisibility.dwellMarkers && visibleTrajs.length > 0) {
       type Dwell = { position: [number, number]; dwell: number };
       const dwellPts: Dwell[] = [];
-      for (const t of trajectories) {
+      for (const t of visibleTrajs) {
         if (!t.segments) continue;
         for (let i = 0; i < t.segments.length; i++) {
           const d = t.segments[i].dwell_sec;
@@ -614,7 +614,7 @@ export const MapView: React.FC<MapViewProps> = ({
     return result;
   }, [
     layerVisibility, densityPoints, footfallPoints, zones, zoneStyleBySource,
-    linkLayers, compareGridCells, compareGridCellDeg, trajectories,
+    linkLayers, compareGridCells, compareGridCellDeg, visibleTrajs,
   ]);
 
   const chromeMid = useMemo(() => {

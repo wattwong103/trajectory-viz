@@ -18,6 +18,8 @@ export function useHourlyDensity(
   enabled: boolean,
   vehicleType?: string,
   city?: string,
+  minHour?: number,
+  maxHour?: number,
 ) {
   const [data, setData] = useState<HourlyDensity | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,7 +30,7 @@ export function useHourlyDensity(
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchHourlyDensity(vehicleType || undefined, city)
+    fetchHourlyDensity(vehicleType || undefined, city, 0.005, 15000, minHour, maxHour)
       .then(d => { if (!cancelled) setData(d); })
       .catch(e => {
         if (!cancelled) {
@@ -38,7 +40,7 @@ export function useHourlyDensity(
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [enabled, vehicleType, city]);
+  }, [enabled, vehicleType, city, minHour, maxHour]);
 
   return { data, loading, error };
 }

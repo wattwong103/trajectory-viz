@@ -492,11 +492,13 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     setActionError(null);
     setHotspotsLoading(true);
     try {
-      const data = await fetchSpatialHotspots(vehicleType, city, simulationDay, 20, 'origin', goodsType);
+      const data = await fetchSpatialHotspots(
+        vehicleType, city, simulationDay, 20, 'origin', goodsType, minHour, maxHour,
+      );
       setHotspotsData(data);
     } catch (e) { setActionError(friendlyFetchError(String((e as Error)?.message ?? e)).text); }
     setHotspotsLoading(false);
-  }, [vehicleType, city, simulationDay, goodsType]);
+  }, [vehicleType, city, simulationDay, goodsType, minHour, maxHour]);
 
   const loadDwellTimes = useCallback(async () => {
     setActionError(null);

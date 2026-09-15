@@ -450,6 +450,7 @@ export default function App() {
   // Phase 2B — pulse heatmap data (fetched once per filter change while on)
   const pulse = useHourlyDensity(
     !!layerVisibility.pulse, filter.vehicleType, filter.city,
+    filter.minHour, filter.maxHour,
   );
 
   // Footfall — walk-trip waypoint density (fetched when the layer is on)

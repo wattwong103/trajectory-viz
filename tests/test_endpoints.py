@@ -672,6 +672,18 @@ def test_density_hourly_409_when_not_built(client):
     assert "--aggregates-only" in r.json()["detail"]
 
 
+def test_density_hourly_respects_hour(client):
+    """min_hour/max_hour drop buckets outside the window; 24 slots remain."""
+    morning = client.get("/api/analysis/spatial/density-hourly", params={
+        "vehicle_type": "truck", "min_hour": 8, "max_hour": 8,
+    })
+    assert morning.status_code == 200
+    body = morning.json()
+    assert len(body["hours"]) == 24
+    hours_with = {h["hour"] for h in body["hours"] if h["points"]}
+    assert hours_with <= {8}
+
+
 def test_density_hourly_source_filter(client):
     """Taxi has no waypoints in the fixture → empty buckets, zero max."""
     body = client.get("/api/analysis/spatial/density-hourly", params={
