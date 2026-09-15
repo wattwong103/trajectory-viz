@@ -292,9 +292,9 @@ async def query_trajectories_bbox(q: BBoxQuery):
 def _waypoint_scope_filter(q) -> str:
     """Trip-attribute scoping for waypoint step-1 queries (bbox/point).
 
-    When q is a TripFilters subclass, use trip-granular pair scope for every
-    dimension (hour/goods/F1/mode/scenario). PointQuery is still ScenarioFields
-    + a few fields — keep the vehicle_key path unless mode/scenario is set.
+    BBoxQuery and PointQuery inherit TripFilters — pair_scope_sql covers
+    hour/goods/F1/mode/scenario. Fallback keeps the older vehicle_key path
+    for any caller that is not a TripFilters subclass.
     """
     pair = getattr(q, "pair_scope_sql", None)
     if callable(pair):

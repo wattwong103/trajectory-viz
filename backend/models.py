@@ -10,7 +10,7 @@ Response formats are designed for direct consumption by DeckGL layers:
 
 from pydantic import BaseModel, Field
 
-from .filters import ScenarioFields, TripFilters
+from .filters import TripFilters
 
 # ─── Request Models ────────────────────────────────────────────
 
@@ -43,18 +43,13 @@ class BBoxQuery(TripFilters):
     include_segments: bool = False
 
 
-class PointQuery(ScenarioFields):
+class PointQuery(TripFilters):
     """Point proximity query — find trajectories near a point.
 
-    Inherits the pedestrianize-scenario fields (scenario, sc_*)."""
+    Inherits shared TripFilters so a map-click drill matches the rest of the map."""
     lon: float
     lat: float
     radius_km: float = Field(1.0, ge=0.1, le=50.0)
-    vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
-    city: str | None = Field(None, pattern="^[a-z_]+$")
-    simulation_day: int | None = Field(None, ge=0)
-    # Comma-separated transport-mode ids ("0,3") — trip-granular filter.
-    transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
     limit: int = Field(200, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics
     include_segments: bool = False

@@ -108,6 +108,8 @@ interface AnalysisPanelProps {
   minDetourRatio?: number;
   maxDetourRatio?: number;
   colorBy?: 'source' | 'transportMode';
+  /** Increment to force a link-density fetch (Network preset). */
+  linkLoadNonce?: number;
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -348,6 +350,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   sources = [], transportModes, scenario,
   minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
   colorBy = 'source',
+  linkLoadNonce = 0,
 }) => {
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
@@ -607,6 +610,11 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     if (!linkLoadedRef.current) return;
     void loadLinkDensity();
   }, [loadLinkDensity]);
+
+  useEffect(() => {
+    if (!linkLoadNonce) return;
+    void loadLinkDensity();
+  }, [linkLoadNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadClusters = useCallback(async () => {
     setActionError(null);
@@ -1338,6 +1346,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             onAddAgent={onAddAgent}
             onRemoveAgent={onRemoveAgent}
             onClearAgents={onClearAgents}
+            colorBy={colorBy}
           />
         )}
 

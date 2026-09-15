@@ -319,6 +319,17 @@ def test_trajectories_query_point(client):
     assert "trajectories" in r.json()
 
 
+def test_trajectories_query_point_respects_hour(client):
+    """Map-click drill must honor the same hour filter as the sample."""
+    r = client.post("/api/trajectories/query-point", json={
+        "lon": 139.625, "lat": 35.61, "radius_km": 50.0, "limit": 100,
+        "min_hour": 8, "max_hour": 8,
+    })
+    assert r.status_code == 200
+    ids = {t["metadata"]["trip_id"] for t in r.json()["trajectories"]}
+    assert ids <= {1}
+
+
 # --- Trajectories: by-vehicle (Phase 2A agent playback) ----------------------
 
 
