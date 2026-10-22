@@ -6,10 +6,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
 
 # ── Virtualenvs ─────────────────────────────────────────
 .venv-viz/
-.venv-viz-*/         # backup/recovery names (e.g. .venv-viz-old-broken)
+# backup/recovery names (e.g. .venv-viz-old-broken); a "#" only starts a comment
+# at the beginning of a line, so it must not trail a pattern
+.venv-viz-*/
 .venv/
 venv/
 env/
