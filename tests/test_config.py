@@ -53,6 +53,13 @@ def _make_workspace(root: Path) -> Path:
     return repo
 
 
+def test_suite_never_finds_a_real_workspace_from_the_repo():
+    # tests/conftest.py points _REPO_ROOT at an unmarked folder, so tests that
+    # reach get_pflow_home() indirectly (stats, POI and zone routes through
+    # load_sources_merged) cannot read a developer's real output/viz/.
+    assert config._find_enclosing_workspace(config._REPO_ROOT) is None
+
+
 def test_dangling_pflow_home_warns_once_per_process(unresolvable_pflow_home, capsys):
     for _ in range(3):
         with pytest.raises(FileNotFoundError):
