@@ -15,6 +15,7 @@ real Dropbox folder is ever consulted.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,16 @@ def test_suite_never_finds_a_real_workspace_from_the_repo():
     # reach get_pflow_home() indirectly (stats, POI and zone routes through
     # load_sources_merged) cannot read a developer's real output/viz/.
     assert config._find_enclosing_workspace(config._REPO_ROOT) is None
+
+
+def test_suite_ignores_pflow_home_and_home_from_the_shell():
+    # tests/conftest.py drops PFLOW_HOME and PFLOW_VIZ_DB inherited from the
+    # developer's shell and moves HOME, so with the repo candidate also pointed
+    # away, the resolver has nothing real left to find.
+    assert os.environ.get("PFLOW_HOME") is None  # .get: a failure shows the value, not all of environ
+    assert os.environ.get("PFLOW_VIZ_DB") is None
+    with pytest.raises(FileNotFoundError):
+        config.get_pflow_home()
 
 
 def test_dangling_pflow_home_warns_once_per_process(unresolvable_pflow_home, capsys):
