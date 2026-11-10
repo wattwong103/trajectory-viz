@@ -11,6 +11,13 @@ to run without the PFLOW monorepo. PFLOW_HOME is never touched in that case.
 import os
 from pathlib import Path
 
+# This repo's root (backend/config.py -> repo). Tests point it into tmp_path.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+# A folder holding output/viz/ (where pflow.duckdb lives) is taken as the PFLOW
+# workspace. output/ is local-only, so a fresh machine is found only after its
+# first ingest; run that one with --pflow-home or PFLOW_HOME.
+_WORKSPACE_MARKER = Path("output") / "viz"
+
 # Lazy-resolved. Raises only if code actually needs PFLOW_HOME.
 _pflow_home: Path | None = None
 # Warn about a dangling PFLOW_HOME once per process. When neither the env
@@ -19,12 +26,25 @@ _pflow_home: Path | None = None
 _pflow_home_env_warned = False
 
 
+def _find_enclosing_workspace(repo_root: Path) -> Path | None:
+    """Return the nearest folder above repo_root that holds output/viz/, else None.
+
+    The repo sits nested inside the PFLOW workspace, so its parent is the usual
+    answer; walking further up also covers worktrees under .worktrees/<name>/.
+    """
+    for folder in repo_root.parents:
+        if (folder / _WORKSPACE_MARKER).is_dir():
+            return folder
+    return None
+
+
 def get_pflow_home() -> Path:
     """Resolve PFLOW project root directory (lazy + cached).
 
     Priority:
         1. PFLOW_HOME environment variable
-        2. ~/Dropbox/PFLOW (default for the reference setup)
+        2. The nearest folder above this repo that holds output/viz/
+        3. ~/Dropbox/PFLOW (default for the reference setup)
 
     Raises FileNotFoundError if none of the candidates exist.
     Only called when PFLOW_VIZ_DB / PFLOW_VIZ_OUTPUT_ROOT are not set.
@@ -42,6 +62,11 @@ def get_pflow_home() -> Path:
         if not _pflow_home_env_warned:
             _pflow_home_env_warned = True
             print(f"[WARN] PFLOW_HOME={env} does not exist, falling back to auto-detect")
+
+    workspace = _find_enclosing_workspace(_REPO_ROOT)
+    if workspace is not None:
+        _pflow_home = workspace
+        return _pflow_home
 
     # Generic cross-platform default. Users on other disks/paths set PFLOW_HOME.
     candidates = [
