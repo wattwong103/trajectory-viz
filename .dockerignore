@@ -13,9 +13,25 @@ __pycache__/
 # ─── Virtualenvs ────────────────────────────────────────
 .venv-viz/
 .venv-viz-*/
+.venv-*/
 .venv/
 venv/
 env/
+
+# ─── Worktrees, caches, exports & workspace tooling ─────
+.worktrees/
+graft/
+exports/
+.ai-sdlc/
+backlog/
+.claude/
+.codex/
+.grok/
+.agents/
+.mcp.json
+opencode.json
+AGENTS.md
+CLAUDE.md
 
 # ─── Frontend ───────────────────────────────────────────
 frontend/node_modules/

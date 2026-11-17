@@ -16,11 +16,15 @@ REM    .venv-viz\Scripts\python.exe -m backend.ingest --reset
 REM    (from the repo root, with the three env vars below set)
 REM ============================================================
 
-set PFLOW_VIZ_SOURCES=H:\Dropbox\PFLOW\trajectory-viz\sources.gufm.yaml
-set PFLOW_VIZ_DB=H:\Dropbox\PFLOW\trajectory-viz\data\gufm\gufm.duckdb
-set PFLOW_VIZ_OUTPUT_ROOT=H:\Dropbox\PFLOW\trajectory-viz\data\gufm\output
+setlocal
+set "ROOT=%~dp0"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
-cd /d H:\Dropbox\PFLOW\trajectory-viz\frontend
+set "PFLOW_VIZ_SOURCES=%ROOT%\sources.gufm.yaml"
+set "PFLOW_VIZ_DB=%ROOT%\data\gufm\gufm.duckdb"
+set "PFLOW_VIZ_OUTPUT_ROOT=%ROOT%\data\gufm\output"
+
+cd /d "%ROOT%\frontend"
 echo.
 echo  Dashboard:  http://localhost:5173
 echo  API docs:   http://127.0.0.1:9999/docs

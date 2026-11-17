@@ -11,9 +11,10 @@ __pycache__/
 
 # ── Virtualenvs ─────────────────────────────────────────
 .venv-viz/
-# backup/recovery names (e.g. .venv-viz-old-broken); a "#" only starts a comment
-# at the beginning of a line, so it must not trail a pattern
+# backup/recovery/OS-specific names (e.g. .venv-viz-old-broken, .venv-mac);
+# a "#" only starts a comment at the beginning of a line, so it must not trail a pattern
 .venv-viz-*/
+.venv-*/
 .venv/
 venv/
 env/
@@ -75,23 +76,22 @@ H[:]Dropbox*
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 
-# ── Agent / spec tooling (per-tool scratch, never committed) ──
+# ── Agent / spec / workspace tooling (never committed) ──
+.ai-sdlc/
+backlog/
 .claude/
 .grok/
 .codex/
 .agents/
 .mcp.json
+opencode.json
 AGENTS.md
+CLAUDE.md
 openspec/
 .mavis/
 .harness/
 .cursor/
 .aider*
 
-# ai-sdlc:runtime-gitignore
-.ai-sdlc/state.db
-.ai-sdlc/state/
-.ai-sdlc/audit.jsonl
-
-# ai-sdlc worktrees and the active-task sentinel are per clone (sh .githooks/setup.sh)
+# Per-clone local worktrees
 .worktrees/
