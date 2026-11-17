@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -32,13 +33,19 @@ REQUIRED_DOCKERIGNORE_ENTRIES = {
     ".ai-sdlc/",
     "backlog/",
     "opencode.json",
+    ".env",
+    ".env.*",
+    "**/.env.local",
 }
 MACHINE_PATH_RE = re.compile(r"(/Users/north-mac|[HD]:[/\\]Dropbox)", re.IGNORECASE)
 
 
 def _git_lines(*args: str) -> list[str]:
     out = subprocess.check_output(
-        ["git", *args], cwd=REPO_ROOT, text=True, encoding="utf-8"
+        ["git", "-c", f"core.excludesFile={os.devnull}", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        encoding="utf-8",
     )
     return [line for line in out.splitlines() if line]
 
@@ -61,7 +68,9 @@ def test_scaffolding_and_coverage_are_gitignored() -> None:
         "backlog/config.yml",
     ):
         proc = subprocess.run(
-            ["git", "check-ignore", "-q", probe], cwd=REPO_ROOT, check=False
+            ["git", "-c", f"core.excludesFile={os.devnull}", "check-ignore", "-q", "--no-index", probe],
+            cwd=REPO_ROOT,
+            check=False,
         )
         assert proc.returncode == 0, f"{probe} must be matched by .gitignore"
 
@@ -71,7 +80,7 @@ def test_no_tracked_files_collide_with_gitignore() -> None:
     assert ignored_tracked == [], f"Tracked files collide with .gitignore: {ignored_tracked}"
 
 
-def test_dockerignore_excludes_worktrees_and_caches() -> None:
+def test_dockerignore_excludes_worktrees_caches_and_env_files() -> None:
     entries = {
         line.strip()
         for line in (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()

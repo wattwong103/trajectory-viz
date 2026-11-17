@@ -24,10 +24,10 @@ set "PFLOW_VIZ_SOURCES=%ROOT%\sources.gufm.yaml"
 set "PFLOW_VIZ_DB=%ROOT%\data\gufm\gufm.duckdb"
 set "PFLOW_VIZ_OUTPUT_ROOT=%ROOT%\data\gufm\output"
 
-cd /d "%ROOT%\frontend"
+cd /d "%ROOT%\frontend" || exit /b 1
 echo.
 echo  Dashboard:  http://localhost:5173
 echo  API docs:   http://127.0.0.1:9999/docs
 echo  (Ctrl+C stops both the API and the dev server)
 echo.
-npm run dev
+call npm run dev %*
