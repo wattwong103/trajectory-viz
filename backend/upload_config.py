@@ -20,7 +20,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from backend.sources_schema import SourceConfig
+from backend.sources_schema import PoiConfig, SourceConfig, ZoneConfig
 
 # ---------------------------------------------------------------------------
 # Heuristic column candidates (aligned with scripts/csv_to_duckdb.py aliases)
@@ -79,40 +79,215 @@ class UploadConfigError(Exception):
         super().__init__("; ".join(reasons))
 
 
-# Geometry types upload-and-go can ingest as trajectories. Anything else
-# (Polygon/MultiPolygon/...) is rejected upfront by census_geojson_geometry
-# instead of failing mid-job after earlier batch files already mutated the DB.
+# Geometry allow-lists per upload role (TV-29 S2 overlays + trajectories).
 _TRAJECTORY_GEOM_TYPES = frozenset({"Point", "LineString"})
+_POI_GEOM_TYPES = frozenset({"Point"})
+_ZONE_GEOM_TYPES = frozenset({"Polygon", "MultiPolygon"})
+_OVERLAY_ROLES = frozenset({"trajectories", "pois", "zones"})
+
+_POI_NAME_PROPS = ("name", "label", "title", "poi_name")
+_POI_CATEGORY_PROPS = ("category", "type", "kind", "class")
+_TIME_PROPS = ("time", "timestamp", "datetime", "coordTimes", "times")
 
 
-def census_geojson_geometry(path: Path) -> None:
-    """Reject GeoJSON files upload-and-go cannot ingest — right now, at
-    upload time (422 with reasons), not mid-job.
-
-    Streams every feature's geometry type via formats.iter_geojson_features
-    (ijson when available, whole-doc fallback otherwise). Raises
-    UploadConfigError naming the offending types, with the zones: pointer
-    for the polygon case.
-    """
+def census_geojson_types(path: Path) -> set[str]:
+    """Return the set of GeoJSON geometry types present in ``path``."""
     from backend.formats import iter_geojson_features
 
     types: set[str] = set()
     for _idx, feature in iter_geojson_features(path):
         geom = feature.get("geometry") or {}
-        types.add(geom.get("type"))
+        gtype = geom.get("type")
+        if gtype is not None:
+            types.add(gtype)
+    return types
 
+
+def geojson_property_keys(path: Path, limit: int = 50) -> set[str]:
+    """Sample property keys from the first ``limit`` GeoJSON features."""
+    from backend.formats import iter_geojson_features
+
+    keys: set[str] = set()
+    for idx, feature in iter_geojson_features(path):
+        props = feature.get("properties") or {}
+        if isinstance(props, dict):
+            keys.update(str(k) for k in props)
+        if idx + 1 >= limit:
+            break
+    return keys
+
+
+def suggest_geojson_role(types: set[str], prop_keys: set[str] | None = None) -> str | None:
+    """Heuristic role for a GeoJSON upload when the client omits ``role``.
+
+    - Polygon/MultiPolygon only → zones
+    - Any LineString → trajectories
+    - Point only, no time-like props → pois
+    - Point only with time-like props → trajectories (backward-compatible)
+    - Mixed polygon + point/line → None (caller must ask / reject)
+    """
+    if not types:
+        return None
+    if types <= _ZONE_GEOM_TYPES:
+        return "zones"
+    if types & _ZONE_GEOM_TYPES and types - _ZONE_GEOM_TYPES:
+        return None
+    if types & {"LineString"}:
+        return "trajectories"
+    if types <= _POI_GEOM_TYPES:
+        props = {k.lower() for k in (prop_keys or set())}
+        if props & {p.lower() for p in _TIME_PROPS}:
+            return "trajectories"
+        return "pois"
+    return None
+
+
+def validate_geojson_role(role: str, types: set[str]) -> None:
+    """Raise UploadConfigError when ``role`` is incompatible with geometry."""
+    if role not in _OVERLAY_ROLES:
+        raise UploadConfigError([
+            f"unknown upload role {role!r} — expected one of "
+            f"{sorted(_OVERLAY_ROLES)}"
+        ])
+    if not types:
+        raise UploadConfigError(["GeoJSON file has no features with geometry"])
+    if role == "trajectories":
+        bad = types - _TRAJECTORY_GEOM_TYPES
+        if bad:
+            raise UploadConfigError([
+                f"role=trajectories cannot ingest geometry type(s): "
+                f"{', '.join(sorted(str(t) for t in bad))} — use role=zones "
+                f"for Polygon/MultiPolygon or role=pois for Point overlays"
+            ])
+    elif role == "pois":
+        if types != _POI_GEOM_TYPES and not types <= _POI_GEOM_TYPES:
+            raise UploadConfigError([
+                f"role=pois requires Point features only, got "
+                f"{', '.join(sorted(str(t) for t in types))}"
+            ])
+        if not types:
+            raise UploadConfigError(["role=pois requires Point features"])
+    elif role == "zones":
+        bad = types - _ZONE_GEOM_TYPES
+        if bad or not types:
+            raise UploadConfigError([
+                f"role=zones requires Polygon/MultiPolygon only, got "
+                f"{', '.join(sorted(str(t) for t in types)) or '(none)'}"
+            ])
+
+
+def census_geojson_geometry(path: Path) -> None:
+    """Legacy trajectory-only guard (kept for callers/tests).
+
+    Prefer ``census_geojson_types`` + ``validate_geojson_role`` for S2 overlays.
+    Rejects non-trajectory geometries with a zones: pointer for polygons.
+    """
+    types = census_geojson_types(path)
     bad = {t for t in types if t not in _TRAJECTORY_GEOM_TYPES}
     if not bad:
         return
     names = ", ".join(sorted(str(t) for t in bad))
     hint = (
-        "declare polygon layers under `zones:` in sources.yaml instead"
+        "upload with role=zones (or declare under `zones:` in sources.yaml)"
         if bad & {"Polygon", "MultiPolygon"}
-        else "upload-and-go ingests Point/LineString trajectory geometries only"
+        else "upload-and-go trajectories accept Point/LineString only"
     )
     raise UploadConfigError(
         [f"unsupported GeoJSON geometry type(s): {names} — {hint}"]
     )
+
+
+def _pick_prop(prop_keys: set[str], candidates: tuple[str, ...]) -> str | None:
+    by_lower = {k.lower(): k for k in prop_keys}
+    for cand in candidates:
+        if cand.lower() in by_lower:
+            return by_lower[cand.lower()]
+    return None
+
+
+def _parse_color(color: list[int] | tuple[int, ...] | None, key: str) -> list[int]:
+    if color is not None:
+        if len(color) != 3:
+            raise UploadConfigError(["color must be an RGB triple [r,g,b]"])
+        for c in color:
+            if not (0 <= int(c) <= 255):
+                raise UploadConfigError([f"color components must be 0-255, got {color}"])
+        return [int(c) for c in color]
+    return list(_PALETTE[zlib.crc32(key.encode("utf-8")) % len(_PALETTE)])
+
+
+def generate_poi_config(
+    *,
+    layer_key: str,
+    staged_rel_path: str,
+    label: str,
+    prop_keys: set[str] | None = None,
+    color: list[int] | tuple[int, ...] | None = None,
+) -> PoiConfig:
+    """Build a PoiConfig for an uploaded Point GeoJSON overlay."""
+    props = prop_keys or set()
+    name_prop = _pick_prop(props, _POI_NAME_PROPS)
+    cat_prop = _pick_prop(props, _POI_CATEGORY_PROPS)
+    columns: dict = {
+        "lon": {"csv": "_lon", "type": "double"},
+        "lat": {"csv": "_lat", "type": "double"},
+    }
+    if name_prop:
+        columns["name"] = {"csv": name_prop, "type": "varchar"}
+    if cat_prop:
+        columns["category"] = {"csv": cat_prop, "type": "varchar"}
+    else:
+        # Ensure category chips have something to group on when props omit it.
+        columns["category"] = {"derived": "'uploaded'"}
+
+    try:
+        return PoiConfig.model_validate({
+            "label": label,
+            "glob": staged_rel_path,
+            "format": "geojson",
+            "color": _parse_color(color, layer_key),
+            "columns": columns,
+        })
+    except ValidationError as exc:
+        raise UploadConfigError([
+            "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+            )
+        ]) from exc
+
+
+def generate_zone_config(
+    *,
+    layer_key: str,
+    staged_rel_path: str,
+    label: str,
+    prop_keys: set[str] | None = None,
+    color: list[int] | tuple[int, ...] | None = None,
+) -> ZoneConfig:
+    """Build a ZoneConfig for an uploaded Polygon GeoJSON overlay."""
+    props = prop_keys or set()
+    name_prop = _pick_prop(props, _POI_NAME_PROPS)
+    cat_prop = _pick_prop(props, _POI_CATEGORY_PROPS)
+    columns: dict = {}
+    if name_prop:
+        columns["name"] = {"csv": name_prop, "type": "varchar"}
+    if cat_prop:
+        columns["category"] = {"csv": cat_prop, "type": "varchar"}
+
+    try:
+        return ZoneConfig.model_validate({
+            "label": label,
+            "glob": staged_rel_path,
+            "format": "geojson",
+            "color": _parse_color(color, layer_key),
+            "columns": columns,
+        })
+    except ValidationError as exc:
+        raise UploadConfigError([
+            "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+            )
+        ]) from exc
 
 
 @dataclass
@@ -647,21 +822,45 @@ def generate_source_config(
         ]) from exc
 
 
-def write_uploads_registry(registry_path: Path, configs: list[SourceConfig]) -> None:
+def write_uploads_registry(
+    registry_path: Path,
+    configs: list[SourceConfig] | None = None,
+    *,
+    pois: dict | None = None,
+    zones: dict | None = None,
+) -> None:
     """Merge generated configs into the uploads registry YAML (uploads win).
 
     The registry is a standard SourcesFile-shaped document
-    ({version: 1, sources: {...}}) so load_sources can read it directly.
+    ({version: 1, sources: {...}, pois?: {...}, zones?: {...}}) so
+    load_sources / load_sources_merged can read it directly.
     """
-    data: dict = {"version": 1, "sources": {}}
+    data: dict = {"version": 1, "sources": {}, "pois": {}, "zones": {}}
     if registry_path.exists():
         loaded = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
         if isinstance(loaded, dict):
             data["version"] = loaded.get("version", 1)
             data["sources"] = dict(loaded.get("sources") or {})
+            data["pois"] = dict(loaded.get("pois") or {})
+            data["zones"] = dict(loaded.get("zones") or {})
 
-    for cfg in configs:
+    for cfg in configs or []:
         data["sources"][cfg.source_id] = cfg.model_dump(mode="json", exclude_none=True)
+
+    if pois:
+        for key, cfg in pois.items():
+            dump = cfg.model_dump(mode="json", exclude_none=True) if hasattr(cfg, "model_dump") else cfg
+            data["pois"][key] = dump
+    if zones:
+        for key, cfg in zones.items():
+            dump = cfg.model_dump(mode="json", exclude_none=True) if hasattr(cfg, "model_dump") else cfg
+            data["zones"][key] = dump
+
+    # Drop empty overlay maps so the file stays SourcesFile-valid and tidy.
+    if not data["pois"]:
+        data.pop("pois")
+    if not data["zones"]:
+        data.pop("zones")
 
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(
@@ -670,10 +869,13 @@ def write_uploads_registry(registry_path: Path, configs: list[SourceConfig]) -> 
 
 
 def load_uploads_registry_ids(registry_path: Path) -> set[str]:
-    """Source ids already claimed by the uploads registry (for dedupe)."""
+    """Ids already claimed by the uploads registry (sources + pois + zones)."""
     if not registry_path.exists():
         return set()
     loaded = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-    if isinstance(loaded, dict):
-        return set((loaded.get("sources") or {}).keys())
-    return set()
+    if not isinstance(loaded, dict):
+        return set()
+    ids = set((loaded.get("sources") or {}).keys())
+    ids |= set((loaded.get("pois") or {}).keys())
+    ids |= set((loaded.get("zones") or {}).keys())
+    return ids

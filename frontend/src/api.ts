@@ -18,7 +18,9 @@ import type {
   PoiCategoriesResponse,
   UploadAccepted,
   UploadMappingFile,
+  UploadOverlayFile,
   ConfirmUploadFile,
+  ConfirmOverlayFile,
   IngestJob,
   CompareResponse,
   MultiCompareResponse,
@@ -932,11 +934,16 @@ export class UploadRejectedError extends Error {
   /** Present when the backend wants an interactive column-mapping sheet. */
   mappingRequired: boolean;
   mappingFiles: UploadMappingFile[];
+  /** Present when GeoJSON role is ambiguous (trajectories vs pois vs zones). */
+  roleChoiceRequired: boolean;
+  overlayFiles: UploadOverlayFile[];
   constructor(
     reasons: string[],
     opts?: {
       mappingRequired?: boolean;
       mappingFiles?: UploadMappingFile[];
+      roleChoiceRequired?: boolean;
+      overlayFiles?: UploadOverlayFile[];
     },
   ) {
     super(reasons.join('\n'));
@@ -944,6 +951,8 @@ export class UploadRejectedError extends Error {
     this.reasons = reasons;
     this.mappingRequired = opts?.mappingRequired ?? false;
     this.mappingFiles = opts?.mappingFiles ?? [];
+    this.roleChoiceRequired = opts?.roleChoiceRequired ?? false;
+    this.overlayFiles = opts?.overlayFiles ?? [];
   }
 }
 
@@ -954,6 +963,8 @@ function _parseUpload422(body: unknown): UploadRejectedError {
       reasons?: unknown;
       mapping_required?: unknown;
       files?: unknown;
+      role_choice_required?: unknown;
+      overlay_files?: unknown;
     };
     const reasons = Array.isArray(d.reasons)
       ? d.reasons.map(String)
@@ -962,7 +973,13 @@ function _parseUpload422(body: unknown): UploadRejectedError {
     const mappingFiles = mappingRequired && Array.isArray(d.files)
       ? (d.files as UploadMappingFile[])
       : [];
-    return new UploadRejectedError(reasons, { mappingRequired, mappingFiles });
+    const roleChoiceRequired = d.role_choice_required === true;
+    const overlayFiles = roleChoiceRequired && Array.isArray(d.overlay_files)
+      ? (d.overlay_files as UploadOverlayFile[])
+      : [];
+    return new UploadRejectedError(reasons, {
+      mappingRequired, mappingFiles, roleChoiceRequired, overlayFiles,
+    });
   }
   if (typeof detail === 'string') {
     return new UploadRejectedError([detail]);
@@ -979,9 +996,25 @@ async function _readUpload422(res: Response): Promise<never> {
   }
 }
 
-export async function uploadFiles(files: File[]): Promise<UploadAccepted> {
+export async function uploadFiles(
+  files: File[],
+  opts?: {
+    roles?: Record<string, string>;
+    labels?: Record<string, string>;
+    colors?: Record<string, [number, number, number]>;
+  },
+): Promise<UploadAccepted> {
   const form = new FormData();
   for (const f of files) form.append('files', f);
+  if (opts?.roles && Object.keys(opts.roles).length > 0) {
+    form.append('roles', JSON.stringify(opts.roles));
+  }
+  if (opts?.labels && Object.keys(opts.labels).length > 0) {
+    form.append('labels', JSON.stringify(opts.labels));
+  }
+  if (opts?.colors && Object.keys(opts.colors).length > 0) {
+    form.append('colors', JSON.stringify(opts.colors));
+  }
   const res = await fetch(`${API_BASE}/api/ingest/upload`, {
     method: 'POST',
     body: form,
@@ -998,6 +1031,19 @@ export async function confirmUploadMapping(
   files: ConfirmUploadFile[],
 ): Promise<UploadAccepted> {
   const res = await fetch(`${API_BASE}/api/ingest/upload/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+  if (res.status === 202) return res.json();
+  if (res.status === 422) return _readUpload422(res);
+  throw new Error(`API error: ${res.status} ${res.statusText}`);
+}
+
+export async function confirmUploadOverlay(
+  files: ConfirmOverlayFile[],
+): Promise<UploadAccepted> {
+  const res = await fetch(`${API_BASE}/api/ingest/upload/confirm-overlay`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ files }),

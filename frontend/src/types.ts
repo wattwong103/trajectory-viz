@@ -254,16 +254,18 @@ export interface FilterOptions {
 
 // ─── Upload-and-go ingest (frontend half) ───────────────
 // Matches backend/routers/ingest_api.py: POST /api/ingest/upload (202),
-// POST /api/ingest/upload/confirm (202), and GET /api/ingest/jobs/{job_id}.
-// POI uploads are not part of the contract (TV-29 S2).
+// POST /api/ingest/upload/confirm (202), confirm-overlay, jobs.
+
+export type UploadOverlayRole = 'trajectories' | 'pois' | 'zones';
 
 export interface UploadFileInfo {
   filename: string;
   source_id: string;
   format: string;
+  role?: UploadOverlayRole;
 }
 
-/** 202 response from POST /api/ingest/upload or /upload/confirm. */
+/** 202 response from POST /api/ingest/upload or confirm endpoints. */
 export interface UploadAccepted {
   job_id: string;
   status: 'queued' | 'running' | 'done' | 'error';
@@ -324,6 +326,28 @@ export interface ConfirmUploadFile {
   mapping: ColumnMappingRequest;
 }
 
+/** One file in a 422 role_choice_required payload (or FE pre-chooser draft). */
+export interface UploadOverlayFile {
+  filename: string;
+  source_id?: string;
+  format?: string;
+  staged_name?: string;
+  geometry_types: string[];
+  property_keys?: string[];
+  suggested_role: UploadOverlayRole | null;
+  options: UploadOverlayRole[];
+  reasons?: string[];
+}
+
+export interface ConfirmOverlayFile {
+  staged_name: string;
+  source_id?: string;
+  filename?: string;
+  role: UploadOverlayRole;
+  label?: string;
+  color?: [number, number, number];
+}
+
 export type IngestPhase =
   'ingest' | 'synthesize' | 'derived' | 'density' | 'registry' | 'done';
 
@@ -338,14 +362,19 @@ export interface IngestJobResultFile {
   filename: string;
   source_id: string;
   label: string;
+  role?: UploadOverlayRole | 'trajectory' | 'poi' | 'zone' | string;
   trips: number;
   waypoints: number;
   vehicles: number;
+  pois?: number;
+  zones?: number;
 }
 
 export interface IngestJobResult {
   trips: number;
   waypoints: number;
+  pois?: number;
+  zones?: number;
   source_ids: string[];
   files: IngestJobResultFile[];
 }

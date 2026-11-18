@@ -2,7 +2,10 @@
  * Tests for uploadUtils — accepted-extension check and ingest-phase labels.
  */
 import { describe, it, expect } from 'vitest';
-import { isAcceptedFile, phaseLabel, ACCEPT_ATTR } from '../uploadUtils';
+import {
+  isAcceptedFile, phaseLabel, ACCEPT_ATTR, suggestGeoJsonRoleFromDoc,
+  isGeoJsonUploadName,
+} from '../uploadUtils';
 
 describe('isAcceptedFile', () => {
   it('accepts the backend extension set', () => {
@@ -61,5 +64,48 @@ describe('phaseLabel', () => {
   it('counter clamps at total_files', () => {
     expect(phaseLabel({ phase: 'ingest', file: 'x', done_files: 5, total_files: 2 }))
       .toBe('Ingesting waypoints… (file 2 of 2)');
+  });
+});
+
+describe('suggestGeoJsonRoleFromDoc', () => {
+  it('polygons → zones', () => {
+    const s = suggestGeoJsonRoleFromDoc({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { name: 'A' },
+        geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
+      }],
+    });
+    expect(s.suggested_role).toBe('zones');
+    expect(s.options).toEqual(['zones']);
+  });
+
+  it('points without time → pois; with time → trajectories', () => {
+    const pois = suggestGeoJsonRoleFromDoc({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { name: 'Cafe', category: 'cafe' },
+        geometry: { type: 'Point', coordinates: [139, 35] },
+      }],
+    });
+    expect(pois.suggested_role).toBe('pois');
+
+    const traj = suggestGeoJsonRoleFromDoc({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { time: '2024-01-01T00:00:00Z' },
+        geometry: { type: 'Point', coordinates: [139, 35] },
+      }],
+    });
+    expect(traj.suggested_role).toBe('trajectories');
+  });
+
+  it('isGeoJsonUploadName matches .geojson/.json', () => {
+    expect(isGeoJsonUploadName('a.geojson')).toBe(true);
+    expect(isGeoJsonUploadName('a.json')).toBe(true);
+    expect(isGeoJsonUploadName('a.csv')).toBe(false);
   });
 });

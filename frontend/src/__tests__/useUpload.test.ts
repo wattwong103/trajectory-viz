@@ -172,4 +172,27 @@ describe('useUpload', () => {
     expect(result.current.errorReasons).toEqual(['Unsupported file type: notes.docx']);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('GeoJSON opens the overlay role chooser before uploading', async () => {
+    const geo = new File(
+      [JSON.stringify({
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          properties: { name: 'A' },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+          },
+        }],
+      })],
+      'wards.geojson',
+      { type: 'application/geo+json' },
+    );
+    const { result } = renderHook(() => useUpload({ pollMs: 5 }));
+    await act(async () => { await result.current.upload([geo]); });
+    expect(result.current.state).toBe('overlay');
+    expect(result.current.overlayDrafts[0].role).toBe('zones');
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

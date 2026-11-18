@@ -18,6 +18,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { useUpload } from '../hooks/useUpload';
 import { isAcceptedFile, phaseLabel, ACCEPTED_EXTENSIONS } from '../uploadUtils';
 import { ColumnMappingSheet } from './ColumnMappingSheet';
+import { OverlayRoleSheet } from './OverlayRoleSheet';
 
 const SUCCESS_DISMISS_MS = 6000;
 
@@ -27,7 +28,8 @@ interface UploadDropzoneProps {
 
 export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
   const { state, progress, result, fileNames, errorReasons, mappingFiles,
-          upload, confirmMapping, dismiss, notifyError } = uploader;
+          overlayDrafts, overlayStaged,
+          upload, confirmMapping, confirmOverlay, dismiss, notifyError } = uploader;
   const [dragActive, setDragActive] = useState(false);
   const dragCounter = useRef(0);
 
@@ -98,6 +100,17 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
         </div>
       )}
 
+      {overlayDrafts.length > 0 && (state === 'overlay' || state === 'uploading') && (
+        <OverlayRoleSheet
+          drafts={overlayDrafts}
+          errorReasons={errorReasons}
+          busy={state === 'uploading'}
+          staged={overlayStaged}
+          onConfirm={confirmOverlay}
+          onCancel={dismiss}
+        />
+      )}
+
       {mappingFiles.length > 0 && (state === 'mapping' || state === 'uploading') && (
         <ColumnMappingSheet
           files={mappingFiles}
@@ -108,7 +121,8 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
         />
       )}
 
-      {(state === 'uploading' || state === 'processing') && mappingFiles.length === 0 && (
+      {(state === 'uploading' || state === 'processing')
+        && mappingFiles.length === 0 && overlayDrafts.length === 0 && (
         <div style={styles.statusCard}>
           <div style={styles.statusFiles}>{fileNames.join(', ')}</div>
           <div style={styles.statusPhase}>
@@ -132,7 +146,7 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
           <div style={{ flex: 1 }}>
             {result.files.map(f => (
               <div key={f.filename} style={styles.toastLine}>
-                Added '{f.filename}': {f.trips.toLocaleString()} trips, {f.vehicles.toLocaleString()} vehicles
+                {formatResultLine(f)}
               </div>
             ))}
             {result.files.length === 0 && (
@@ -167,6 +181,24 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
     </>
   );
 };
+
+function formatResultLine(f: {
+  filename: string;
+  role?: string;
+  trips: number;
+  vehicles: number;
+  pois?: number;
+  zones?: number;
+}): string {
+  const role = f.role ?? '';
+  if (role === 'poi' || role === 'pois' || (f.pois ?? 0) > 0) {
+    return `Added POIs '${f.filename}': ${(f.pois ?? 0).toLocaleString()} points`;
+  }
+  if (role === 'zone' || role === 'zones' || (f.zones ?? 0) > 0) {
+    return `Added zones '${f.filename}': ${(f.zones ?? 0).toLocaleString()} polygons`;
+  }
+  return `Added '${f.filename}': ${f.trips.toLocaleString()} trips, ${f.vehicles.toLocaleString()} vehicles`;
+}
 
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
