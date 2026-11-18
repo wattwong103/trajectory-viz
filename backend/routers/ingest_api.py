@@ -60,6 +60,7 @@ from ..upload_config import (
     generate_zone_config,
     geojson_property_keys,
     load_uploads_registry_ids,
+    looks_like_trips_table,
     slugify_source_id,
     sniff_failure_reasons,
     sniff_from_mapping,
@@ -68,7 +69,6 @@ from ..upload_config import (
     suggest_tabular_kind,
     trip_sniff_failure_reasons,
     trip_sniff_from_mapping,
-    looks_like_trips_table,
     validate_geojson_role,
     write_uploads_registry,
 )
