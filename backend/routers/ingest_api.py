@@ -48,7 +48,6 @@ from ..upload_config import (
     generate_source_config,
     load_uploads_registry_ids,
     slugify_source_id,
-    sniff_columns,
     sniff_failure_reasons,
     sniff_from_mapping,
     write_uploads_registry,
