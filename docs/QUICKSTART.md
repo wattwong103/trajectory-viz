@@ -4,13 +4,38 @@
 `PFLOW_HOME` required. PFLOW lab packs are an **opt-in profile** under
 [`profiles/`](../profiles/README.md).
 
-The fastest way to see the dashboard is the **2-minute demo** below — no data
-of your own required. Then: **Docker** (one command), **native** (Mac/Windows
-dev with Vite HMR), **PFLOW profile** (lab), or **standalone** (existing DuckDB).
+**Fastest first run:** Docker one-shot below (map + API + demo data on one
+URL). Alternatives: native Vite stack, CLI demo, PFLOW profile, or standalone
+DuckDB.
 
 ---
 
-## Path 0: 2-minute demo (default — no data needed)
+## Path 0: Docker one-shot (recommended — map in one command)
+
+**Prerequisite**: Docker Desktop (or Engine + Compose).
+
+```bash
+docker compose up --build
+# → http://localhost:8080
+```
+
+No host DuckDB, no separate frontend build. The image bakes
+`demo/demo.duckdb` and the React UI; the entrypoint re-seeds only if the
+configured DB path is missing or empty. Uploads persist under `./data/uploads`.
+
+Custom / empty DB:
+
+```bash
+# Serve your own file (place it at ./data/my.duckdb)
+TRAJECTORY_VIZ_DB=/data/my.duckdb TRAJECTORY_VIZ_SEED_DEMO=0 docker compose up --build
+
+# Intentionally empty (upload-and-go only)
+TRAJECTORY_VIZ_SEED_DEMO=0 TRAJECTORY_VIZ_DB=/data/empty.duckdb docker compose up --build
+```
+
+---
+
+## Path 0b: Native demo CLI
 
 A small synthetic day around Kichijōji, Tokyo is committed under
 [`demo/`](../demo) and wired by the reference universal registry
@@ -23,18 +48,20 @@ A small synthetic day around Kichijōji, Tokyo is committed under
 
 ```bash
 pip install -e .
-trajectory-viz-demo --serve
-# equivalent defaults: trajectory-viz-ingest && trajectory-viz-serve
+# Map UI — pick one:
+cd frontend && npm install && npm run build && cd .. && trajectory-viz-demo --serve
+#   → http://127.0.0.1:9999  (API + built UI)
+# or one-command HMR stack (auto-ingests demo if needed):
+cd frontend && npm run dev
+#   → http://localhost:5173
 ```
 
-The first run ingests into `demo/demo.duckdb` (subsequent runs reuse it;
+The first ingest writes `demo/demo.duckdb` (subsequent runs reuse it;
 `--reset` forces a fresh ingest; `--db-path` redirects it).
-Then open **<http://127.0.0.1:9999>**.
 
-> The API is fully functional on :9999 immediately (`/api/stats`, `/docs`).
-> For the full map UI either build the frontend once
-> (`cd frontend && npm install && npm run build`) or run the dev server
-> (`npm run dev`, <http://localhost:5173>).
+> `trajectory-viz-demo --serve` without a prior `npm run build` is **API-only**
+> at `/` (JSON note, not the map). Prefer Path 0 Docker, `npm run build`, or
+> `npm run dev`.
 
 To regenerate the dataset deterministically: `python demo/generate_demo_data.py`.
 To point the tool at **your own** GPX/GeoJSON/NDJSON/Parquet/CSV data, see
@@ -75,28 +102,7 @@ POI layers), write a `sources.yaml` block per
 
 ---
 
-## Path A: Docker (recommended for first-time users)
-
-**Prerequisite**: Docker Desktop installed.
-
-1. **Create the data mount directory** (one-time): `./data/` is the docker-compose
-   volume mount target. `setup.sh` / `setup.bat` create it automatically; if you
-   haven't run either yet, just `mkdir data`.
-2. **Place a pre-ingested DuckDB file at `./data/pflow.duckdb`**.
-   - If you don't have one, see *Path B → Ingest* below, then come back.
-3. Run:
-
-   ```bash
-   docker compose up --build
-   ```
-
-4. Visit **<http://localhost:8080>**. The dashboard loads; map renders; vehicle-type filter buttons populate from the DB.
-
-The container serves both the FastAPI backend and the built React frontend from a single port. To rebuild after pulling new code: `docker compose up --build --force-recreate`.
-
----
-
-## Path B: Native (Mac + Windows)
+## Path A: Native (Mac + Windows)
 
 Best for development with Vite HMR. Two processes: backend on :9999, frontend dev server on :5173.
 
@@ -171,7 +177,7 @@ Visit **<http://localhost:5173>**.
 
 ---
 
-## Path C: Standalone (DuckDB file only, no source CSVs)
+## Path B: Standalone (DuckDB file only, no source CSVs)
 
 If you already have a `pflow.duckdb` from someone else and just want to serve it:
 
@@ -185,7 +191,7 @@ In this mode `PFLOW_HOME` is never resolved, so the dashboard runs anywhere the 
 
 ---
 
-## Path D: GUFM vs PFLOW ground-truth fleets
+## Path C: GUFM vs PFLOW ground-truth fleets
 
 The `data/gufm/` dataset holds two fleets of the same 400 held-out persons
 (ward 13101/Chiyoda): GUFM model-generated trips vs PFLOW ground truth — the
@@ -226,4 +232,6 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 | Backend starts but `/api/stats/filter-options` returns empty arrays | DuckDB exists but no data ingested. Run `trajectory-viz-ingest --reset` (see *Ingest data* above). |
 | `Cannot locate PFLOW project root` error | Only happens on the PFLOW profile. Set `PFLOW_HOME=/path/to/PFLOW`, switch back to demo (`unset TRAJECTORY_VIZ_PROFILE PFLOW_HOME`), or use standalone mode (`TRAJECTORY_VIZ_DB=...`). |
 | Docker build fails on `npm ci` | Stale `package-lock.json` vs. registry. `npm install` (not ci) once locally to refresh, then re-build. |
-| Dashboard shows "No data — run simulation then ingest" but ingest completed | Check `simulation_day` filter — it might be filtering to a day with no data. Click "All days" in the dropdown. |
+| Dashboard shows "No data yet" / empty-hint but you expected demo trips | Docker: ensure `TRAJECTORY_VIZ_SEED_DEMO` is not `0` and you did not override `TRAJECTORY_VIZ_DB` to an empty file. Native: run `trajectory-viz-demo` (or `npm run dev`, which auto-ingests). |
+| Opened :9999 and got JSON (`Frontend dist/ not bundled`) instead of the map | API-only serve — run `cd frontend && npm run build` once, or use `npm run dev` / `docker compose up --build`. |
+| Dashboard shows empty day filter but ingest completed | Check `simulation_day` filter — it might be filtering to a day with no data. Click "All days" in the dropdown. |

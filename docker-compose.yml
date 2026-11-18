@@ -1,16 +1,19 @@
 # docker-compose.yml — one-command Docker deploy for trajectory-viz.
 #
-# Usage:
-#   1. Place a pre-built DuckDB at ./data/pflow.duckdb (or override volume
-#      mount below). Tip (TV-3 hook): bake demo/demo.duckdb via
-#      `trajectory-viz-demo` and copy it here for a one-URL first run.
-#   2. `docker compose up --build`
-#   3. Visit http://localhost:8080
+# First run (demo map, no host DuckDB required):
+#   docker compose up --build
+#   → http://localhost:8080
 #
-# The dashboard's API is on the same port (FastAPI serves the built React app
-# at / and the API at /api/*). For development with Vite HMR, use the native
-# setup.{sh,bat} flow — see README.md. Default native profile is demo/universal;
-# PFLOW is opt-in (profiles/pflow/).
+# The image bakes demo/demo.duckdb and the React UI. The entrypoint re-seeds
+# only if the configured DB path is missing/empty. Set TRAJECTORY_VIZ_SEED_DEMO=0
+# to keep an intentionally empty DB (upload-and-go / custom ingest).
+#
+# Custom DB:
+#   TRAJECTORY_VIZ_DB=/data/my.duckdb TRAJECTORY_VIZ_SEED_DEMO=0 \
+#     docker compose up --build
+#   (place my.duckdb under ./data/)
+#
+# Default product profile is demo/universal; PFLOW is opt-in (profiles/pflow/).
 
 services:
   trajectory-viz:
@@ -22,20 +25,24 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Standalone mode — point at a pre-ingested DuckDB. Override either with a
-      # different path inside the container (and adjust the volume mount below)
-      # or with `-e PFLOW_HOME=/host-mounted/pflow` for monorepo mode.
-      PFLOW_VIZ_DB: /data/pflow.duckdb
+      TRAJECTORY_VIZ_DB: /app/demo/demo.duckdb
+      PFLOW_VIZ_DB: /app/demo/demo.duckdb
+      TRAJECTORY_VIZ_SOURCES: /app/demo/sources.demo.yaml
+      PFLOW_VIZ_SOURCES: /app/demo/sources.demo.yaml
+      TRAJECTORY_VIZ_OUTPUT_ROOT: /app/demo
+      PFLOW_VIZ_OUTPUT_ROOT: /app/demo
+      TRAJECTORY_VIZ_PROFILE: demo
+      TRAJECTORY_VIZ_SEED_DEMO: "1"
       TRAJECTORY_VIZ_HOST: 0.0.0.0
       TRAJECTORY_VIZ_PORT: 8080
+      # Persist drag-and-drop uploads on the host even though the demo DB is baked.
+      PFLOW_VIZ_UPLOADS_DIR: /data/uploads
     volumes:
-      # Mount your DuckDB file here. The default is read-only since the
-      # dashboard only queries; ingest happens separately via the CLI.
-      - ./data:/data:ro
+      - ./data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/api/stats"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s

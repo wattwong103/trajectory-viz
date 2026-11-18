@@ -40,7 +40,7 @@ cd ..
 if [ ! -d "data" ]; then
     echo "==> Creating data/ directory (docker-compose mount target)..."
     mkdir -p data
-    echo "Place your pre-ingested pflow.duckdb here for Docker deploys." > data/.gitkeep
+    echo "Docker compose mounts ./data for uploads (demo DB is baked in the image)." > data/.gitkeep
 fi
 
 echo ""

@@ -24,6 +24,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 SOURCES_NAME = "sources.demo.yaml"
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+EMPTY_DB_HINT = (
+    "No trips yet — drop a GPX/GeoJSON/CSV onto the map, run "
+    "`trajectory-viz-demo` (then `npm run build` for the map UI), "
+    "or `docker compose up --build` for the one-URL demo."
+)
 
 
 def resolve_demo_dir() -> Path:
@@ -65,6 +72,77 @@ def demo_env(db_path: Path, demo_dir: Path | None = None) -> dict[str, str]:
     }
 
 
+def db_has_trips(db_path: Path) -> bool:
+    """True when `db_path` exists and the trips table has at least one row.
+
+    Used by Docker entrypoint / ensure_demo_db so an empty schema-only DuckDB
+    still triggers a demo seed (unless seeding is disabled).
+    """
+    db_path = Path(db_path).resolve()
+    if not db_path.is_file():
+        return False
+
+    def _count(conn) -> int | None:
+        try:
+            tables = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'main'"
+                ).fetchall()
+            }
+            if "trips" not in tables:
+                return 0
+            return int(conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0])
+        except Exception:
+            return None
+
+    # Prefer the process singleton when it already holds this file — a second
+    # DuckDB connect would fail while the write connection is open.
+    try:
+        import backend.db as _db
+        from backend.config import get_viz_db_path
+
+        if _db._connection is not None and get_viz_db_path().resolve() == db_path:
+            n = _count(_db._connection)
+            if n is not None:
+                return n > 0
+    except Exception:
+        pass
+
+    try:
+        import duckdb
+
+        conn = duckdb.connect(str(db_path), read_only=True)
+        try:
+            n = _count(conn)
+            return bool(n and n > 0)
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def frontend_dist_ready(dist: Path | None = None) -> bool:
+    """True when a built frontend (`index.html`) is present for StaticFiles."""
+    root = Path(dist) if dist is not None else _FRONTEND_DIST
+    return root.is_dir() and (root / "index.html").is_file()
+
+
+def ui_serve_hint() -> str:
+    """Honest next-step text when the API is up but the map UI may be missing."""
+    if frontend_dist_ready():
+        return (
+            "Map UI is bundled — open the serve URL (Docker :8080 / native :9999)."
+        )
+    return (
+        "API-only so far (frontend/dist missing). For the map in one shot use "
+        "`docker compose up --build` → http://localhost:8080, or build once with "
+        "`cd frontend && npm install && npm run build` then re-serve, or run "
+        "`cd frontend && npm run dev` → http://localhost:5173 (Vite HMR)."
+    )
+
+
 def run_demo(db_path: Path, reset: bool = False) -> dict[str, int]:
     """Ingest the demo dataset into `db_path` (unless it already exists and
     `reset` is False). Returns summary counts {trips, waypoints, pois}.
@@ -77,6 +155,13 @@ def run_demo(db_path: Path, reset: bool = False) -> dict[str, int]:
 
     env = demo_env(db_path)
     os.environ.update(env)
+
+    # Drop stale singleton so counts (and later serve) hit this db_path.
+    import backend.db as _db
+
+    if _db._connection is not None:
+        _db._connection.close()
+        _db._connection = None
 
     first_run = not Path(db_path).is_file()
     do_ingest = reset or first_run
@@ -108,6 +193,29 @@ def run_demo(db_path: Path, reset: bool = False) -> dict[str, int]:
     return counts
 
 
+def ensure_demo_db(
+    db_path: Path,
+    *,
+    seed: bool = True,
+    reset: bool = False,
+) -> dict[str, int]:
+    """Ensure `db_path` has demo trips when `seed` is True.
+
+    - seed=True + missing/empty → run_demo (ingest; reset when file exists but empty)
+    - seed=False + missing/empty → return zero counts without creating a DB
+    - already populated → reuse (unless reset=True)
+    """
+    db_path = Path(db_path)
+    if not seed:
+        if db_has_trips(db_path):
+            return run_demo(db_path, reset=False)
+        return {"trips": 0, "waypoints": 0, "pois": 0}
+    if reset or not db_has_trips(db_path):
+        # File may exist as schema-only; --reset forces a real ingest.
+        return run_demo(db_path, reset=True if db_path.is_file() else reset)
+    return run_demo(db_path, reset=False)
+
+
 def _print_summary(counts: dict[str, int], db_path: Path) -> None:
     print()
     print("=" * 64)
@@ -121,13 +229,17 @@ def _print_summary(counts: dict[str, int], db_path: Path) -> None:
 
 def _print_next_steps(db_path: Path) -> None:
     print()
-    print("  Next steps:")
-    print("    • Serve the demo:        trajectory-viz-demo --serve")
-    print("    • …then open:            http://127.0.0.1:9999")
-    print("      (frontend needs `cd frontend && npm run build` once,")
-    print("       or `npm run dev` on :5173 for hot-reload dev)")
-    print("    • Bring your own data:   docs/DATA_FORMATS.md")
-    print("    • Re-ingest from scratch: trajectory-viz-demo --reset")
+    print("  Next steps (pick one):")
+    print("    • One URL (map + API):   docker compose up --build")
+    print("                              → http://localhost:8080")
+    print("    • Native map (HMR):      cd frontend && npm run dev")
+    print("                              → http://localhost:5173")
+    print("    • Native single port:    cd frontend && npm run build")
+    print("                              trajectory-viz-demo --serve")
+    print("                              → http://127.0.0.1:9999")
+    print(f"    • UI status:             {ui_serve_hint()}")
+    print("    • Your own data:         docs/DATA_FORMATS.md")
+    print("    • Re-ingest:             trajectory-viz-demo --reset")
     print()
 
 
@@ -151,21 +263,50 @@ def main() -> None:
         action="store_true",
         help="Start the API server (uvicorn on 127.0.0.1:9999) after ingest.",
     )
+    parser.add_argument(
+        "--ensure",
+        action="store_true",
+        help=(
+            "Seed only when the DB is missing or has zero trips "
+            "(used by Docker entrypoint). Implies no serve unless --serve."
+        ),
+    )
+    parser.add_argument(
+        "--no-seed",
+        action="store_true",
+        help="With --ensure: do not ingest; exit 0 even if the DB is empty.",
+    )
     args = parser.parse_args()
 
     demo_dir = resolve_demo_dir()
     db_path = args.db_path or (demo_dir / "demo.duckdb")
 
-    counts = run_demo(db_path, reset=args.reset)
-    _print_summary(counts, db_path)
+    if args.ensure:
+        counts = ensure_demo_db(
+            db_path, seed=not args.no_seed, reset=args.reset
+        )
+        if counts["trips"] == 0:
+            print(f"[DEMO] Empty DB at {db_path} — {EMPTY_DB_HINT}")
+        else:
+            _print_summary(counts, db_path)
+    else:
+        counts = run_demo(db_path, reset=args.reset)
+        _print_summary(counts, db_path)
 
     if args.serve:
         print()
+        print(f"  {ui_serve_hint()}")
         print("  Serving the demo — open http://127.0.0.1:9999 (Ctrl+C to stop)")
+        if not frontend_dist_ready():
+            print(
+                "  [WARN] frontend/dist missing — you will see API JSON at /, "
+                "not the map. Prefer `docker compose up --build` or "
+                "`npm run build` / `npm run dev`."
+            )
         from backend.app import serve
 
         serve()
-    else:
+    elif not args.ensure:
         _print_next_steps(db_path)
 
 

@@ -14,9 +14,10 @@ import type { useUpload } from '../hooks/useUpload';
 import { ACCEPT_ATTR } from '../uploadUtils';
 
 describe('EmptyState', () => {
-  it('keeps the CLI guidance (demo command + sources.yaml)', () => {
+  it('keeps first-run guidance (compose + demo CLI + sources.yaml)', () => {
     render(<EmptyState />);
-    expect(screen.getByText('trajectory-viz-demo --serve')).toBeInTheDocument();
+    expect(screen.getByText('docker compose up --build')).toBeInTheDocument();
+    expect(screen.getByText(/trajectory-viz-demo/)).toBeInTheDocument();
     expect(screen.getByText(/sources\.yaml/)).toBeInTheDocument();
   });
 

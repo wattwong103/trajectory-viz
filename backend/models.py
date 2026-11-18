@@ -148,6 +148,8 @@ class StatsResponse(BaseModel):
     trips: dict
     waypoints: dict
     has_trajectories: bool
+    # Present when trip count is 0 — honest first-run / empty-DB guidance.
+    empty_hint: str | None = None
 
 
 # ─── POI Models (universal-trajectory-support Phase 1) ──────────

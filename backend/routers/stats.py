@@ -20,11 +20,15 @@ router = APIRouter()
 @router.get("/stats", response_model=StatsResponse)
 async def stats():
     """Return dataset summary: row counts, bounding boxes, vehicle type breakdowns."""
+    from ..demo import EMPTY_DB_HINT
+
     s = get_table_stats()
+    trip_count = s.get("trips", {}).get("row_count", 0) or 0
     return StatsResponse(
         trips=s.get("trips", {}),
         waypoints=s.get("waypoints", {}),
         has_trajectories=s.get("waypoints", {}).get("row_count", 0) > 0,
+        empty_hint=EMPTY_DB_HINT if trip_count == 0 else None,
     )
 
 

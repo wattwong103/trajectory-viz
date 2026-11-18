@@ -221,7 +221,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               <div style={styles.warn}>No trajectory data — run trajectory generator</div>
             )}
             {noData && (
-              <div style={styles.warn}>No data — run simulation then ingest</div>
+              <div style={styles.warn}>
+                No data — upload a file, run `trajectory-viz-demo`, or `docker compose up --build`
+              </div>
             )}
           </>
         )}
