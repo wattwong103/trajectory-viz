@@ -7,7 +7,7 @@
 
 import React, { useState, useRef } from 'react';
 import type { FilterState, StatsResponse, FilterOptions, Trajectory, PoiCategory } from '../types';
-import type { LayerVisibility } from '../App';
+import type { LayerVisibility } from '../layerVisibility';
 import { TRANSPORT_MODE_META, resolveModeOptions } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
 import { poiColor } from '../poiColors';
