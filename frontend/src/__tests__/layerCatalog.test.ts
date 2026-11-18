@@ -2,8 +2,8 @@
  * Tests for the layer catalog (grouping integrity + capability gating).
  *
  * The integrity test is the alarm: the catalog's keys must stay exactly in
- * sync with App.tsx's DEFAULT_LAYER_VIS keys and MapView's layerVisibility
- * checks — a rename without updating all three breaks toggles silently.
+ * sync with layerVisibility.ts DEFAULT_LAYER_VIS keys and MapView's
+ * layerVisibility checks — a rename without updating both breaks toggles.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -11,15 +11,9 @@ import {
   hasWalkMode, hasCarMode, hasLabAttr,
   type LayerAvailabilityContext,
 } from '../layerCatalog';
+import { DEFAULT_LAYER_VIS } from '../layerVisibility';
 
-// Mirror of App.tsx's DEFAULT_LAYER_VIS keys. If you add/rename a layer,
-// update both — this test failing is the prompt.
-const DEFAULT_LAYER_VIS_KEYS = [
-  'origins', 'destinations', 'trajectories', 'odFlows', 'density',
-  'linkDensity', 'compareGrid', 'clusters', 'drill', 'speedSegments',
-  'dwellMarkers', 'agents', 'sourceArcs', 'pulse', 'buildings', 'footfall',
-  'pois', 'zones',
-];
+const DEFAULT_LAYER_VIS_KEYS = Object.keys(DEFAULT_LAYER_VIS);
 
 function ctx(overrides: Partial<LayerAvailabilityContext> = {}): LayerAvailabilityContext {
   return {
