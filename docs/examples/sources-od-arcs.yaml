@@ -1,0 +1,36 @@
+# Example sources.yaml for trips-only OD CSV → render.mode: arcs.
+#
+# No trajectories_glob: the dashboard draws time-windowed OD arcs from trip
+# endpoints. Ideal for mega-sim / zone OD dumps where full trails are too heavy.
+#
+# Validate:
+#   python -m backend.sources_schema --validate docs/examples/sources-od-arcs.yaml
+
+version: 1
+
+sources:
+  od-zone-flows:
+    label: "Zone OD arcs"
+    source_id: od
+    discovery:
+      trips_glob: "od/**/trips_od.csv"
+      latest_only: false
+    vehicle_key_template: "od:{vehicle_id}"
+    render:
+      mode: arcs
+      color: [255, 160, 60]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: agent_id
+      trips:
+        starttime:      { csv: starttime,   type: int }
+        start_lon:      { csv: start_lon,   type: double }
+        start_lat:      { csv: start_lat,   type: double }
+        end_lon:        { csv: end_lon,     type: double }
+        end_lat:        { csv: end_lat,     type: double }
+        mode:           { csv: mode,        type: varchar }
+        distance_km:    { csv: distance_km, type: double }
+        dep_hour:       { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day: { csv: sim_day,     type: int }
+        origin_zone:    { csv: origin_zone, type: varchar }
+        dest_zone:      { csv: dest_zone,   type: varchar }

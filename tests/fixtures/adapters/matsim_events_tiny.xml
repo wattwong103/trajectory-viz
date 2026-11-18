@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<events version="1.0">
+  <event time="100.0" type="departure" person="1" link="1" legMode="car"/>
+  <event time="110.0" type="entered link" vehicle="1" person="1" link="1"/>
+  <event time="150.0" type="left link" vehicle="1" person="1" link="1"/>
+  <event time="200.0" type="entered link" vehicle="1" person="1" link="2"/>
+  <event time="250.0" type="arrival" person="1" link="2" legMode="car"/>
+  <event time="300.0" type="departure" person="2" link="2" legMode="walk"/>
+  <event time="400.0" type="arrival" person="2" link="1" legMode="walk"/>
+</events>

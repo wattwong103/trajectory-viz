@@ -148,6 +148,8 @@ def _rows_to_trajectories(
             # Phase C: string mode (15) + agent_id (16) when joined.
             mode=row0[15] if len(row0) > 15 else None,
             agent_id=row0[16] if len(row0) > 16 else None,
+            # Schema accommodation: leg_id (17) when joined.
+            leg_id=row0[17] if len(row0) > 17 else None,
             goods_type=row0[8],
             vehicle_size=row0[9],
             passenger_in=row0[10],

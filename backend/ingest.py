@@ -83,6 +83,7 @@ TRIP_COLUMNS: tuple[str, ...] = (
     "city",            # implicit: scope_value or NULL
     "vehicle_key",     # implicit: built from vehicle_key_template
     "source_id",       # implicit: source_id literal
+    "leg_id",          # optional PFLOW v3 / MATSim sub-trip
 )
 
 WAYPOINT_COLUMNS: tuple[str, ...] = (
@@ -104,6 +105,7 @@ WAYPOINT_COLUMNS: tuple[str, ...] = (
     "is_night_trip",
     "vehicle_key",     # implicit
     "source_id",       # implicit
+    "leg_id",          # optional PFLOW v3 / MATSim sub-trip
 )
 
 

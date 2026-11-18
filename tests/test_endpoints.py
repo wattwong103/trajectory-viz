@@ -153,6 +153,9 @@ def test_stats_filter_options(client):
     assert caps["agent_key_column"] == "vehicle_key"
     assert caps.get("agent_id_column") == "agent_id"
     assert caps.get("schema_version") == "0.3"
+    assert "has_legs" in caps
+    assert isinstance(caps.get("trip_count"), int)
+    assert isinstance(caps.get("waypoint_count"), int)
     assert isinstance(caps["attr_keys"], list)
     assert "modes" in body
     assert len(body["modes"]) >= 1

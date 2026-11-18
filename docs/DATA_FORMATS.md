@@ -352,6 +352,57 @@ DB** — your hand-written `sources.yaml` is never modified.
 
 ---
 
+## 8. Legs (`leg_id`) — PFLOW v3 / MATSim sub-trips
+
+Pseudo-PFLOW v3.0 splits trips into **sub-trips** (mode segments). These are
+modeled as first-class **legs**, not explode-only flat trips:
+
+| Column | Table | Type | Semantics |
+|---|---|---|---|
+| `leg_id` | `trips`, `waypoints` | INTEGER NULL | Sub-trip / leg ordinal within a trip (e.g. PFLOW `subtrip_no`) |
+
+Map via `columns.trips.leg_id` / `columns.waypoints.leg_id` like any other
+optional field. Join identity remains `(agent_key, trip_id)`; `leg_id` is an
+attribute for filtering/display. `/api/stats/filter-options` capabilities
+expose `has_legs` when any non-null `leg_id` exists. Trip and trajectory
+responses include `leg_id` when present.
+
+Example (JoRAS v3 pack): [`docs/examples/sources-joras-v3.yaml`](examples/sources-joras-v3.yaml).
+
+## 9. External ABMs & recipe packs
+
+Config/recipes first; XML stays out-of-process (no new `FormatType`).
+
+| Recipe | Path | Notes |
+|---|---|---|
+| MATSim events → CSV | `scripts/matsim_events_to_csv.py` + [`sources-matsim.yaml`](examples/sources-matsim.yaml) | Optional `--network` for link centroids |
+| SUMO FCD → NDJSON | `scripts/sumo_fcd_to_ndjson.py` + [`sources-sumo-fcd.yaml`](examples/sources-sumo-fcd.yaml) | Prefer SUMO CSV/Parquet when available |
+| OD arcs (trips-only) | [`sources-od-arcs.yaml`](examples/sources-od-arcs.yaml) | `render.mode: arcs` |
+| Phone GPS | [`sources-phone-gps.yaml`](examples/sources-phone-gps.yaml) | RAPIDS-like column names + `gap_split` |
+| JoRAS business traffic v3.0 | [`sources-joras-v3.yaml`](examples/sources-joras-v3.yaml) | Canonical truck/taxi pack; MFS/THTA in root `sources.yaml` stay as legacy |
+
+PFLOW person / truck / taxi / GUFM / Kichijōji registries declare a shared
+`mode_map` (`0` Walk … `8` Taxi) so int `transport_mode` codes become string
+`trips.mode` labels at ingest.
+
+## 10. GeoParquet / MF-JSON — flatten first
+
+Nested GeoParquet (WKB / GeoArrow LineString + timestamp lists) and OGC
+**MF-JSON** Trajectory features are **not** ingested natively this quarter.
+Flatten to one of the supported tabular shapes first:
+
+1. **Flat Parquet / CSV** with lon/lat/time columns (or trips + waypoints), or
+2. **GeoJSON Point / LineString** (+ optional `coordTimes`), then use §6 recipes.
+
+MultiLineString / nested geometry dumps should be exploded upstream. A
+dedicated nested normalizer is deferred.
+
+Mega-sim LOD auto-switch (arcs + pulse when scale is huge) is tracked
+separately (TV-15). Capabilities already expose `trip_count` /
+`waypoint_count` as hooks for that UX.
+
+---
+
 ## Known limits (Phase 3+)
 
 - Geometry types beyond Point/LineString are rejected for trajectory sources.
@@ -361,6 +412,7 @@ DB** — your hand-written `sources.yaml` is never modified.
   `/api/zones/contains` point lookups. Set `PFLOW_VIZ_SPATIAL=1` to make that
   lookup exact (duckdb `spatial` extension, ST_Within with hole support)
   instead of the default bbox approximation.
+- Nested GeoParquet / MF-JSON: flatten first (§10); no WKB expand yet.
 - GeoJSON FeatureCollections stream feature-by-feature when the optional
   `ijson` package is installed (`pip install "trajectory-viz[speed]"`), giving
   one-feature peak memory regardless of file size. Without it, ingest falls
@@ -368,3 +420,4 @@ DB** — your hand-written `sources.yaml` is never modified.
   (`iterparse`) and NDJSON (line-by-line) always stream.
 - `.json` files always need an explicit `format:` declaration (the upload path
   content-sniffs them instead — section 7).
+

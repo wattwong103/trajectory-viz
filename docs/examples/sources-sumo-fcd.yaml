@@ -1,0 +1,43 @@
+# Example sources.yaml for SUMO floating-car data (FCD).
+#
+# Prefer SUMO's native tabular FCD export when possible:
+#   sumo --fcd-output fcd.xml --fcd-output.geo true
+#   # or TraceExporter / --output.format csv|parquet
+#
+# For raw FCD XML, run the thin adapter first (writes canonical `mode`):
+#   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
+#       -o /path/to/output/sumo/fcd.ndjson
+#
+# Then point trajectories_glob at the NDJSON (or CSV/Parquet) and ingest.
+# No new FormatType — XML stays out-of-process (survey decision §6.1).
+#
+# Validate:
+#   python -m backend.sources_schema --validate docs/examples/sources-sumo-fcd.yaml
+
+version: 1
+
+time:
+  epoch_anchor: "2024-06-01T00:00:00+09:00"
+
+sources:
+  sumo-fcd:
+    label: "SUMO FCD (geo)"
+    source_id: sumo
+    discovery:
+      trajectories_glob: "sumo/**/fcd*.ndjson"
+      trajectories_format: ndjson
+      latest_only: false
+    vehicle_key_template: "sumo:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
+    render:
+      mode: trails
+      color: [90, 160, 255]
+    columns:
+      vehicle_id_col: id
+      waypoints:
+        unix_time_ms: { csv: time_ms, type: bigint }
+        lon:          { csv: x,       type: double }
+        lat:          { csv: y,       type: double }
+        link_id:      { csv: edge,    type: varchar }
+        # Adapter (or TraceExporter) should emit a canonical mode label.
+        mode:         { csv: mode,    type: varchar }

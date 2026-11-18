@@ -28,6 +28,13 @@ sources:
       trajectories_glob: "trajectory/gufm/*.csv"
       latest_only: false
     vehicle_key_template: "gufm:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: points
       color: [90, 140, 255]
@@ -60,6 +67,13 @@ sources:
       trajectories_glob: "trajectory/pflow_gt/*.csv"
       latest_only: false
     vehicle_key_template: "pflow:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: points
       color: [43, 200, 80]
