@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network>
+  <nodes>
+    <node id="A" x="139.70" y="35.68"/>
+    <node id="B" x="139.71" y="35.69"/>
+    <node id="C" x="139.72" y="35.70"/>
+  </nodes>
+  <links>
+    <link id="1" from="A" to="B"/>
+    <link id="2" from="B" to="C"/>
+  </links>
+</network>

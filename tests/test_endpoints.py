@@ -153,6 +153,7 @@ def test_stats_filter_options(client):
     assert caps["agent_key_column"] == "vehicle_key"
     assert caps.get("agent_id_column") == "agent_id"
     assert caps.get("schema_version") == "0.3"
+    assert "has_legs" in caps
     assert isinstance(caps["attr_keys"], list)
     # Mega-sim LOD scale estimates (fixture is below threshold → standard)
     assert isinstance(caps.get("agent_count"), int)

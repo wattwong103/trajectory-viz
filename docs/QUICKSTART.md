@@ -193,9 +193,9 @@ pre-midnight starttimes (the animation wraps them mod-86400).
 
 ## Adding a new ABM source
 
-The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step, [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook, and [docs/examples/sources-matsim.yaml](examples/sources-matsim.yaml) for a worked MATSim config.
+The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step and [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook plus external ABM recipes (§9). Worked examples: [MATSim](examples/sources-matsim.yaml), [SUMO FCD](examples/sources-sumo-fcd.yaml), [OD arcs](examples/sources-od-arcs.yaml), [phone GPS](examples/sources-phone-gps.yaml), [JoRAS v3](examples/sources-joras-v3.yaml). MATSim/SUMO XML → thin adapters under `scripts/` (no native XML FormatType).
 
-**Mega-sims (≫1M agents):** ingest trips (+ `density_hourly`), skip or thin waypoints — see [DATA_FORMATS.md §8](DATA_FORMATS.md#8-mega-sim-ingest-trips--aggregates-first). The UI auto-switches to arcs + pulse; re-enable Trajectories to override.
+**Mega-sims (≫1M agents):** ingest trips (+ `density_hourly`), skip or thin waypoints — see [DATA_FORMATS.md §11](DATA_FORMATS.md#11-mega-sim-ingest-trips--aggregates-first). The UI auto-switches to arcs + pulse; re-enable Trajectories to override.
 
 ---
 

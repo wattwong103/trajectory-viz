@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<fcd-export>
+  <timestep time="0.00">
+    <vehicle id="veh0" x="139.700" y="35.680" angle="90.00" type="passenger" speed="10.00" pos="5.00" lane="edge0_0"/>
+    <vehicle id="bus1" x="139.701" y="35.681" angle="90.00" type="bus" speed="8.00" pos="3.00" lane="edge0_0"/>
+  </timestep>
+  <timestep time="1.00">
+    <vehicle id="veh0" x="139.701" y="35.680" angle="90.00" type="passenger" speed="10.00" pos="15.00" lane="edge0_0"/>
+    <vehicle id="bus1" x="139.702" y="35.681" angle="90.00" type="bus" speed="8.00" pos="11.00" lane="edge0_0"/>
+  </timestep>
+</fcd-export>

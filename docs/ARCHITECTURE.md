@@ -105,9 +105,11 @@ a second dimension.
 | **`agent_key`** | `vehicle_key` | Cross-source join identity (`(agent_key, trip_id)`). Column rename deferred; API/docs say agent_key. |
 | **`mode`** | `trips.mode` (VARCHAR) + optional `transport_mode` int | Canonical filter/language is the **string label**. PFLOW ints remain as optional `mode_code` via `mode_map` / `transport_modes=`. |
 | **`agent_id`** | `trips.agent_id` (VARCHAR) | Native string id. `vehicle_id` (int + hash) kept as legacy fallback; join identity is still `vehicle_key`. |
+| **`leg_id`** | `trips.leg_id` / `waypoints.leg_id` (INTEGER NULL) | PFLOW v3 / MATSim sub-trip leg — first-class attribute; join remains `(agent_key, trip_id)`. |
 
 `viz_meta.schema_version` is `0.3` after Phase C init. `/api/stats/filter-options`
-exposes `capabilities` (incl. `schema_version`, `agent_id_column`) and
+exposes `capabilities` (incl. `schema_version`, `agent_id_column`, `has_legs`,
+`trip_count` / `waypoint_count` scale hooks for TV-15) and
 `modes: [{id, label, count}]` (`id` may be null for string-only datasets).
 **Phase B:** the FilterPanel `LayerAvailabilityContext` consumes those flags —
 layer groups follow the form taxonomy (core / analysis / scene / lab plugins);
@@ -127,6 +129,7 @@ is Sources / `source_id` only.
 - **`vehicle_key`** (= public **`agent_key`**) is the cross-source-unique agent identifier (built from each source's `vehicle_key_template`). All grouping, distinct counts, and waypoint-to-trips joins MUST use `vehicle_key` — `vehicle_id` collides across taxi cities.
 - **`agent_id`** (VARCHAR) stores the native agent id string; **`vehicle_id`** remains the int/hash fallback for legacy consumers.
 - **`mode`** (VARCHAR) is the canonical travel-mode label; **`transport_mode`** (INTEGER) is optional PFLOW `mode_code`.
+- **`leg_id`** (INTEGER NULL) stores PFLOW v3 / MATSim sub-trip legs when mapped; NULL otherwise.
 - **F1 derived columns** (`speed_avg_kmh`, `dwell_minutes`, `detour_ratio`) are computed in a post-ingest pass over the trips table. NULL when not computable (no waypoints → NULL speed; vehicle's last trip → NULL dwell; tiny haversine distance → NULL detour).
 
 ## Performance budgets (HARD)
@@ -158,7 +161,7 @@ When either estimate is exceeded, `capabilities.mega_sim=true` / `scale="mega"`:
 3. **Fix-its:** `capabilities.fix_its` cite `python -m backend.ingest --aggregates-only` when `density_hourly` is missing, and ingest thin flags when waypoints are huge.
 4. **Ingest:** prefer trips always; optional `--skip-waypoints`, `--max-waypoints-per-trip=N`, `--waypoint-sample-frac=FRAC`; always build / require `density_hourly` (and link aggregates when available) for pulse.
 
-See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#8-mega-sim-ingest-trips--aggregates-first).
+See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#11-mega-sim-ingest-trips--aggregates-first).
 
 ## v0.2 changes vs v0.1
 

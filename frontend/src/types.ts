@@ -153,6 +153,8 @@ export interface DatasetCapabilities {
   has_trajectories: boolean;
   has_density_hourly: boolean;
   has_modes: boolean;
+  /** True when any trip has a non-null leg_id (PFLOW v3 / MATSim sub-trips). */
+  has_legs?: boolean;
   /** Lab columns with at least one non-null value (hide-when-empty). */
   attr_keys: string[];
   /** Public name is agent_key; physical column remains vehicle_key for now. */

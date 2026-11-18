@@ -17,6 +17,13 @@ sources:
       trajectories_glob: "trajectory/person/kichijoji_baseline/trajectory_*.csv"
       latest_only: false
     vehicle_key_template: "kjbase:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: trails
       color: [43, 160, 220]
@@ -51,6 +58,13 @@ sources:
       trajectories_glob: "trajectory/person/kichijoji_walk/trajectory_*.csv"
       latest_only: false
     vehicle_key_template: "kjwalk:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: points
       color: [43, 200, 120]
@@ -85,6 +99,13 @@ sources:
       trajectories_glob: "trajectory/person/kichijoji_car/trajectory_*.csv"
       latest_only: false
     vehicle_key_template: "kjcar:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: trails
       color: [235, 130, 95]
@@ -120,6 +141,13 @@ sources:
       trajectories_glob: "trajectory/person/kichijoji_after/trajectory_*.csv"
       latest_only: false
     vehicle_key_template: "kjaft:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: trails
       color: [43, 200, 120]

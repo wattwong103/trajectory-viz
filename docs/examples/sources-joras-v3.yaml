@@ -1,0 +1,116 @@
+# Canonical JoRAS Pseudo-PFLOW business-traffic pack (v3.0).
+#
+# Truck + taxi trajectories from the CSIS People Flow Project business-traffic
+# release. Person-flow stays in the main sources.yaml / Kichijōji registries.
+#
+# v3.0 trips may include sub-trip / leg rows — map `leg_id` (sub-trip number)
+# as a first-class column (not explode-only). See docs/DATA_FORMATS.md §8.
+#
+# Legacy lab recipes (kept working, not deleted):
+#   sources.yaml → pflow-truck (MFS-calibrated), pflow-taxi-tokyo (THTA)
+#
+# Adapt globs to your JoRAS export layout. Validate:
+#   python -m backend.sources_schema --validate docs/examples/sources-joras-v3.yaml
+
+version: 1
+
+sources:
+  joras-truck-v3:
+    label: "JoRAS Truck (Pseudo-PFLOW v3.0)"
+    source_id: truck
+    discovery:
+      trips_glob: "joras/v3/truck/**/trips_*.csv"
+      trajectories_glob: "joras/v3/truck/**/waypoints*.csv"
+      latest_only: true
+      validation_relative: "validation.csv"
+    vehicle_key_template: "truck:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
+    render:
+      mode: trails
+      color: [253, 128, 93]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: truck_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: sim_day,        type: int }
+        # PFLOW v3 sub-trip / leg number (optional; NULL when absent).
+        leg_id:          { csv: subtrip_no,     type: int }
+        goods_type:      { csv: goods_type,     type: varchar }
+        vehicle_size:    { csv: vehicle_size,   type: varchar }
+        cargo_loaded:    { csv: cargo_loaded,   type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        leg_id:          { csv: subtrip_no,     type: int }
+        goods_type:      { csv: goods_type,     type: varchar }
+        vehicle_size:    { csv: vehicle_size,   type: varchar }
+
+  joras-taxi-v3:
+    label: "JoRAS Taxi (Pseudo-PFLOW v3.0)"
+    source_id: taxi
+    discovery:
+      trips_glob: "joras/v3/taxi/**/trips_*.csv"
+      trajectories_glob: "joras/v3/taxi/**/waypoints*.csv"
+      latest_only: true
+      scope: { value: tokyo }
+      validation_relative: "validation.csv"
+    vehicle_key_template: "taxi:{scope}:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
+    render:
+      mode: trails
+      color: [23, 184, 190]
+    columns:
+      trip_id_col: id
+      vehicle_id_col: taxi_id
+      trips:
+        starttime:       { csv: starttime,      type: int }
+        start_lon:       { csv: start_lon,      type: double }
+        start_lat:       { csv: start_lat,      type: double }
+        end_lon:         { csv: end_lon,        type: double }
+        end_lat:         { csv: end_lat,        type: double }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        distance_km:     { csv: distance_km,    type: double }
+        dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day:  { csv: simulation_day, type: int }
+        leg_id:          { csv: subtrip_no,     type: int }
+        fare_yen:        { csv: fare_yen,       type: double }
+        is_night_trip:   { csv: is_night_trip,  type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
+        passenger_in:    { csv: passenger_in,   type: bool, transform: "lower(CAST(value AS VARCHAR)) = 'true'" }
+        taxi_id:         { csv: taxi_id,        type: int }
+      waypoints:
+        unix_time_ms:    { csv: unix_time_ms,   type: bigint }
+        lon:             { csv: lon,            type: double }
+        lat:             { csv: lat,            type: double }
+        link_id:         { csv: link_id,        type: varchar }
+        transport_mode:  { csv: transport_mode, type: int }
+        purpose:         { csv: purpose,        type: int }
+        leg_id:          { csv: subtrip_no,     type: int }
+        passenger_in:    { csv: passenger_in,   type: varchar }
+        fare_yen:        { csv: fare_yen,       type: double }
+        is_night_trip:   { csv: is_night_trip,  type: varchar }

@@ -440,17 +440,31 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
     has_trips = trip_count > 0
     has_trajectories = wp_count > 0
     has_density_hourly = density_count > 0
+
+    # Legs (PFLOW v3 / MATSim sub-trips) — advertise when any non-null leg_id.
+    has_legs = False
+    try:
+        leg_n = conn.execute(
+            "SELECT COUNT(leg_id) FROM trips WHERE leg_id IS NOT NULL"
+        ).fetchone()[0]
+        has_legs = bool(leg_n and leg_n > 0)
+    except Exception:
+        has_legs = False
+
     caps = {
         "has_trips": has_trips,
         "has_trajectories": has_trajectories,
         "has_density_hourly": has_density_hourly,
         "has_modes": len(transport_modes) > 0 or string_mode_count > 0,
+        "has_legs": has_legs,
         "attr_keys": attr_keys,
         # agent_key is the public name for vehicle_key (physical rename deferred).
         "agent_key_column": "vehicle_key",
         "agent_id_column": "agent_id",
         "schema_version": get_schema_version(conn),
     }
+    # Mega-sim LOD (TV-15): scale class, recommended forms, fix_its, and
+    # trip_count / waypoint_count / agent_count estimates.
     caps.update(
         lod_capability_block(
             agent_count=agent_count or 0,

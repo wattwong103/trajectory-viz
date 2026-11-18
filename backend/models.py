@@ -73,6 +73,8 @@ class TrajectoryMetadata(BaseModel):
     transport_mode: int | None = None
     # Canonical string mode label (trips.mode). Prefer over transport_mode.
     mode: str | None = None
+    # PFLOW v3 / MATSim sub-trip leg (optional).
+    leg_id: int | None = None
     goods_type: str | None = None
     vehicle_size: str | None = None
     passenger_in: str | None = None
@@ -130,6 +132,8 @@ class TripPoint(BaseModel):
     transport_mode: int | None = None
     # Canonical string mode (trips.mode)
     mode: str | None = None
+    # PFLOW v3 / MATSim sub-trip leg (optional)
+    leg_id: int | None = None
 
 
 class TripResponse(BaseModel):

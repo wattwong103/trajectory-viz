@@ -16,7 +16,9 @@ version: 1
 
 sources:
   # ─────────────────────────────────────────────────────────────────────────
-  # PFLOW Truck (Kanto, MFS-calibrated)
+  # PFLOW Truck (Kanto) — legacy MFS-calibrated lab export.
+  # Canonical JoRAS Pseudo-PFLOW business-traffic v3.0 pack:
+  #   docs/examples/sources-joras-v3.yaml
   # ─────────────────────────────────────────────────────────────────────────
   pflow-truck:
     label: "PFLOW Truck (Kanto)"
@@ -66,7 +68,8 @@ sources:
         vehicle_size:    { csv: vehicle_size,   type: varchar }
 
   # ─────────────────────────────────────────────────────────────────────────
-  # PFLOW Taxi — Tokyo (THTA-calibrated)
+  # PFLOW Taxi — Tokyo (legacy THTA-calibrated). Prefer JoRAS v3.0 taxi block
+  # in docs/examples/sources-joras-v3.yaml for new business-traffic packs.
   # Add additional cities (osaka, kanagawa, ...) by copying this block and
   # changing `scope`, the discovery globs, and the key.
   # ─────────────────────────────────────────────────────────────────────────
@@ -83,6 +86,13 @@ sources:
       trajectories_glob: "trajectory/person/shopping/trajectory_*.csv"
       latest_only: false
     vehicle_key_template: "person:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: points
       color: [43, 200, 80]
@@ -118,6 +128,13 @@ sources:
       scope: { value: tokyo }
       validation_relative: "validation.csv"
     vehicle_key_template: "taxi:{scope}:{vehicle_id}"
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: trails
       color: [23, 184, 190]
