@@ -561,23 +561,43 @@ export default function App() {
   }, []);
 
   // Per-dataset layer availability for the FilterPanel's grouped toggles —
-  // everything the catalog needs, from state App already holds.
-  const layerAvailability = useMemo<LayerAvailabilityContext>(() => ({
-    hasTrajectories: stats?.has_trajectories ?? false,
-    transportModes: (filterOptions?.transport_modes ?? []).map(m => m.mode),
-    sourceModes: (filterOptions?.sources ?? []).map(s => s.mode),
-    pulseBuilt: pulseProbe?.built ?? null,
-    pulseDetail: pulseProbe?.detail,
-    hasClusterResult: clusterResult !== null,
-    hasDrillResult: drillTrajectories.length > 0,
-    hasODFlows: odFlows.length > 0,
-    hasDensity: densityPoints.length > 0,
-    hasLinkDensity: linkDensity.length > 0,
-    hasCompareGrid: compareGrid !== null && compareGrid.cells.length > 0,
-    hasFollowedAgents: selectedAgents.length > 0,
-    hasPois: poi.categories.length > 0,
-    hasZones: zones.length > 0,
-  }), [
+  // Phase B: seed from filter-options capabilities (+ session overlay state).
+  const layerAvailability = useMemo<LayerAvailabilityContext>(() => {
+    const caps = filterOptions?.capabilities;
+    const labeled = filterOptions?.modes ?? [];
+    const modeIds = labeled.length > 0
+      ? labeled.map(m => m.id)
+      : (filterOptions?.transport_modes ?? []).map(m => m.mode);
+    const hasDensityHourly = caps?.has_density_hourly ?? null;
+    // Capabilities win when known; probe still supplies 409 fix-it detail.
+    const pulseBuilt =
+      hasDensityHourly === true ? true
+        : hasDensityHourly === false ? false
+          : (pulseProbe?.built ?? null);
+    return {
+      hasTrajectories: caps?.has_trajectories ?? stats?.has_trajectories ?? false,
+      transportModes: modeIds,
+      modeLabels: labeled.map(m => m.label),
+      attrKeys: caps?.attr_keys ?? [],
+      hasModes: caps?.has_modes ?? modeIds.length > 0,
+      hasDensityHourly,
+      sourceModes: (filterOptions?.sources ?? []).map(s => s.mode),
+      pulseBuilt,
+      pulseDetail: pulseProbe?.detail
+        ?? (hasDensityHourly === false
+          ? 'density_hourly not built — run: python -m backend.ingest --aggregates-only'
+          : undefined),
+      hasClusterResult: clusterResult !== null,
+      hasDrillResult: drillTrajectories.length > 0,
+      hasODFlows: odFlows.length > 0,
+      hasDensity: densityPoints.length > 0,
+      hasLinkDensity: linkDensity.length > 0,
+      hasCompareGrid: compareGrid !== null && compareGrid.cells.length > 0,
+      hasFollowedAgents: selectedAgents.length > 0,
+      hasPois: poi.categories.length > 0,
+      hasZones: zones.length > 0,
+    };
+  }, [
     stats, filterOptions, pulseProbe, clusterResult, drillTrajectories,
     odFlows, densityPoints, linkDensity, compareGrid, selectedAgents, poi.categories,
     zones,
@@ -777,6 +797,13 @@ export default function App() {
         maxDwellMinutes={filter.maxDwellMinutes}
         minDetourRatio={filter.minDetourRatio}
         maxDetourRatio={filter.maxDetourRatio}
+        attrKeys={filterOptions?.capabilities?.attr_keys ?? []}
+        modeLabels={(filterOptions?.modes ?? []).map(m => m.label)}
+        datasetTransportModes={
+          (filterOptions?.modes ?? []).map(m => m.id).length > 0
+            ? (filterOptions?.modes ?? []).map(m => m.id)
+            : (filterOptions?.transport_modes ?? []).map(m => m.mode)
+        }
       />
 
       <TimeSlider

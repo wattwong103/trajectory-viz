@@ -93,7 +93,7 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 
 Required trip columns (validated): `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat`. Required waypoint columns when trajectories_glob is set: `unix_time_ms`, `lon`, `lat`. Everything else is optional.
 
-## Canonical vocabulary (universal forms — Phase A)
+## Canonical vocabulary (universal forms — Phase A/B)
 
 Public API and docs use these names. Physical DuckDB columns may still use
 legacy names during the transition — treat aliases as the *same concept*, not
@@ -104,12 +104,16 @@ a second dimension.
 | **`source_id`** | `trips.source_id` (+ mirror `vehicle_type`) | Dataset / population. Query param `source_id=` preferred; `vehicle_type=` is a deprecated alias. UI label: **Sources**. |
 | **`agent_key`** | `vehicle_key` | Cross-source join identity (`(agent_key, trip_id)`). Column rename deferred; API/docs say agent_key. |
 | **`mode`** | `transport_mode` (int) + labels | Canonical language is the **string label** (`Walk`, `Bike`, …). PFLOW ints filter via `transport_modes=` / `mode_map` until v0.3. |
-| **`agent_id`** | `vehicle_id` (int + hash) | String widen planned for schema v0.3 — not widened in Phase A. |
+| **`agent_id`** | `vehicle_id` (int + hash) | String widen planned for schema v0.3 — not widened in Phase A/B. |
 
 `/api/stats/filter-options` exposes `capabilities` (form contract) and
 `modes: [{id, label, count}]` (labels from `mode_map` / PFLOW defaults).
-See the project plan *Universal trajectory forms* for the full form taxonomy
-and later phases (capability UI, schema v0.3, demo-first shell).
+**Phase B:** the FilterPanel `LayerAvailabilityContext` consumes those flags —
+layer groups follow the form taxonomy (core / analysis / scene / lab plugins);
+goods / footfall / pedestrianize hide when attrs or modes are absent; pulse
+disable reasons cite `has_density_hourly` + the ingest fix-it command.
+See the project plan *Universal trajectory forms* for schema v0.3 and
+demo-first shell (later phases).
 
 **Deprecation:** do not treat `vehicle_type` as a concept distinct from
 `source_id`. Ingest still dual-writes the mirror column; the public contract
