@@ -20,7 +20,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from backend.sources_schema import SourceConfig
+from backend.sources_schema import PoiConfig, SourceConfig, ZoneConfig
 
 # ---------------------------------------------------------------------------
 # Heuristic column candidates (aligned with scripts/csv_to_duckdb.py aliases)
@@ -223,10 +223,8 @@ def generate_poi_config(
     label: str,
     prop_keys: set[str] | None = None,
     color: list[int] | tuple[int, ...] | None = None,
-) -> "PoiConfig":
+) -> PoiConfig:
     """Build a PoiConfig for an uploaded Point GeoJSON overlay."""
-    from backend.sources_schema import PoiConfig
-
     props = prop_keys or set()
     name_prop = _pick_prop(props, _POI_NAME_PROPS)
     cat_prop = _pick_prop(props, _POI_CATEGORY_PROPS)
@@ -265,10 +263,8 @@ def generate_zone_config(
     label: str,
     prop_keys: set[str] | None = None,
     color: list[int] | tuple[int, ...] | None = None,
-) -> "ZoneConfig":
+) -> ZoneConfig:
     """Build a ZoneConfig for an uploaded Polygon GeoJSON overlay."""
-    from backend.sources_schema import ZoneConfig
-
     props = prop_keys or set()
     name_prop = _pick_prop(props, _POI_NAME_PROPS)
     cat_prop = _pick_prop(props, _POI_CATEGORY_PROPS)
