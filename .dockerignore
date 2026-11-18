@@ -13,9 +13,38 @@ __pycache__/
 # ─── Virtualenvs ────────────────────────────────────────
 .venv-viz/
 .venv-viz-*/
+.venv-*/
 .venv/
 venv/
 env/
+
+# ─── Worktrees, caches, exports & workspace tooling ─────
+.worktrees/
+graft/
+exports/
+.ai-sdlc/
+backlog/
+.githooks/
+.claude/
+.codex/
+.grok/
+.agents/
+.mcp.json
+opencode.json
+AGENTS.md
+CLAUDE.md
+openspec/
+.mavis/
+.harness/
+.cursor/
+.aider*
+
+# ─── Env files (never bake local secrets into images) ───
+.env
+.env.*
+!.env.example
+**/.env.local
+**/.env.*.local
 
 # ─── Frontend ───────────────────────────────────────────
 frontend/node_modules/
@@ -34,6 +63,7 @@ data/
 tests/__pycache__/
 .tox/
 .coverage
+.coverage.*
 htmlcov/
 
 # ─── Editor / OS ────────────────────────────────────────

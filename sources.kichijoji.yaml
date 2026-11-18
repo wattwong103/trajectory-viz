@@ -2,8 +2,8 @@
 # Ingest into a dedicated DB (does NOT touch the main 8.4GB pflow.duckdb):
 #   trajectory-viz-ingest --reset \
 #     --sources sources.kichijoji.yaml \
-#     --output-root /Users/north-mac/Dropbox/PFLOW/output \
-#     --db-path /Users/north-mac/Dropbox/PFLOW/output/viz/kichijoji.duckdb
+#     --output-root "$PFLOW_HOME/output" \
+#     --db-path "$PFLOW_HOME/output/viz/kichijoji.duckdb"
 version: 1
 
 sources:

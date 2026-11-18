@@ -12,7 +12,7 @@ Two input modes:
   city_tatemono.csv fallback (synthesized squares, heuristic heights —
   for cities PLATEAU doesn't cover; flagged `synthesized` in the header):
     python scripts/build_buildings.py --city nagoya \
-        --tatemono H:/Dropbox/PFLOW/data/facilities/city_tatemono.csv \
+        --tatemono "$PFLOW_HOME/data/facilities/city_tatemono.csv" \
         --city-codes 23101,23102 --bbox 136.8 35.0 137.1 35.3 \
         --out output/viz/buildings/nagoya.bin
 
