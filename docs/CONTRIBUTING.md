@@ -136,7 +136,7 @@ pytest tests/ -v
 # or collect only: pytest tests/ --collect-only -q
 ```
 
-Key modules: `test_v0_2_parity.py`, `test_endpoints.py`, `test_sources_schema.py`, `test_demo.py`, `test_phase_d_defaults.py`, `test_schema_accommodation.py`, `test_lod.py`, `test_first_run.py`, plus format/zone/export coverage.
+Key modules: `test_v0_2_parity.py`, `test_endpoints.py`, `test_sources_schema.py`, `test_demo.py`, `test_phase_d_defaults.py`, `test_schema_accommodation.py`, `test_lod.py`, `test_scale_correctness.py` (TV-6 fixtures under `tests/fixtures/scale/`), `test_first_run.py`, plus format/zone/export coverage. CI also runs a dedicated **Scale & correctness fixtures** job on that module.
 
 Add new tests for:
 
