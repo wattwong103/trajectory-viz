@@ -2,7 +2,12 @@
 
 trajectory-viz ingests **any** timestamped trajectory dataset — not just PFLOW
 ABM output. This document is the field-level reference for every supported
-input format and the `sources.yaml` cookbook for wiring your own data.
+input format and the sources-registry cookbook for wiring your own data.
+
+**Default registry:** [`demo/sources.demo.yaml`](../demo/sources.demo.yaml)
+(Phase D). Lab packs: [`profiles/`](../profiles/README.md). Point
+`TRAJECTORY_VIZ_SOURCES` / `--profile` at another registry when needed —
+there is no silent PFLOW-first path.
 
 **Canonical names** (API / docs): `source_id` (Sources), `agent_key`
 (physical column `vehicle_key`), `agent_id` (VARCHAR native id; `vehicle_id`
@@ -10,8 +15,9 @@ int/hash fallback), `mode` (VARCHAR string labels; optional PFLOW int
 `transport_mode` / `mode_code` via `mode_map`). Query param `modes=` filters
 string labels; `transport_modes=` remains for int codes. Query param
 `vehicle_type=` is a deprecated alias of `source_id=` — same concept, not a
-second dimension. See
-[ARCHITECTURE.md → Canonical vocabulary](ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-abc).
+second dimension. Survey-backed form taxonomy and capability gating:
+[ARCHITECTURE.md → Canonical vocabulary](ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-abc)
+(universal forms Phases A–D).
 
 Supported formats: **CSV**, **GeoJSON**, **GPX**, **NDJSON**, **Parquet** —
 plus static **POI layers** (any of the same formats). Format is auto-detected
@@ -131,7 +137,8 @@ before.
 ## 6. YAML cookbook
 
 Every recipe below is a complete, valid `version: 1` block. Globs resolve
-relative to `PFLOW_VIZ_OUTPUT_ROOT`. Validate with:
+relative to `TRAJECTORY_VIZ_OUTPUT_ROOT` (alias `PFLOW_VIZ_OUTPUT_ROOT`;
+demo default is the `demo/` tree). Validate with:
 
 ```bash
 python -m backend.sources_schema --validate demo/sources.demo.yaml

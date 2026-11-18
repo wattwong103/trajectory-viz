@@ -86,7 +86,7 @@ What happens:
    write an explicit `sources.yaml` block instead (see below).
 3. Trips are synthesized from the points (30-minute gap split) and ingest runs
    as a background job with a live progress card.
-4. When the job finishes, the new source simply appears — vehicle-type button,
+4. When the job finishes, the new source simply appears — **Sources** button,
    legend entry, toast ("Added 'couriers.gpx': 412 trips, 2 vehicles").
 
 **Time anchoring on a fresh DB**: the first upload into an empty database pins
@@ -196,7 +196,8 @@ In this mode `PFLOW_HOME` is never resolved, so the dashboard runs anywhere the 
 The `data/gufm/` dataset holds two fleets of the same 400 held-out persons
 (ward 13101/Chiyoda): GUFM model-generated trips vs PFLOW ground truth — the
 dataset the ⇄ Compare tab's matched-person workflow was built for. Launchers
-at the repo root wire the three required env vars (`sources.gufm.yaml` +
+at the repo root wire the three required env vars
+([`profiles/gufm/sources.yaml`](../profiles/gufm/sources.yaml) +
 `gufm.duckdb` + output root):
 
 ```bash
