@@ -1,16 +1,23 @@
 # CI fixture wiring for MATSim adapter outputs.
 # Globs match docs/examples/sources-matsim.yaml (car block) under output_root/.
 #
-# Generate / refresh:
+# Generate / refresh (same epoch as demo/abm):
+#   python scripts/lab_abm_demo.py --convert-only
+#   # or:
 #   python scripts/matsim_events_to_csv.py tests/fixtures/adapters/matsim_events_tiny.xml \
 #       -o tests/fixtures/adapters/output_root/matsim/berlin/iter_001 \
-#       --network tests/fixtures/adapters/matsim_network_tiny.xml
+#       --network tests/fixtures/adapters/matsim_network_tiny.xml \
+#       --epoch-ms 1717167600000
 #
 # Discovery:
 #   python -m backend.sources_schema --discovery tests/fixtures/adapters/sources.matsim.yaml \
 #       --output-root tests/fixtures/adapters/output_root
 
 version: 1
+scale: micro
+
+time:
+  epoch_anchor: "2024-06-01T00:00:00+09:00"
 
 sources:
   matsim-car:

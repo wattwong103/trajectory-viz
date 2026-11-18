@@ -6,11 +6,15 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **MATSim / SUMO lab onboarding (TV-24).** One-command `python scripts/lab_abm_demo.py` converts tiny fixtures → `demo/abm/` → `abm.duckdb` and prints the open-viz env (QUICKSTART **Path L**). MATSim adapter gains `--epoch-ms` (aligned with SUMO) so waypoint `time_ms` matches `time.epoch_anchor`; example YAMLs + fixture seeds use a shared JST anchor; PT block demoted to comments (adapter does not emit it). `dev-stack.mjs` honors `TRAJECTORY_VIZ_*` aliases. Docs: DATA_FORMATS §9.1 convert→ingest→open. Tests cover demo/abm discovery + dual-source ingest.
+
 - **Paper / share export discoverability (TV-25).** Preset `workflow:` / `engine:` / `use:` cues; `demo-paper` defaults to `engine: minimal` (no vendor). `viz-export --list-presets` prints the gallery. Docs choose-a-path (Share link · paper · deck · cinematic). Filter panel **Share link** copies the live URL hash. Tests: preset engine resolution + list-presets + Share link.
 
 - **`viz-export --engine minimal` (TV-20).** Canvas 2D offline HTML shell that reuses the same Int16/base64 payload as the deck.gl exporter but skips the ~1.2 MB vendor bundle (no `fetch_vendor.py` required). Trails, agents, flat buildings, and pulse dots; size gate unchanged (4 MB warn / 8 MB fail). Template: `backend/export_template_minimal.html`. Docs: EXPORT / presets README. Tests: minimal self-contained + size delta in `tests/test_export.py`.
 
 - **MATSim / SUMO adapter fixtures + CI wiring (TV-18).** Golden adapter outputs under `tests/fixtures/adapters/output_root/` with globs matching `docs/examples/sources-matsim.yaml` / `sources-sumo-fcd.yaml`; fixture-local `sources.matsim.yaml` / `sources.sumo.yaml` for discovery + ingest CI. SUMO XML adapter defaults to **CSV** (`--format ndjson` optional); example YAML leads with the tabular FCD path. No new `FormatType`.
+
+- **Source discovery / ingest validation in the UI (TV-19).** `/api/stats/filter-options` gains a `registry` block (`ok`, `profile`, `path`, `issues[]` with `severity` / `code` / `message` / `fix_it`) from `inspect_registry`: schema/YAML/missing-file errors, empty-DB discovery misses, uncovered ingested `source_id`s, and recent `ingest_log` failures. FilterPanel + EmptyState render actionable banners (demo/universal default unchanged; PFLOW still opt-in). Tests: `tests/test_registry_status.py`, `RegistryIssues.test.tsx`.
 
 ### Changed
 
@@ -19,10 +23,6 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 - **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` was reserved then implemented in TV-20 (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.
 
 - **Docs/reality sync (TV-4).** README / QUICKSTART / ARCHITECTURE / DATA_FORMATS / CONTRIBUTING aligned with shipped main after #12–#20: accurate ~320 pytest + ~150 vitest counts; demo/universal + Docker one-URL as the default path (no PFLOW-first surprise); DuckDB documented as a module-level singleton with performance budgets living in ARCHITECTURE + CONTRIBUTING (no cite of absent `.claude/rules`); `modes=` preferred over int `transport_modes=`; `TRAJECTORY_VIZ_DB` / `TRAJECTORY_VIZ_OUTPUT_ROOT` as canonical env names; GUFM path points at `profiles/gufm/sources.yaml`; universal-forms vocabulary + profile links surfaced from README / DATA_FORMATS / CONTRIBUTING.
-
-### Added
-
-- **Source discovery / ingest validation in the UI (TV-19).** `/api/stats/filter-options` gains a `registry` block (`ok`, `profile`, `path`, `issues[]` with `severity` / `code` / `message` / `fix_it`) from `inspect_registry`: schema/YAML/missing-file errors, empty-DB discovery misses, uncovered ingested `source_id`s, and recent `ingest_log` failures. FilterPanel + EmptyState render actionable banners (demo/universal default unchanged; PFLOW still opt-in). Tests: `tests/test_registry_status.py`, `RegistryIssues.test.tsx`.
 
 - **Export preset gallery.** `presets/demo-paper.yaml` (trails-only, demo DB, paper/deck) + `presets/demo-deck.yaml` (trails + agents + pulse) + `presets/README.md`. Lab cinematic remains `presets/tokyo-night.yaml`. Tests: forms gating + engine rejection + size-gate copy in `tests/test_export.py`.
 

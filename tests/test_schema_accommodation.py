@@ -162,10 +162,12 @@ def test_matsim_events_to_csv(tmp_path):
     convert = _load_script("matsim_events_to_csv").convert
 
     out = tmp_path / "matsim_out"
+    epoch_ms = 1_717_167_600_000
     n_trips, n_geo = convert(
         FIXTURES / "matsim_events_tiny.xml",
         out,
         FIXTURES / "matsim_network_tiny.xml",
+        epoch_ms=epoch_ms,
     )
     assert n_trips == 2
     assert n_geo >= 1
@@ -176,6 +178,8 @@ def test_matsim_events_to_csv(tmp_path):
     geo_csv = (out / "events_car_geo.csv").read_text(encoding="utf-8")
     assert "link_id" in geo_csv
     assert "139.705" in geo_csv  # rounded network centroid
+    # Absolute epoch: first enter-link at sim t=110s
+    assert str(epoch_ms + 110_000) in geo_csv
 
 
 def test_sumo_fcd_to_csv(tmp_path):
@@ -254,3 +258,56 @@ def test_sumo_csv_fixture_ingests(conn):
         r[0] for r in conn.execute("SELECT DISTINCT mode FROM waypoints").fetchall()
     }
     assert "Car" in modes and "Bus" in modes
+
+
+def test_demo_abm_pack_validates_and_discovers():
+    """demo/abm first-view pack: schema OK + globs hit committed CSVs."""
+    abm = PROJECT_ROOT / "demo" / "abm"
+    sf = load_sources(abm / "sources.yaml")
+    assert sf.scale == "micro"
+    assert sf.time is not None and sf.time.epoch_anchor
+    counts = dryrun_discovery(sf, abm)
+    assert counts["matsim-car"] >= 2
+    assert counts["sumo-fcd"] >= 1
+
+
+def test_demo_abm_ingests_both_sources(conn):
+    """End-to-end: MATSim + SUMO seed rows land with aligned absolute times."""
+    abm = PROJECT_ROOT / "demo" / "abm"
+    sf = load_sources(abm / "sources.yaml")
+    anchor = resolve_epoch_anchor(sf)
+    assert anchor == 1_717_167_600
+
+    matsim = sf.sources["matsim-car"]
+    n_trips = ingest_source_trips(
+        conn,
+        abm / "matsim/berlin/iter_001/trips_car.csv",
+        "matsim-car",
+        matsim,
+        anchor,
+    )
+    n_wp = ingest_source_trajectories(
+        conn,
+        abm / "matsim/berlin/iter_001/events_car_geo.csv",
+        "matsim-car",
+        matsim,
+        anchor,
+    )
+    assert n_trips == 2 and n_wp == 3
+
+    sumo = sf.sources["sumo-fcd"]
+    n_sumo_wp = ingest_source_trajectories(
+        conn, abm / "sumo/demo/fcd.csv", "sumo-fcd", sumo, anchor
+    )
+    n_sumo_trips = synthesize_trips(conn, sumo, anchor)
+    assert n_sumo_wp == 4 and n_sumo_trips >= 2
+
+    sources = {
+        r[0] for r in conn.execute("SELECT DISTINCT source_id FROM trips").fetchall()
+    }
+    assert sources == {"matsim", "sumo"}
+    # Waypoint clock: first MATSim enter-link at sim 110s → absolute ms.
+    t0 = conn.execute(
+        "SELECT MIN(unix_time_ms) FROM waypoints WHERE source_id = 'matsim'"
+    ).fetchone()[0]
+    assert t0 == 1_717_167_600_000 + 110_000

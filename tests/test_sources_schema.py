@@ -100,11 +100,14 @@ def test_matsim_example_declares_string_mode():
     """Phase C — MATSim example maps canonical mode varchar, not int transport_mode."""
     path = PROJECT_ROOT / "docs" / "examples" / "sources-matsim.yaml"
     data = yaml.safe_load(path.read_text())
-    for key in ("matsim-car", "matsim-pt"):
-        trips = data["sources"][key]["columns"]["trips"]
-        assert "mode" in trips
-        assert trips["mode"]["type"] == "varchar"
-        assert "transport_mode" not in trips
+    # Adapter-backed car block is first-class; PT is documented as a comment only.
+    assert "matsim-car" in data["sources"]
+    assert "matsim-pt" not in data["sources"]
+    trips = data["sources"]["matsim-car"]["columns"]["trips"]
+    assert "mode" in trips
+    assert trips["mode"]["type"] == "varchar"
+    assert "transport_mode" not in trips
+    assert data.get("time", {}).get("epoch_anchor")
 
 
 def test_repo_sources_yaml_declares_render_for_all_sources():

@@ -11,6 +11,8 @@ profiles** — they are not the default discovery path.
 | `kichijoji` | [`pflow/sources.kichijoji.yaml`](pflow/sources.kichijoji.yaml) | Kichijōji pedestrian-superblock person packs |
 | `gufm` | [`gufm/sources.yaml`](gufm/sources.yaml) | GUFM vs PFLOW ground-truth compare fleets |
 
+MATSim / SUMO micro seed (not a named profile — scripts + YAML): [`../demo/abm/`](../demo/abm/) via `python scripts/lab_abm_demo.py` ([QUICKSTART Path L](../docs/QUICKSTART.md#path-l-matsim--sumo-lab-first-view)).
+
 ## Opt in
 
 ```bash

@@ -90,6 +90,10 @@ This counts files matching each source's glob without actually ingesting. A zero
 trajectory-viz-ingest --reset
 ```
 
+For MATSim / SUMO XML, convert first (`scripts/matsim_events_to_csv.py` /
+`scripts/sumo_fcd_to_ndjson.py`, with `--epoch-ms` matching `time.epoch_anchor`),
+or run the fixture one-shot: `python scripts/lab_abm_demo.py` (QUICKSTART Path L).
+
 If your source adds columns that aren't in the existing DB schema (`backend/db.py`), the INSERT will fail. You have two options:
 
 - **Recommended**: stick to the columns already in `trips`/`waypoints` (most ABMs map cleanly).
