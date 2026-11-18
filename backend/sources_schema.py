@@ -606,6 +606,15 @@ class SourcesFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = Field(description="Schema version. Current: 1.")
+    scale: Literal["micro", "meso", "macro", "mega", "standard"] | None = Field(
+        default=None,
+        description=(
+            "Optional simulation-scale override for LOD / form defaults "
+            "(micro | meso | macro). When omitted, capabilities.scale is "
+            "auto-detected from agent/waypoint estimates. Aliases: mega→macro, "
+            "standard→meso. See backend/lod.py and ARCHITECTURE.md."
+        ),
+    )
     sources: dict[str, SourceConfig] = Field(
         description="Map of source key (e.g. 'pflow-truck') -> SourceConfig."
     )

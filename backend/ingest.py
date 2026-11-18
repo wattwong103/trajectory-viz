@@ -1472,14 +1472,16 @@ def main() -> None:
             print(f"[AGGREGATES] ERROR: {type(e).__name__}: {e}")
             errors.append(("(build_density_hourly)", "density_hourly", f"{type(e).__name__}: {e}"))
 
-    # Mega-sim LOD advisory (survey §5–6) — non-fatal operator hints.
+    # Simulation-scale LOD advisory (TV-16) — non-fatal operator hints.
     try:
         from .lod import (
             AGGREGATES_FIXIT,
             MEGA_AGENT_THRESHOLD,
             MEGA_WAYPOINT_THRESHOLD,
+            SCALE_MACRO,
+            SCALE_MICRO,
             WAYPOINT_SAMPLE_FIXIT,
-            is_mega_sim,
+            detect_scale,
         )
         agents = conn.execute(
             "SELECT COUNT(DISTINCT vehicle_key) FROM trips"
@@ -1490,8 +1492,9 @@ def main() -> None:
             dens = conn.execute("SELECT COUNT(*) FROM density_hourly").fetchone()[0] or 0
         except Exception:
             dens = 0
-        if is_mega_sim(agents, wp_total):
-            print(f"\n[LOD] Mega-sim scale detected "
+        scale, _src = detect_scale(agents, wp_total)
+        if scale == SCALE_MACRO:
+            print(f"\n[LOD] Macro scale detected "
                   f"(agents={agents:,} ≥ {MEGA_AGENT_THRESHOLD:,} or "
                   f"waypoints={wp_total:,} ≥ {MEGA_WAYPOINT_THRESHOLD:,}).")
             print("      UI defaults to arcs + pulse; trails remain via user override.")
@@ -1502,6 +1505,12 @@ def main() -> None:
                 or args.waypoint_sample_frac
             ):
                 print(f"      Next ingest, thin trails: {WAYPOINT_SAMPLE_FIXIT}")
+        elif scale == SCALE_MICRO:
+            print(f"\n[LOD] Micro scale (agents={agents:,}, waypoints={wp_total:,}) — "
+                  f"trails + agents default; arcs/pulse stay optional.")
+            if wp_total == 0:
+                print("      Micro evacuation/event playback needs waypoints — "
+                      "avoid --skip-waypoints.")
     except Exception as e:
         print(f"[LOD] scale check skipped: {type(e).__name__}: {e}")
 

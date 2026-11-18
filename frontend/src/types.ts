@@ -147,6 +147,9 @@ export interface SourceStyle {
   has_waypoints: boolean;
 }
 
+/** Canonical simulation-scale engine modes (TV-16). */
+export type SimScale = 'micro' | 'meso' | 'macro';
+
 /** Dataset form-contract flags from /api/stats/filter-options (Phase A + LOD). */
 export interface DatasetCapabilities {
   has_trips: boolean;
@@ -163,22 +166,39 @@ export interface DatasetCapabilities {
   agent_id_column?: string;
   /** Phase C — viz_meta.schema_version (e.g. "0.3"). */
   schema_version?: string;
-  /** Unique agents (COUNT DISTINCT vehicle_key) — mega-sim scale estimate. */
+  /** Unique agents (COUNT DISTINCT vehicle_key) — scale estimate. */
   agent_count?: number;
   trip_count?: number;
   waypoint_count?: number;
-  /** "mega" when agent/waypoint estimates exceed LOD thresholds. */
-  scale?: 'standard' | 'mega' | string;
+  /**
+   * Simulation scale: micro | meso | macro (canonical).
+   * Legacy aliases on the wire/config: mega→macro, standard→meso.
+   */
+  scale?: SimScale | 'standard' | 'mega' | string;
+  /** auto | config — whether scale was detected or overridden in sources.yaml. */
+  scale_source?: 'auto' | 'config' | string;
+  /** True when scale is macro (compat with #18 mega-sim LOD). */
   mega_sim?: boolean;
-  /** Default forms when mega: typically ["arcs","pulse"]. */
+  /** Default forms for this scale (e.g. micro: trails+agents; macro: arcs+pulse). */
   recommended_default_forms?: string[];
   trails_default?: boolean;
+  form_defaults?: {
+    trails?: boolean;
+    arcs?: boolean;
+    pulse?: boolean;
+    agents?: boolean;
+  };
+  /** Soft / hard disable reasons keyed by form id. */
+  form_disable_reasons?: Record<string, string>;
   lod?: {
     agent_threshold: number;
     waypoint_threshold: number;
+    micro_agent_max?: number;
+    micro_waypoint_max?: number;
     trajectory_sample_cap: number;
     auto_forms: string[];
     trails_override_allowed: boolean;
+    aggregate_first?: boolean;
   };
   /** Operator fix-its (aggregates, ingest sample flags, …). */
   fix_its?: string[];

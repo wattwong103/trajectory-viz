@@ -110,7 +110,7 @@ a second dimension.
 
 `viz_meta.schema_version` is `0.3` after Phase C init. `/api/stats/filter-options`
 exposes `capabilities` (incl. `schema_version`, `agent_id_column`, `has_legs`,
-`trip_count` / `waypoint_count` scale hooks for TV-15) and
+`trip_count` / `waypoint_count` scale hooks for TV-16 micro/meso/macro) and
 `modes: [{id, label, count}]` (`id` may be null for string-only datasets).
 **Phase B:** the FilterPanel `LayerAvailabilityContext` consumes those flags —
 layer groups follow the form taxonomy (core / analysis / scene / lab plugins);
@@ -144,30 +144,47 @@ Living targets for API design (also summarized in
 
 1. `/api/stats/*` p99 < 200ms
 2. `/api/trips/*` p99 < 1s for ≤10K-trip result sets
-3. `/api/trajectories/*` < 500ms for a single trip; sample to ≤500 trajectories per render for multi-trip (mega-sim LOD clamps sample/bbox to 500 — see below)
+3. `/api/trajectories/*` < 500ms for a single trip; sample to ≤500 trajectories per render for multi-trip (macro / mega-sim LOD clamps sample/bbox to 500 — see below)
 4. **DuckDB connection** is a **process-wide module singleton** (`backend.db.get_connection`) — not per-request and not a connection pool. Tests replace `backend.db._connection`.
 
 When designing new endpoints: profile against these budgets; add indexes for filter columns; avoid serializing >10K rows in one response without pagination.
 
-## Mega-sim LOD (≫1M agents)
+## Simulation scale (micro / meso / macro)
 
-Nationwide / city-scale ABMs (Pseudo-PFLOW, MATSim, dense SUMO FCD) must not
-trail-render in full. Policy lives in `backend/lod.py` and the frontend
-`lodPolicy.ts` / layer catalog.
+Engine modes for any sim type (evacuation, events, local agents, city/region
+ABM) — not only mid-scale PFLOW. Policy lives in `backend/lod.py` and the
+frontend `lodPolicy.ts` / layer catalog. Product **demo vs lab** profiles are
+orthogonal to scale.
 
-| Signal | Threshold (default) | Source |
+| `capabilities.scale` | Typical use | Default forms | Notes |
+|---|---|---|---|
+| **micro** | Building / block / event / evacuation | trails + agents | Fine trails OK; **never** force arcs+pulse |
+| **meso** | Mid-scale city ABM (classic PFLOW packs) | trails | Current mid-scale default |
+| **macro** | City / region / nation | arcs + pulse | Aggregate-first; trails sampled |
+
+Auto-detect (override with top-level `scale:` in `sources.yaml`):
+
+| Signal | Threshold (default) | Effect |
 |---|---|---|
-| Unique agents (`COUNT DISTINCT vehicle_key`) | **1,000,000** | `/api/stats/filter-options` → `capabilities.agent_count` |
-| Waypoint rows | **10,000,000** | `capabilities.waypoint_count` |
+| Unique agents | **&lt; 10,000** and waypoints **&lt; 1M** | → **micro** |
+| Unique agents ≥ **1,000,000** *or* waypoints ≥ **10,000,000** | → **macro** (same mega-sim LOD thresholds as #18) |
+| Otherwise | → **meso** |
 
-When either estimate is exceeded, `capabilities.mega_sim=true` / `scale="mega"`:
+Wire compat: `mega_sim=true` when scale is macro; config/wire aliases
+`mega`→macro and `standard`→meso. `scale_source` is `auto` or `config`.
 
-1. **Default UI:** arcs + pulse, trails off (user can re-enable Trajectories or use the Trails preset — override sticks for the session).
+When scale is **macro**:
+
+1. **Default UI:** arcs + pulse, trails off (Trajectories toggle / Trails preset — override sticks for the session).
 2. **Query caps:** trajectory sample / bbox `limit` clamped to **500**; response may set `capped=true`.
-3. **Fix-its:** `capabilities.fix_its` cite `python -m backend.ingest --aggregates-only` when `density_hourly` is missing, and ingest thin flags when waypoints are huge.
-4. **Ingest:** prefer trips always; optional `--skip-waypoints`, `--max-waypoints-per-trip=N`, `--waypoint-sample-frac=FRAC`; always build / require `density_hourly` (and link aggregates when available) for pulse.
+3. **Fix-its / form_disable_reasons:** cite `python -m backend.ingest --aggregates-only` when `density_hourly` is missing; encourage mesh/link aggregates.
+4. **Ingest:** prefer trips always; optional `--skip-waypoints`, `--max-waypoints-per-trip=N`, `--waypoint-sample-frac=FRAC`.
 
-See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#11-mega-sim-ingest-trips--aggregates-first).
+When scale is **micro**, UI keeps trails + agents; pulse disable copy is soft
+(“optional”). Recipes: [evacuation micro](examples/sources-evacuation-micro.yaml),
+[OD arcs macro](examples/sources-od-arcs.yaml).
+
+See [DATA_FORMATS.md → Simulation scale](DATA_FORMATS.md#11-simulation-scale-micro--meso--macro).
 
 ## v0.2 changes vs v0.1
 
@@ -198,7 +215,7 @@ trajectory-viz/
 │   ├── demo.py             trajectory-viz-demo: bundled demo ingest + serve
 │   ├── formats.py          geojson/gpx/ndjson normalizers (staging shape)
 │   ├── ingest.py           sources registry → staging → DuckDB INSERT...SELECT
-│   ├── lod.py              Mega-sim scale thresholds + sample/ingest caps
+│   ├── lod.py              micro/meso/macro scale + sample/ingest caps
 │   ├── models.py           Pydantic request/response models
 │   ├── sources_schema.py   Pydantic models + profile loader (demo|pflow|…)
 │   ├── routers/            stats.py, trips.py, trajectories.py, pois.py
@@ -218,7 +235,7 @@ trajectory-viz/
 ├── docs/
 │   ├── QUICKSTART.md       Getting-started (Docker one-URL → native → lab)
 │   ├── DATA_FORMATS.md     Universal ingest formats + YAML cookbook
-│   ├── ARCHITECTURE.md     This file (vocabulary, budgets, mega-sim LOD)
+│   ├── ARCHITECTURE.md     This file (vocabulary, budgets, scale LOD)
 │   ├── CONTRIBUTING.md     Adding a source, style, tests, budgets
 │   ├── EXPORT.md           Offline HTML export
 │   └── examples/           MATSim, SUMO FCD, OD arcs, phone GPS, JoRAS v3, …

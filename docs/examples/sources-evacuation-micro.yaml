@@ -1,0 +1,45 @@
+# Example: micro-scale evacuation / event / building egress.
+#
+# Fine trails + agents; short time windows. Set top-level `scale: micro` so
+# capabilities never inherit macro/mega arcs+pulse defaults even if a future
+# LOD threshold change would otherwise reclassify the pack.
+#
+# Forms: trails, agents, scenario/bbox, local OD. Pulse stays optional.
+#
+# Validate:
+#   python -m backend.sources_schema --validate docs/examples/sources-evacuation-micro.yaml
+
+version: 1
+scale: micro
+
+sources:
+  evacuation-agents:
+    label: "Building evacuation"
+    source_id: evacuation
+    discovery:
+      trips_glob: "evacuation/**/trips.csv"
+      trajectories_glob: "evacuation/**/waypoints.csv"
+      latest_only: false
+    vehicle_key_template: "evac:{vehicle_id}"
+    render:
+      mode: trails
+      color: [220, 80, 60]
+    forms: [trails, agents, od-endpoints]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: agent_id
+      trips:
+        starttime:      { csv: starttime,   type: int }
+        start_lon:      { csv: start_lon,   type: double }
+        start_lat:      { csv: start_lat,   type: double }
+        end_lon:        { csv: end_lon,     type: double }
+        end_lat:        { csv: end_lat,     type: double }
+        mode:           { csv: mode,        type: varchar }
+        distance_km:    { csv: distance_km, type: double }
+        dep_hour:       { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day: { csv: sim_day,     type: int }
+      waypoints:
+        unix_time_ms:   { csv: unix_time_ms, type: bigint }
+        lon:            { csv: lon,          type: double }
+        lat:            { csv: lat,          type: double }
+        link_id:        { csv: link_id,      type: varchar }

@@ -25,6 +25,7 @@ function ctx(overrides: Partial<LayerAvailabilityContext> = {}): LayerAvailabili
     hasDensityHourly: true,
     sourceModes: ['trails', 'arcs'],
     megaSim: false,
+    simScale: null,
     pulseBuilt: true,
     pulseDetail: undefined,
     hasClusterResult: true,
@@ -175,12 +176,40 @@ describe('layer availability', () => {
     expect(reason('buildings', ctx({ hasPois: false }))).toBeNull();
   });
 
-  it('Mega preset hides trails and enables arcs+pulse', () => {
-    const vis = LAYER_PRESETS.mega.visibility;
-    expect(vis.trajectories).toBe(false);
-    expect(vis.sourceArcs).toBe(true);
-    expect(vis.pulse).toBe(true);
-    expect(vis.origins).toBe(true);
-    expect(vis.destinations).toBe(true);
+  it('Mega/Macro presets hide trails and enable arcs+pulse', () => {
+    for (const id of ['mega', 'macro'] as const) {
+      const vis = LAYER_PRESETS[id].visibility;
+      expect(vis.trajectories).toBe(false);
+      expect(vis.sourceArcs).toBe(true);
+      expect(vis.pulse).toBe(true);
+      expect(vis.origins).toBe(true);
+      expect(vis.destinations).toBe(true);
+    }
+  });
+
+  it('Micro preset keeps trails and leaves pulse off', () => {
+    const vis = LAYER_PRESETS.micro.visibility;
+    expect(vis.trajectories).toBe(true);
+    expect(vis.pulse).toBe(false);
+    expect(vis.agents).toBe(true);
+  });
+
+  it('pulse disable copy softens at micro and stresses aggregates at macro', () => {
+    const missing = ctx({
+      hasDensityHourly: false,
+      pulseBuilt: false,
+      simScale: 'micro',
+    });
+    expect(reason('pulse', missing)).toMatch(/optional at micro/i);
+
+    const macroMissing = ctx({
+      hasDensityHourly: false,
+      pulseBuilt: false,
+      megaSim: true,
+      simScale: 'macro',
+      sourceModes: ['trails'],
+    });
+    expect(reason('pulse', macroMissing)).toMatch(/Macro scale prefers pulse/i);
+    expect(reason('sourceArcs', macroMissing)).toBeNull();
   });
 });
