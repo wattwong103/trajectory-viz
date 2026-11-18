@@ -42,11 +42,13 @@ from backend.trajectory_queries import (  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = Path(__file__).resolve().parent / "export_template.html"
+MINIMAL_TEMPLATE_PATH = Path(__file__).resolve().parent / "export_template_minimal.html"
 DEFAULT_VENDOR = PROJECT_ROOT / "scripts" / "vendor" / "deck.gl.min.js"
 
 SCALE_DEG = 1e-5
 DATA_BUDGET_WARN_MB = 4.0
 TOTAL_BUDGET_FAIL_MB = 8.0
+SUPPORTED_ENGINES = frozenset({"deck", "minimal"})
 
 # Phase D form ids the cinematic exporter can bake today.
 # Aliases: trail ↔ trails. Other viz forms (od-arcs, heatmap, …) are noted.
@@ -144,23 +146,21 @@ def apply_preset_forms(
     )
 
 
-def reject_unimplemented_engine(engine: str | None) -> None:
-    """Fail fast on reserved engines so callers aren't left with empty HTML."""
+def validate_engine(engine: str | None) -> str:
+    """Normalize/validate --engine. Returns 'deck' or 'minimal'."""
     if engine is None or engine == "deck":
-        return
+        return "deck"
     if engine == "minimal":
-        raise SystemExit(
-            "[ERROR] --engine minimal is not implemented yet "
-            "(reserved for a future hand-rolled WebGL path under ~5 MB).\n"
-            "  Use the default deck.gl engine: omit --engine, or pass --engine deck.\n"
-            "  For smaller paper/deck files today, try presets/demo-paper.yaml "
-            "(lower sample_n, no buildings).\n"
-            "  See docs/EXPORT.md."
-        )
+        return "minimal"
     raise SystemExit(
-        f"[ERROR] Unknown --engine {engine!r}. Supported: deck "
-        f"(minimal is reserved/unimplemented). See docs/EXPORT.md."
+        f"[ERROR] Unknown --engine {engine!r}. Supported: "
+        f"{', '.join(sorted(SUPPORTED_ENGINES))}. See docs/EXPORT.md."
     )
+
+
+# Back-compat alias for older call sites / notebooks.
+def reject_unimplemented_engine(engine: str | None) -> None:
+    validate_engine(engine)
 
 
 def _b64(fmt: str, values: list) -> str:
@@ -371,8 +371,14 @@ def export_html(
     buildings_bin: bytes | None = None,
     camera: dict | None = None,
     loop: dict | None = None,
+    engine: str = "deck",
 ) -> str:
-    """Assemble the export HTML string. Raises ValueError when nothing matches."""
+    """Assemble the export HTML string. Raises ValueError when nothing matches.
+
+    engine='deck' inlines deck.gl (vendor_js required by CLI).
+    engine='minimal' uses a Canvas 2D shell with no vendor bundle.
+    """
+    engine = validate_engine(engine)
     notes: list[str] = []
 
     anchor_sec = get_epoch_anchor(conn)
@@ -406,6 +412,7 @@ def export_html(
     payload = {
         "meta": {
             "title": title,
+            "engine": engine,
             "camera": camera or {
                 "longitude": traj_meta["origin"][0] + 0.1,
                 "latitude": traj_meta["origin"][1] + 0.1,
@@ -422,20 +429,32 @@ def export_html(
         "buildings": buildings_b64,
     }
 
-    template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    _PLACEHOLDERS = ("{{TITLE}}", "{{ATTRIBUTION}}", "{{DECK_JS}}", "{{PAYLOAD}}")
-    substitutions = {
-        "{{TITLE}}": title,
-        "{{ATTRIBUTION}}": " · ".join(attribution),
-        "{{DECK_JS}}": vendor_js,
-        "{{PAYLOAD}}": json.dumps(payload, separators=(",", ":")),
-    }
+    if engine == "minimal":
+        template_path = MINIMAL_TEMPLATE_PATH
+        placeholders = ("{{TITLE}}", "{{ATTRIBUTION}}", "{{PAYLOAD}}")
+        substitutions = {
+            "{{TITLE}}": title,
+            "{{ATTRIBUTION}}": " · ".join(attribution),
+            "{{PAYLOAD}}": json.dumps(payload, separators=(",", ":")),
+        }
+        notes.append("engine=minimal — Canvas 2D shell, no deck.gl vendor")
+    else:
+        template_path = TEMPLATE_PATH
+        placeholders = ("{{TITLE}}", "{{ATTRIBUTION}}", "{{DECK_JS}}", "{{PAYLOAD}}")
+        substitutions = {
+            "{{TITLE}}": title,
+            "{{ATTRIBUTION}}": " · ".join(attribution),
+            "{{DECK_JS}}": vendor_js,
+            "{{PAYLOAD}}": json.dumps(payload, separators=(",", ":")),
+        }
+
+    template = template_path.read_text(encoding="utf-8")
     html = template
     for token, value in substitutions.items():
         html = html.replace(token, value)
     # Check only the KNOWN placeholder tokens — the JSON payload may legitimately
     # contain '{{' (e.g. in a source label), so a blind '{{' scan is unsafe.
-    leftover = [t for t in _PLACEHOLDERS if t in html]
+    leftover = [t for t in placeholders if t in html]
     if leftover:
         raise RuntimeError(f"Unsubstituted template placeholders remain: {leftover}")
 
@@ -446,11 +465,12 @@ def export_html(
         data_mb += len(buildings_b64) / 1024 / 1024
     total_mb = len(html.encode("utf-8")) / 1024 / 1024
     print(f"[size] data {data_mb:.2f} MB · total {total_mb:.2f} MB "
-          f"({traj_meta['nTraj']:,} trajectories)")
+          f"({traj_meta['nTraj']:,} trajectories, engine={engine})")
     if data_mb > DATA_BUDGET_WARN_MB:
         print(
             f"[warn] data block exceeds {DATA_BUDGET_WARN_MB} MB — "
-            f"lower --n / sample_n, drop buildings, or use presets/demo-paper.yaml"
+            f"lower --n / sample_n, drop buildings, use --engine minimal, "
+            f"or presets/demo-paper.yaml"
         )
     for n in notes:
         print(f"[note] {n}")
@@ -476,6 +496,7 @@ def html_size_check(
             f"    • use presets/demo-paper.yaml (demo DB, trails-only, small)\n"
             f"    • drop buildings (omit from forms: / no --buildings)\n"
             f"    • skip pulse (--no-pulse or omit pulse from forms:)\n"
+            f"    • use --engine minimal (drops ~1 MB deck.gl vendor)\n"
             f"    • pass --force to write anyway (may be slow to open)\n"
             f"  See docs/EXPORT.md."
         )
@@ -487,10 +508,11 @@ def html_size_check(
 def main() -> None:
     global _FORCE
     ap = argparse.ArgumentParser(
-        description="Export a self-contained cinematic HTML (requires vendor fetch first)",
+        description="Export a self-contained cinematic HTML",
         epilog=(
-            "Prerequisite: python scripts/fetch_vendor.py "
-            "(downloads + verifies the pinned deck.gl SHA-256). "
+            "Prerequisite for --engine deck (default): "
+            "python scripts/fetch_vendor.py (pinned deck.gl SHA-256). "
+            "--engine minimal needs no vendor. "
             "See docs/EXPORT.md and presets/README.md."
         ),
     )
@@ -510,13 +532,16 @@ def main() -> None:
         "--engine",
         choices=("deck", "minimal"),
         default="deck",
-        help="Render engine (default: deck). 'minimal' is reserved/unimplemented.",
+        help=(
+            "Render engine (default: deck = inlined deck.gl). "
+            "'minimal' = Canvas 2D shell without the deck.gl vendor (~1 MB smaller)."
+        ),
     )
     ap.add_argument("--force", action="store_true", help="Ignore the size budget")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     _FORCE = args.force
-    reject_unimplemented_engine(args.engine)
+    engine = validate_engine(args.engine)
 
     cfg: dict = {}
     if args.preset:
@@ -560,15 +585,20 @@ def main() -> None:
                 f"viz-export (live-dashboard forms only); continuing"
             )
 
-    vendor_path = Path(args.vendor)
-    if not vendor_path.is_file():
-        raise SystemExit(
-            f"[ERROR] deck.gl vendor bundle not found at {vendor_path}.\n"
-            f"  One-time setup:\n"
-            f"    python scripts/fetch_vendor.py   # download + verify pinned SHA-256\n"
-            f"  See docs/EXPORT.md."
-        )
-    vendor_js = vendor_path.read_text(encoding="utf-8")
+    vendor_js = ""
+    if engine == "deck":
+        vendor_path = Path(args.vendor)
+        if not vendor_path.is_file():
+            raise SystemExit(
+                f"[ERROR] deck.gl vendor bundle not found at {vendor_path}.\n"
+                f"  One-time setup:\n"
+                f"    python scripts/fetch_vendor.py   # download + verify pinned SHA-256\n"
+                f"  Or use --engine minimal (no vendor required).\n"
+                f"  See docs/EXPORT.md."
+            )
+        vendor_js = vendor_path.read_text(encoding="utf-8")
+    else:
+        print("[engine] minimal — skipping deck.gl vendor fetch")
 
     buildings_bin = None
     if buildings_key:
@@ -592,6 +622,7 @@ def main() -> None:
         simulation_day=simulation_day, sample_n=sample_n, agents=agents,
         include_pulse=include_pulse, buildings_bin=buildings_bin,
         camera=cfg.get("camera"), loop=cfg.get("loop"),
+        engine=engine,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

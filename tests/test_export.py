@@ -193,17 +193,65 @@ def test_apply_preset_forms_notes_unknown_ids():
     assert "heatmap" in decided.unknown
 
 
-def test_engine_minimal_is_rejected():
+def test_engine_deck_and_minimal_are_allowed():
+    export.validate_engine("deck")
+    export.validate_engine("minimal")
+    export.validate_engine(None)
+
+
+def test_engine_unknown_is_rejected():
     with pytest.raises(SystemExit) as exc:
-        export.reject_unimplemented_engine("minimal")
+        export.validate_engine("webgpu")
     msg = str(exc.value).lower()
-    assert "minimal" in msg
-    assert "not implemented" in msg or "unimplemented" in msg
+    assert "unknown" in msg or "webgpu" in msg
 
 
-def test_engine_deck_is_allowed():
-    export.reject_unimplemented_engine("deck")  # no raise
-    export.reject_unimplemented_engine(None)
+def test_export_html_minimal_is_self_contained(conn):
+    """--engine minimal: no deck.gl bundle, Canvas renderer, same payload id."""
+    html = export.export_html(
+        conn, "", title="Minimal", vehicle_type="truck",
+        sample_n=10, include_pulse=False, engine="minimal",
+    )
+    assert "{{" not in html
+    for url in _URL_RE.findall(html):
+        assert any(sub in url.lower() for sub in _ALLOWED_URL_SUBSTR), \
+            f"unexpected external URL in export: {url}"
+    assert 'id="payload"' in html
+    assert 'id="viz-canvas"' in html or "<canvas" in html
+    assert "stub deck.gl bundle" not in html
+    assert "window.deck" not in html
+    # Marker that the minimal shell (not the deck template) was used.
+    assert "engine:minimal" in html or 'data-engine="minimal"' in html
+
+
+def test_export_html_minimal_smaller_than_deck_stub(conn):
+    """Dropping the deck.gl UMD is the whole point of --engine minimal."""
+    fat_vendor = "/*" + ("x" * 200_000) + "*/ window.deck = {};"
+    deck_html = export.export_html(
+        conn, fat_vendor, vehicle_type="truck", sample_n=10,
+        include_pulse=False, engine="deck",
+    )
+    min_html = export.export_html(
+        conn, "", vehicle_type="truck", sample_n=10,
+        include_pulse=False, engine="minimal",
+    )
+    assert len(min_html.encode("utf-8")) < len(deck_html.encode("utf-8")) - 100_000
+
+
+def test_export_html_minimal_trajectory_count(conn):
+    import json
+    html = export.export_html(
+        conn, "", vehicle_type="truck", sample_n=50,
+        include_pulse=False, engine="minimal",
+    )
+    payload = json.loads(re.search(
+        r'id="payload"[^>]*>(.*?)</script>', html, re.S).group(1))
+    db_n = conn.execute(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT vehicle_id, trip_id FROM waypoints "
+        "WHERE vehicle_type = 'truck')"
+    ).fetchone()[0]
+    assert payload["meta"]["nTraj"] == db_n
+    assert payload["meta"].get("engine") == "minimal"
 
 
 def test_size_gate_message_is_actionable(monkeypatch):
@@ -215,3 +263,43 @@ def test_size_gate_message_is_actionable(monkeypatch):
     assert "8" in msg
     assert any(tok in msg for tok in ("--n", "sample_n", "demo-paper", "--no-pulse", "buildings"))
     assert "--force" in msg
+    assert "--engine minimal" in msg
+
+
+def test_cli_minimal_skips_vendor(conn, tmp_path, monkeypatch):
+    """CLI --engine minimal must not require scripts/vendor/deck.gl.min.js."""
+    import json
+    out = tmp_path / "out-minimal.html"
+    missing_vendor = tmp_path / "no-such-vendor.js"
+    assert not missing_vendor.exists()
+
+    # Point export at our in-memory DB via a temp file DuckDB can't share
+    # easily — instead stub get_viz_db_path and duckdb.connect.
+    db_file = tmp_path / "t.duckdb"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    disk = duckdb.connect(str(db_file))
+    from tests.test_endpoints import _populate_db
+    _populate_db(disk, data_dir)
+    disk.close()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "viz-export",
+            "--engine", "minimal",
+            "--vendor", str(missing_vendor),
+            "--db", str(db_file),
+            "--vehicle-type", "truck",
+            "--n", "10",
+            "--no-pulse",
+            "--out", str(out),
+        ],
+    )
+    export.main()
+    html = out.read_text(encoding="utf-8")
+    assert 'data-engine="minimal"' in html
+    assert 'id="viz-canvas"' in html
+    payload = json.loads(re.search(
+        r'id="payload"[^>]*>(.*?)</script>', html, re.S).group(1))
+    assert payload["meta"]["engine"] == "minimal"

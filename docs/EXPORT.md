@@ -112,13 +112,16 @@ loop: { speed: 120, trail_seconds: 1500 }
 
 | Component | Typical |
 |-----------|--------:|
-| deck.gl UMD bundle (9.0.38) | ~1.2 MB |
+| deck.gl UMD bundle (9.0.38, `--engine deck`) | ~1.2 MB |
+| Canvas shell (`--engine minimal`) | ~few KB |
 | 200–500 trails (paper preset) | ~0.1–0.5 MB |
 | 2000 trajectories (Int16 delta-packed) | ~1–2 MB |
 | pulse (24h × top cells) | ~0.3 MB |
 | buildings (`.bin`, embedded verbatim) | ~0.5–1.5 MB |
-| **paper (`demo-paper` on demo DB)** | **~1.2–1.5 MB** |
-| **cinematic (tokyo-night)** | **~4–7 MB** |
+| **paper (`demo-paper`, deck)** | **~1.2–1.5 MB** |
+| **paper (`demo-paper`, minimal)** | **~0.1–0.4 MB** |
+| **cinematic (tokyo-night, deck)** | **~4–7 MB** |
+| **cinematic (tokyo-night, minimal)** | **~3–6 MB** (same data, no vendor) |
 
 The exporter **warns** when the data block exceeds 4 MB and **fails** above an
 8 MB total unless you pass `--force`. On failure the message lists shrink
@@ -128,15 +131,26 @@ options:
 2. Use `presets/demo-paper.yaml` (demo DB, trails-only)
 3. Drop buildings (omit from `forms:` / no `--buildings`)
 4. Skip pulse (`--no-pulse` or omit `pulse` from `forms:`)
-5. Pass `--force` to write anyway (may be slow to open in browsers)
+5. Pass `--engine minimal` (drops the ~1.2 MB deck.gl vendor)
+6. Pass `--force` to write anyway (may be slow to open in browsers)
 
-### `--engine minimal` — not implemented
+### `--engine minimal` — lightweight Canvas shell
 
-`--engine deck` (default) inlines the deck.gl UMD bundle so the export matches
-the app's visuals (~1.2 MB of bundle today). `--engine minimal` is **reserved**
-for a future hand-rolled WebGL path; passing it **exits with an error** today.
-For smaller files now, use a paper preset and lower `sample_n` — do not expect
-`--engine minimal` to produce HTML.
+| Engine | Bundle | Visuals | Vendor fetch |
+|--------|--------|---------|--------------|
+| `deck` (default) | ~1.2 MB deck.gl UMD | Matches the live app (TripsLayer, 3D buildings, heatmap) | Required (`scripts/fetch_vendor.py`) |
+| `minimal` | ~0 (Canvas 2D) | Trails + agents + flat buildings + pulse dots; drag-pan / scroll-zoom | **Not required** |
+
+```bash
+# same preset, smaller file — no vendor fetch
+viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+           --engine minimal --out exports/demo-paper-minimal.html
+```
+
+Use `minimal` when you need the HTML under the size gate (or mailed as a
+lighter attachment) and can accept a simpler night-grid scene. Same packed
+payload / Int16 encoding as `deck`; only the HTML shell changes. Size gate
+still warns at 4 MB data and fails above 8 MB total unless `--force`.
 
 ## Shareable dashboard URLs
 
@@ -169,7 +183,8 @@ you can mail, use `viz-export` instead.
 - Coordinates are quantized to 1e-5° (~1.1 m) relative to a data-derived
   origin, first vertex Int32 then Int16 deltas, base64 in a `<script
   type="application/json">` block — same packing as the buildings `.bin`.
-- deck.gl is inlined as a `<script>`; the scene uses a dark `PolygonLayer`
-  ground quad, not a tile basemap, so there is no tile server to reach.
+- `--engine deck` inlines deck.gl as a `<script>` with a dark `PolygonLayer`
+  ground quad (no tile basemap). `--engine minimal` draws the same packed
+  data on a Canvas 2D night grid — still zero tile requests.
 - The only URLs in the file are in the attribution/license footer
   (PLATEAU/PFLOW). CI asserts this with a regex.

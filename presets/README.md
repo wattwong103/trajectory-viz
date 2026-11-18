@@ -32,5 +32,6 @@ Bakeable today: `trail` / `trails`, `agents`, `pulse`, `buildings`.
 - Other viz-form ids (`od-arcs`, `heatmap`, …) print a note and are skipped —
   they are live-dashboard forms, not export engines.
 
-`--engine minimal` is **reserved / unimplemented**; use the default deck.gl
-engine and a small preset (above) when you need a lighter file.
+`--engine minimal` drops the deck.gl vendor (Canvas 2D shell) for a smaller
+offline HTML — no `scripts/fetch_vendor.py` required. Default remains
+`--engine deck` for app-matching visuals. See [`docs/EXPORT.md`](../docs/EXPORT.md).
