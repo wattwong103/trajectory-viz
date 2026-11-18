@@ -9,21 +9,24 @@ import type { RegistryStatus } from '../types';
 const sample: RegistryStatus = {
   ok: false,
   profile: 'demo',
-  path: '/repo/demo/sources.demo.yaml',
-  output_root: '/repo/demo',
+  // API redacts to repo-relative (or ~/ / …/) — see inspect_registry.
+  path: 'demo/sources.demo.yaml',
+  output_root: 'demo',
   source_count: 2,
   issues: [
     {
       severity: 'error',
       code: 'schema_invalid',
       message: 'sources.yaml schema invalid: sources.broken: Field required',
-      fix_it: 'python -m backend.sources_schema --validate /repo/demo/sources.demo.yaml',
+      fix_it:
+        'python -m backend.sources_schema --validate demo/sources.demo.yaml',
     },
     {
       severity: 'warning',
       code: 'discovery_empty',
-      message: 'No files matched under /repo/demo',
-      fix_it: 'python -m backend.sources_schema --discovery /repo/demo/sources.demo.yaml --output-root /repo/demo',
+      message: 'No files matched under demo',
+      fix_it:
+        'python -m backend.sources_schema --discovery demo/sources.demo.yaml --output-root demo',
     },
   ],
 };
@@ -48,6 +51,9 @@ describe('RegistryIssues', () => {
     expect(screen.getByText(/No files matched/)).toBeInTheDocument();
     expect(screen.getByText(/--validate/)).toBeInTheDocument();
     expect(screen.getByText(/--discovery/)).toBeInTheDocument();
+    // Redacted path chip — no absolute FS prefix.
+    expect(screen.getByText('demo/sources.demo.yaml')).toBeInTheDocument();
+    expect(screen.queryByText(/\/repo\//)).toBeNull();
   });
 
   it('calls onRetry when Retry is clicked', () => {

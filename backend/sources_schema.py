@@ -810,6 +810,70 @@ def _registry_issue(
     return issue
 
 
+def _safe_display_path(path: Path | str | None) -> str | None:
+    """API-safe path: repo-relative, else ``~/…``, else last-3-segment ellipsis.
+
+    Hardens ``filter-options.registry`` for Docker/LAN exposure without
+    discarding enough context for the Fix-it UX (operators still see where
+    the file lives relative to the checkout or home).
+    """
+    if path is None:
+        return None
+    raw = Path(path)
+    try:
+        resolved = raw.expanduser().resolve()
+    except OSError:  # pragma: no cover — exotic FS
+        resolved = raw.expanduser()
+
+    try:
+        return resolved.relative_to(_REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        pass
+
+    try:
+        home = Path.home().resolve()
+        return f"~/{resolved.relative_to(home).as_posix()}"
+    except ValueError:
+        pass
+
+    parts = resolved.as_posix().replace("\\", "/").split("/")
+    # Drop empty leading segment from absolute POSIX paths ("", "tmp", …).
+    meaningful = [p for p in parts if p]
+    if len(meaningful) <= 3:
+        return "/".join(meaningful) if meaningful else resolved.name
+    return "…/" + "/".join(meaningful[-3:])
+
+
+def _cli_path_arg(path: Path | str, *, env_keys: tuple[str, ...] = ()) -> str:
+    """Shell-usable path for fix_it: env var when configured, else display form.
+
+    Prefer ``"$TRAJECTORY_VIZ_SOURCES"`` / ``"$TRAJECTORY_VIZ_OUTPUT_ROOT"``
+    when that env points at ``path`` so Fix-it paste works even when the
+    absolute location is redacted from the API.
+    """
+    resolved = Path(path).expanduser().resolve()
+    for key in env_keys:
+        env = os.environ.get(key)
+        if not env:
+            continue
+        try:
+            if Path(env).expanduser().resolve() == resolved:
+                return f'"${key}"'
+        except OSError:  # pragma: no cover
+            continue
+    display = _safe_display_path(resolved)
+    if display is None:
+        return resolved.name
+    # Quote when the display form has spaces; leave bare otherwise for copy-UX.
+    if any(c.isspace() for c in display):
+        return f'"{display}"'
+    return display
+
+
+_SOURCES_ENV = ("TRAJECTORY_VIZ_SOURCES", "PFLOW_VIZ_SOURCES")
+_OUTPUT_ROOT_ENV = ("TRAJECTORY_VIZ_OUTPUT_ROOT", "PFLOW_VIZ_OUTPUT_ROOT")
+
+
 def inspect_registry(conn=None) -> dict:
     """Validate the active sources registry and return UI-ready status.
 
@@ -820,6 +884,11 @@ def inspect_registry(conn=None) -> dict:
     DB yields ``ok: true`` and an empty ``issues`` list. Discovery empty-glob
     warnings only fire when the DB has no trips (baked DBs without source
     files on disk are not treated as broken).
+
+    Paths in ``path`` / ``output_root`` / issue ``message`` / ``fix_it`` are
+    redacted via :func:`_safe_display_path` (repo-relative, ``~/…``, or
+    ellipsis). Fix-it CLI args prefer ``$TRAJECTORY_VIZ_SOURCES`` /
+    ``$TRAJECTORY_VIZ_OUTPUT_ROOT`` when those env vars point at the path.
     """
     from backend.config import get_output_root
 
@@ -862,15 +931,19 @@ def inspect_registry(conn=None) -> dict:
         path = None
 
     sources: SourcesFile | None = None
+    path_disp = _safe_display_path(path)
     if path is not None:
-        validate_cmd = f"python -m backend.sources_schema --validate {path}"
+        validate_cmd = (
+            "python -m backend.sources_schema --validate "
+            f"{_cli_path_arg(path, env_keys=_SOURCES_ENV)}"
+        )
         try:
             sources = load_sources(path)
         except FileNotFoundError:
             issues.append(_registry_issue(
                 severity="error",
                 code="sources_missing",
-                message=f"sources.yaml not found: {path}",
+                message=f"sources.yaml not found: {path_disp}",
                 fix_it=(
                     "Point TRAJECTORY_VIZ_SOURCES at a valid registry, or unset "
                     "it to use demo/sources.demo.yaml. Then re-run ingest."
@@ -880,7 +953,7 @@ def inspect_registry(conn=None) -> dict:
             issues.append(_registry_issue(
                 severity="error",
                 code="yaml_parse",
-                message=f"YAML parse error in {path}: {e}",
+                message=f"YAML parse error in {path_disp}: {e}",
                 fix_it=validate_cmd,
             ))
         except ValidationError as e:
@@ -888,7 +961,7 @@ def inspect_registry(conn=None) -> dict:
                 severity="error",
                 code="schema_invalid",
                 message=(
-                    f"sources.yaml schema invalid ({path}): "
+                    f"sources.yaml schema invalid ({path_disp}): "
                     f"{_format_validation_error(e)}"
                 ),
                 fix_it=validate_cmd,
@@ -897,7 +970,7 @@ def inspect_registry(conn=None) -> dict:
             issues.append(_registry_issue(
                 severity="error",
                 code="sources_load_failed",
-                message=f"Failed to load sources registry ({path}): {e}",
+                message=f"Failed to load sources registry ({path_disp}): {e}",
                 fix_it=validate_cmd,
             ))
 
@@ -917,11 +990,12 @@ def inspect_registry(conn=None) -> dict:
                         if isinstance(e, ValidationError)
                         else str(e)
                     )
+                    uploads_disp = _safe_display_path(uploads)
                     issues.append(_registry_issue(
                         severity="warning",
                         code="uploads_invalid",
                         message=(
-                            f"uploads registry invalid ({uploads}): {detail}"
+                            f"uploads registry invalid ({uploads_disp}): {detail}"
                         ),
                         fix_it=(
                             "Fix or remove sources.uploads.yaml next to the DB, "
@@ -949,21 +1023,25 @@ def inspect_registry(conn=None) -> dict:
                     ),
                 ))
                 output_root = None
-            if output_root is not None:
+            if output_root is not None and path is not None:
                 counts = dryrun_discovery(sources, output_root)
                 zeros = [k for k, n in counts.items() if n == 0]
+                root_disp = _safe_display_path(output_root)
+                discovery_cmd = (
+                    "python -m backend.sources_schema --discovery "
+                    f"{_cli_path_arg(path, env_keys=_SOURCES_ENV)} "
+                    f"--output-root "
+                    f"{_cli_path_arg(output_root, env_keys=_OUTPUT_ROOT_ENV)}"
+                )
                 if zeros and all(n == 0 for n in counts.values()):
                     issues.append(_registry_issue(
                         severity="warning",
                         code="discovery_empty",
                         message=(
-                            f"No files matched under {output_root} for "
+                            f"No files matched under {root_disp} for "
                             f"{len(zeros)} source/POI/zone glob(s)."
                         ),
-                        fix_it=(
-                            f"python -m backend.sources_schema --discovery {path} "
-                            f"--output-root {output_root}"
-                        ),
+                        fix_it=discovery_cmd,
                     ))
                 elif zeros:
                     # Partial: some sources match, some don't — name a few.
@@ -974,12 +1052,9 @@ def inspect_registry(conn=None) -> dict:
                         code="discovery_partial",
                         message=(
                             f"No files matched for: {sample}{more} "
-                            f"(under {output_root})."
+                            f"(under {root_disp})."
                         ),
-                        fix_it=(
-                            f"python -m backend.sources_schema --discovery {path} "
-                            f"--output-root {output_root}"
-                        ),
+                        fix_it=discovery_cmd,
                     ))
 
         # Ingested fleets missing from the registry → wrong labels/colors.
@@ -1000,8 +1075,8 @@ def inspect_registry(conn=None) -> dict:
                         code="uncovered_sources",
                         message=(
                             f"Ingested source_id(s) {uncovered} have no entry in "
-                            f"the sources registry ({path}). Labels/colors/modes "
-                            f"will be missing."
+                            f"the sources registry ({path_disp}). Labels/colors/"
+                            f"modes will be missing."
                         ),
                         fix_it=(
                             "Point TRAJECTORY_VIZ_SOURCES at the registry that "
@@ -1025,7 +1100,9 @@ def inspect_registry(conn=None) -> dict:
                 """
             ).fetchall()
             if rows:
-                sample = "; ".join(f"{t}:{p}" for p, t in rows[:3])
+                sample = "; ".join(
+                    f"{t}:{_safe_display_path(p) or p}" for p, t in rows[:3]
+                )
                 extra = f" (+{len(rows) - 3} more)" if len(rows) > 3 else ""
                 issues.append(_registry_issue(
                     severity="warning",
@@ -1044,8 +1121,8 @@ def inspect_registry(conn=None) -> dict:
     return {
         "ok": not has_errors,
         "profile": profile,
-        "path": str(path) if path is not None else None,
-        "output_root": str(output_root) if output_root is not None else None,
+        "path": path_disp,
+        "output_root": _safe_display_path(output_root),
         "source_count": source_count,
         "issues": issues,
     }
