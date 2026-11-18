@@ -23,10 +23,11 @@ Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the Universit
 | Map overlays | 9 DeckGL layers | ~25 (trails + person dots, OD arcs, heatmaps, link density, clusters, F3 speed-gradient + dwell markers, POI glyphs, zones, A/B grid-diff, agents, drill, buildings) |
 | Deployment | dev-only (two processes) | **+ Docker (one-command, single port)** |
 | Backend perf | unindexed table scans | **12 DuckDB indexes on hot filter columns** |
-| Tests | none | **25 pytest unit tests** |
-| Distribution | none | `pyproject.toml`, `CITATION.cff`, `Dockerfile` |
+| Tests | none | **~320 pytest + ~150 vitest** (collect with `pytest --collect-only` / `npm test`) |
+| Defaults | PFLOW lab paths | **demo/universal first** (`demo/sources.demo.yaml`); PFLOW under `profiles/pflow/` |
+| Distribution | none | `pyproject.toml`, `CITATION.cff`, `Dockerfile` (one-URL demo map) |
 
-Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full release history in [`CHANGELOG.md`](CHANGELOG.md).
+Universal forms vocabulary + capability gating: [`docs/ARCHITECTURE.md` → Canonical vocabulary](docs/ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-abc). Profiles: [`profiles/README.md`](profiles/README.md). Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Release history: [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -117,10 +118,11 @@ Every data endpoint (`/api/trips/*`, `/api/trajectories/*`, `/api/analysis/*`, `
 
 | Param | Type | Values |
 |---|---|---|
-| `source_id` (preferred; `vehicle_type` alias) | `^[a-z][a-z0-9_]*$` | Any source_id from `sources.yaml` (e.g. `truck`, `taxi`) |
+| `source_id` (preferred; `vehicle_type` alias) | `^[a-z][a-z0-9_]*$` | Any source_id from the active registry (e.g. `bike`, `bus`, `truck`) |
 | `city` | `^[a-z_]+$` | e.g. `tokyo`, `osaka`. Query `/api/stats/filter-options` for the live list. |
 | `simulation_day` | `int ≥ 0` | Day index in the run |
-| `transport_modes` | `^\d{1,2}(,\d{1,2}){0,15}$` | Comma-separated PFLOW mode ids (`0`=walk `1`=bike `2`=bus `3`=car `4`=train `8`=taxi). Filters by the **trip's** mode. |
+| `modes` (preferred) | comma-separated labels | Canonical string labels from `trips.mode` / `mode_map` (e.g. `walk,bike,bus`). Prefer over int codes. |
+| `transport_modes` | `^\d{1,2}(,\d{1,2}){0,15}$` | Legacy PFLOW int codes (`0`=walk … `8`=taxi). Filters by the **trip's** mode. |
 | `min_speed` / `max_speed` | `float` km/h | F1 speed filter |
 | `max_dwell_minutes` | `float` | F1 utilization filter (heavy users have low dwell) |
 | `min_detour_ratio` / `max_detour_ratio` | `float` ≥ 1.0 | F1 route-shape filter |
@@ -128,9 +130,9 @@ Every data endpoint (`/api/trips/*`, `/api/trajectories/*`, `/api/analysis/*`, `
 
 All shared dimensions live in `backend/filters.py` (`TripFilters` — the FastAPI dependency every router uses), which delegates to `db.build_trip_filter(...)`. All filter params are SQL-injection-safe (Pydantic patterns or explicit `int()`/`float()` casts).
 
-URL-hash keys for shareable views: `vt city day minh maxh gt ms xs xd mr xr` + `tm` (transport modes), `cb=tm` (color by mode), `hs` (hidden sources), `sc` (scenario), `ag` (followed agents).
+URL-hash keys for shareable views: `vt city day minh maxh gt ms xs xd mr xr` + `tm` / `ml` (mode ints / labels), `cb=tm` (color by mode), `hs` (hidden sources), `sc` (scenario), `ag` (followed agents).
 
-> Note: `.claude/rules/trajectory-viz.md` says the DuckDB connection is per-request; the code actually uses a module-level singleton (`db.get_connection`). Flagged during the Phase-0 refactor — reconcile whichever way is intended.
+> **DuckDB connection:** process-wide module singleton via `db.get_connection()` (not per-request). Tests monkey-patch `backend.db._connection`. Performance budgets live in [`docs/ARCHITECTURE.md` → Performance budgets](docs/ARCHITECTURE.md#performance-budgets-hard) and [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#performance-budgets).
 
 ---
 
@@ -163,9 +165,9 @@ on bare `(vehicle_id, trip_id)` — vehicle_id collides across source_ids too.
 
 ## Adding a new ABM source
 
-1. Add a block to `sources.yaml` declaring discovery globs, `vehicle_key_template`, and the column mapping.
-2. `python -m backend.sources_schema --validate sources.yaml`
-3. `trajectory-viz-ingest --reset`
+1. Add a block to a sources registry (`demo/sources.demo.yaml`, a file under `profiles/`, or your own YAML) declaring discovery globs, `vehicle_key_template`, and the column mapping.
+2. `python -m backend.sources_schema --validate path/to/sources.yaml`
+3. `trajectory-viz-ingest --reset` (or `--profile …` / `TRAJECTORY_VIZ_SOURCES=…`)
 4. The dashboard's **Sources** buttons populate from `/api/stats/filter-options` — your new source appears automatically.
 
 Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). Worked examples: [`sources-matsim.yaml`](docs/examples/sources-matsim.yaml), [`sources-sumo-fcd.yaml`](docs/examples/sources-sumo-fcd.yaml), [`sources-od-arcs.yaml`](docs/examples/sources-od-arcs.yaml), [`sources-phone-gps.yaml`](docs/examples/sources-phone-gps.yaml), [`sources-joras-v3.yaml`](docs/examples/sources-joras-v3.yaml). MATSim/SUMO XML adapters: `scripts/matsim_events_to_csv.py`, `scripts/sumo_fcd_to_ndjson.py`.
@@ -222,10 +224,10 @@ See [`docs/EXPORT.md`](docs/EXPORT.md) for the preset schema and size budget.
 
 ## Standalone mode
 
-The dashboard can run against any pre-ingested `pflow.duckdb` file without the PFLOW monorepo on disk. Set `PFLOW_VIZ_DB` to an absolute path and the backend serves from that file without ever resolving `PFLOW_HOME`.
+The dashboard can run against any pre-ingested DuckDB file without a sources tree on disk. Set `TRAJECTORY_VIZ_DB` (canonical; `PFLOW_VIZ_DB` is a synonym) to an absolute path — the backend never resolves `PFLOW_HOME` in this mode.
 
 ```bash
-export PFLOW_VIZ_DB=/path/to/pflow.duckdb
+export TRAJECTORY_VIZ_DB=/path/to/viz.duckdb
 trajectory-viz-serve
 ```
 

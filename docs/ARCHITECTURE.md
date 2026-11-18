@@ -4,31 +4,32 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  sources.yaml  — declarative source registry (any trajectory dataset)    │
+│  Sources registry (default: demo/sources.demo.yaml)                      │
+│    Opt-in lab packs: profiles/pflow/, profiles/gufm/, …                  │
 │    sources:  trips/waypoint globs, per-format discovery (csv | geojson | │
 │              gpx | ndjson | parquet), columns map, vehicle_key_template, │
-│              trips_synthesis for points-only sources                     │
+│              trips_synthesis for points-only sources; optional forms:    │
 │    pois:     static POI layers (name/category/lon/lat)                   │
+│    zones:    static polygon layers                                       │
 │    time:     per-DB epoch_anchor (absolute time)                         │
 └──────────────────────────────────────────────────────────────────────────┘
                                   │
-                                  ▼  (backend/ingest.py reads sources.yaml;
-                                  │   geojson/gpx/ndjson normalized in Python
-                                  │   (formats.py) → canonical TEMP staging
-                                  │   table; csv/parquet read natively; then
-                                  │   one shared INSERT...SELECT pipeline.
-                                  │   Points-only sources: synthesize_trips.
-                                  │   Anchor persisted to viz_meta, mixed-
-                                  │   anchor re-ingest rejected w/o --reset.)
+                                  ▼  (backend/ingest.py reads the active
+                                  │   registry; geojson/gpx/ndjson
+                                  │   normalized in Python (formats.py) →
+                                  │   TEMP staging; csv/parquet native;
+                                  │   shared INSERT...SELECT. Points-only:
+                                  │   synthesize_trips. Anchor → viz_meta;
+                                  │   mixed-anchor re-ingest needs --reset.)
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  DuckDB  (output/viz/pflow.duckdb, ≈ 8 GB at PFLOW scale)                │
-│    trips         — one row per trip, 26 cols + 3 F1 derived              │
-│    waypoints     — one row per GPS-like sample, 16 cols                  │
+│  DuckDB  (default: demo/demo.duckdb; lab: pflow.duckdb ≈ 8 GB)           │
+│    trips         — one row per trip (+ F1 derived, mode, agent_id, …)    │
+│    waypoints     — one row per GPS-like sample                           │
 │    pois          — static POI layers (/api/pois)                         │
 │    zones         — static polygon layers (/api/zones; bbox precomputed)  │
 │    density_hourly — 24h pulse-heatmap aggregate (Phase 2B)               │
-│    viz_meta      — per-DB metadata (epoch_anchor)                        │
+│    viz_meta      — epoch_anchor + schema_version (0.3)                   │
 │    validation_runs — per-metric calibration evidence                     │
 │    ingest_log    — file-level row counts + error rows (row_count=-1)     │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -80,7 +81,7 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 |---|---|
 | `source_id` | Canonical population / dataset id (e.g. `truck`, `taxi`, `courier`). Written to `trips.source_id` and mirrored into `trips.vehicle_type` for back-compat. Multiple source keys may share the same `source_id`. |
 | `mode_map` | Optional map of raw `transport_mode` int codes → canonical string labels stored in `trips.mode` (also feeds `/api/stats/filter-options` `modes[]`). |
-| `discovery.trips_glob` | Glob pattern relative to `PFLOW_VIZ_OUTPUT_ROOT` matching this source's trip files. Optional for points-only sources (see `trips_synthesis`). |
+| `discovery.trips_glob` | Glob pattern relative to `TRAJECTORY_VIZ_OUTPUT_ROOT` (alias `PFLOW_VIZ_OUTPUT_ROOT`) matching this source's trip files. Optional for points-only sources (see `trips_synthesis`). |
 | `discovery.trajectories_glob` | Optional — matches waypoint files (any format). When absent, F3 segment features stay NULL. |
 | `discovery.format` (+ per-side overrides) | Optional ingest format (`csv`/`geojson`/`gpx`/`ndjson`/`parquet`); auto-detected from the extension when omitted. Non-CSV formats are normalized to a canonical staging shape (`_lon`/`_lat`/`_time_ms`/`_seq`/`_feature_id`/`_trk_name`/`_props_json`) — see [DATA_FORMATS.md](DATA_FORMATS.md). |
 | `discovery.scope.value` | Optional scope qualifier (e.g. city name). Drives the `city` column and the `{scope}` placeholder in `vehicle_key_template`. |
@@ -138,12 +139,13 @@ is Sources / `source_id` only.
 
 ## Performance budgets (HARD)
 
-Defined in `.claude/rules/trajectory-viz.md`:
+Living targets for API design (also summarized in
+[CONTRIBUTING.md → Performance budgets](CONTRIBUTING.md#performance-budgets)):
 
 1. `/api/stats/*` p99 < 200ms
 2. `/api/trips/*` p99 < 1s for ≤10K-trip result sets
-3. `/api/trajectories/*` < 500ms for a single trip; sample to ≤500 trajectories per render for multi-trip
-4. DuckDB connection is per-request (no pool)
+3. `/api/trajectories/*` < 500ms for a single trip; sample to ≤500 trajectories per render for multi-trip (mega-sim LOD clamps sample/bbox to 500 — see below)
+4. **DuckDB connection** is a **process-wide module singleton** (`backend.db.get_connection`) — not per-request and not a connection pool. Tests replace `backend.db._connection`.
 
 When designing new endpoints: profile against these budgets; add indexes for filter columns; avoid serializing >10K rows in one response without pagination.
 
@@ -180,8 +182,9 @@ See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#11-mega-sim-ingest-tri
 | Frontend Sources filter | `'truck' \| 'taxi'` hardcoded | `string` source_id, populated from `/api/stats/filter-options` |
 | Filter UI | basic | + "Advanced filters" disclosure (F1 sliders) |
 | Map overlays | 9 layers | core trails/OD/heatmaps + F3 speed-gradient + dwell markers + POIs + zones + A/B grid-diff + agents + drill (~25 layers total) |
-| Deployment | dev-only (two processes) | + Docker (single port, single container) |
-| Tests | none | 25 pytest unit tests |
+| Deployment | dev-only (two processes) | + Docker one-URL demo map (baked `demo.duckdb` + UI) |
+| Defaults | PFLOW lab paths | demo/universal first; lab packs under `profiles/` |
+| Tests | none | ~320 pytest + ~150 vitest |
 | Citation | none | CITATION.cff |
 
 ## Code organization
@@ -213,18 +216,19 @@ trajectory-viz/
 ├── tests/
 │   └── test_v0_2_parity.py F1/F2/F3 unit tests + cross-version DB parity
 ├── docs/
-│   ├── QUICKSTART.md       Getting-started guide (leads with the demo)
+│   ├── QUICKSTART.md       Getting-started (Docker one-URL → native → lab)
 │   ├── DATA_FORMATS.md     Universal ingest formats + YAML cookbook
-│   ├── ARCHITECTURE.md     This file
-│   ├── CONTRIBUTING.md     Adding a new ABM source, code style
-│   └── examples/
-│       └── sources-matsim.yaml  Example schema-driven config
+│   ├── ARCHITECTURE.md     This file (vocabulary, budgets, mega-sim LOD)
+│   ├── CONTRIBUTING.md     Adding a source, style, tests, budgets
+│   ├── EXPORT.md           Offline HTML export
+│   └── examples/           MATSim, SUMO FCD, OD arcs, phone GPS, JoRAS v3, …
 ├── demo/                   Default universal dataset + sources.demo.yaml
-├── profiles/               Opt-in lab packs (pflow, gufm, …)
+├── profiles/               Opt-in lab packs (pflow, gufm, …) — see README
 ├── presets/                Cinematic export presets (forms declared)
+├── scripts/                docker-entrypoint, MATSim/SUMO adapters, vendor fetch
 ├── pyproject.toml          Project metadata + deps + entry points
-├── Dockerfile              Multi-stage Docker build
-├── docker-compose.yml      One-command deploy
+├── Dockerfile              Multi-stage Docker build (bakes demo DB + UI)
+├── docker-compose.yml      One-command first run → :8080
 ├── setup.sh / setup.bat    Native dev bootstrap (Mac/Windows)
 ├── CITATION.cff            Citation metadata
 ├── LICENSE                 MIT

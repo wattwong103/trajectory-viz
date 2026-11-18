@@ -1,12 +1,14 @@
 # Contributing to trajectory-viz
 
-Contributions welcome — particularly new ABM source configs, bug fixes, and analytical features. This doc covers (a) how to add a new source, (b) coding style, (c) testing.
+Contributions welcome — particularly new ABM source configs, bug fixes, and analytical features. This doc covers (a) how to add a new source, (b) coding style, (c) testing, (d) performance budgets.
+
+**Product defaults:** demo/universal (`demo/sources.demo.yaml`) is the out-of-box path. Lab packs live under [`profiles/`](../profiles/README.md). Public vocabulary is `source_id` / Sources, `agent_key`, string `mode`, and `agent_id` — see [ARCHITECTURE.md → Canonical vocabulary](ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-abc). Prefer those names in new code and docs; `vehicle_type=` remains a deprecated alias of `source_id=`.
 
 ---
 
 ## Adding a new ABM source
 
-The v0.2 schema-driven design means a new ABM is added by writing a YAML block, not by editing backend code (unless the ABM needs a column the schema doesn't have).
+The v0.2 schema-driven design means a new ABM is added by writing a YAML block, not by editing backend code (unless the ABM needs a column the schema doesn't have). Put the block in `demo/sources.demo.yaml`, a profile under `profiles/`, or any registry pointed at by `TRAJECTORY_VIZ_SOURCES`.
 
 ### Step 1 — Inspect your ABM's output
 
@@ -14,10 +16,12 @@ You need two CSV formats (waypoints are optional):
 
 | | Required columns | Optional columns |
 |---|---|---|
-| Trips | `id`, vehicle-id column (any name), `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat` | `transport_mode`, `purpose`, `distance_km`, `simulation_day`, anything else |
-| Waypoints | trip-foreign-key + vehicle-id columns, `unix_time_ms`, `lon`, `lat` | `link_id`, anything else |
+| Trips | `id`, vehicle-id column (any name), `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat` | `mode` / `transport_mode`, `purpose`, `distance_km`, `simulation_day`, anything else |
+| Waypoints | trip-foreign-key + vehicle-id columns, `unix_time_ms`, `lon`, `lat` | `link_id`, `leg_id`, anything else |
 
-### Step 2 — Add a block to `sources.yaml`
+GeoJSON / GPX / NDJSON / Parquet work too — see [DATA_FORMATS.md](DATA_FORMATS.md). Points-only sources synthesize trips at ingest.
+
+### Step 2 — Add a block to a sources registry
 
 ```yaml
 sources:
@@ -26,14 +30,15 @@ sources:
     label: "My ABM (city/scope name)"
     source_id: my_abm                       # short identifier; can collide across scopes
     discovery:
-      trips_glob: "trips/my_abm/run_*/trips.csv"          # relative to PFLOW_VIZ_OUTPUT_ROOT
+      trips_glob: "trips/my_abm/run_*/trips.csv"          # relative to TRAJECTORY_VIZ_OUTPUT_ROOT
       trajectories_glob: "trajectory/my_abm/**/wpt.csv"   # optional
       latest_only: true                                    # uses most recent run_*
       scope: { value: tokyo }                              # optional, per-city/region
     vehicle_key_template: "my_abm:{scope}:{vehicle_id}"   # or "my_abm:{vehicle_id}" without scope
+    mode_map: { 0: walk, 1: bike, 2: bus, 3: car }       # optional; feeds trips.mode + UI chips
     columns:
       trip_id_col: id                       # which CSV column → trips.trip_id
-      vehicle_id_col: agent_id              # which CSV column → trips.vehicle_id
+      vehicle_id_col: agent_id              # which CSV column → trips.vehicle_id / agent_id
       trips:
         # Required core
         starttime:  { csv: starttime, type: int }
@@ -42,6 +47,7 @@ sources:
         end_lon:    { csv: end_lon,   type: double }
         end_lat:    { csv: end_lat,   type: double }
         # Optional
+        mode:            { csv: mode,         type: varchar }  # prefer string labels
         distance_km:     { csv: distance_km, type: double }
         dep_hour:        { derived: "CAST(starttime / 3600 AS INTEGER)" }
         simulation_day:  { csv: day,          type: int }
@@ -120,11 +126,17 @@ Conventional Commits style: `feat:`, `fix:`, `chore:`, `docs:`, `perf:`, `refact
 
 ## Testing
 
+Current suite size (approximate — re-count with the commands below): **~320 pytest** across `tests/`, **~150 vitest** under `frontend/src/__tests__/`.
+
 ### Backend (pytest)
 
 ```bash
-pytest tests/test_v0_2_parity.py -v
+pip install -e ".[dev]"
+pytest tests/ -v
+# or collect only: pytest tests/ --collect-only -q
 ```
+
+Key modules: `test_v0_2_parity.py`, `test_endpoints.py`, `test_sources_schema.py`, `test_demo.py`, `test_phase_d_defaults.py`, `test_schema_accommodation.py`, `test_lod.py`, `test_first_run.py`, plus format/zone/export coverage.
 
 Add new tests for:
 
@@ -132,6 +144,7 @@ Add new tests for:
 - Any change to `_compute_segments()` or `_rows_to_trajectories()` (F3 logic)
 - Any change to the `_select_clause` / `_vehicle_key_sql` SQL builders in `ingest.py`
 - New endpoints — at minimum a happy-path call returns the expected shape
+- Profile / default-path changes — extend `test_phase_d_defaults.py` / `test_first_run.py`
 
 ### Frontend (vitest)
 
@@ -139,19 +152,23 @@ Add new tests for:
 cd frontend && npm test
 ```
 
-(Vitest setup is included; see `vite.config.ts` and `src/__tests__/`.)
+(Vitest setup is included; see `vite.config.ts` and `src/__tests__/` — filter hash, LOD policy, layer catalog, upload, Compare tab, ….)
 
 ### Manual smoke
 
 After non-trivial changes:
 
 ```bash
-# Backend
+# Backend (demo DB by default)
 curl http://127.0.0.1:9999/api/stats/filter-options
 curl 'http://127.0.0.1:9999/api/trips/sample?n=5'
 
 # Frontend
 cd frontend && npm run build   # catches TS errors
+
+# One-URL Docker path
+docker compose up --build
+# → http://localhost:8080  (map HTML + demo trips)
 ```
 
 ### Cross-version parity (when changing ingest)
@@ -160,14 +177,29 @@ If you change the SQL builders in `backend/ingest.py`, the parity check confirms
 
 ---
 
+## Performance budgets
+
+These are the living API targets (same list as [ARCHITECTURE.md](ARCHITECTURE.md#performance-budgets-hard)):
+
+1. `/api/stats/*` p99 < 200ms
+2. `/api/trips/*` p99 < 1s for ≤10K-trip result sets
+3. `/api/trajectories/*` < 500ms for a single trip; sample ≤500 trajectories per multi-trip render
+4. DuckDB is a **module-level singleton** (`db.get_connection`) — design queries for one connection per process; do not assume per-request open/close
+
+When adding endpoints: add indexes for new filter columns, cap JSON payloads, and respect mega-sim LOD clamps (`backend/lod.py`).
+
+---
+
 ## What kinds of contributions are most valuable?
 
 In rough priority order:
 
-1. **New `sources.yaml` configs** for ABMs you actually use (MATSim, SUMO, AnyLogic, custom Python). Each one stress-tests the schema generalization.
-2. **Performance improvements** — query plans, index tuning, JSON serialization caps.
+1. **New sources-registry configs** for ABMs you actually use (MATSim, SUMO, AnyLogic, custom Python) — preferably as `docs/examples/` or a `profiles/` pack. Each one stress-tests the schema generalization.
+2. **Performance improvements** — query plans, index tuning, JSON serialization caps (stay within the budgets above).
 3. **Bug fixes & ergonomics** — anything that bites you also bites the next user.
 4. **Docs** — clarifications, additional examples, troubleshooting entries.
+
+> Frontend modularization of `AnalysisPanel` / `MapView` / hash codec (TV-5) is deferred — prefer small, focused PRs over drive-by splits.
 
 > The F2/F3 endpoints (`through-zone-bbox`, `multi-stop`, `route-similarity`)
 > all have dashboard UI: Zone tab (bbox), Chains tab (multi-stop), and
@@ -175,4 +207,4 @@ In rough priority order:
 
 ## Code of conduct
 
-Be kind, be specific, attribute prior work. PFLOW research lineage is documented in [PFLOW/CLAUDE.md](https://github.com/...) — when extending a model, cite the original.
+Be kind, be specific, attribute prior work. When extending a mobility model, cite the original research (see README acknowledgements and [`CITATION.cff`](../CITATION.cff)).

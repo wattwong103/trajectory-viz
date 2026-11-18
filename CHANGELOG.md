@@ -4,6 +4,10 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs/reality sync (TV-4).** README / QUICKSTART / ARCHITECTURE / DATA_FORMATS / CONTRIBUTING aligned with shipped main after #12–#20: accurate ~320 pytest + ~150 vitest counts; demo/universal + Docker one-URL as the default path (no PFLOW-first surprise); DuckDB documented as a module-level singleton with performance budgets living in ARCHITECTURE + CONTRIBUTING (no cite of absent `.claude/rules`); `modes=` preferred over int `transport_modes=`; `TRAJECTORY_VIZ_DB` / `TRAJECTORY_VIZ_OUTPUT_ROOT` as canonical env names; GUFM path points at `profiles/gufm/sources.yaml`; universal-forms vocabulary + profile links surfaced from README / DATA_FORMATS / CONTRIBUTING.
+
 ### Added
 
 - **Zero-friction first run (TV-3).** `docker compose up --build` → http://localhost:8080 with baked `demo/demo.duckdb` + React UI (no host DuckDB, no forgotten frontend build). Docker entrypoint (`scripts/docker-entrypoint.sh`) re-seeds when the DB path is missing/empty unless `TRAJECTORY_VIZ_SEED_DEMO=0`. `/api/stats.empty_hint` + EmptyState/FilterPanel copy for honest empty DBs; `trajectory-viz-demo` warns when `frontend/dist` is missing. Docs: README/QUICKSTART lead with the one-URL path; CI Docker smoke asserts demo `trips > 0` and HTML at `/`, plus an empty-DB `empty_hint` check. Tests: `tests/test_first_run.py`.
@@ -92,7 +96,7 @@ Baseline v0.2 alpha. Massive refactor from the v0.1 hardcoded truck+taxi dashboa
 - **F3 per-segment trajectory attributes**: `TrajectorySegment` model (`link_id`, `speed_kmh`, `dwell_sec`); `_compute_segments` helper. Opt-in via `include_segments=true` on the 3 trajectory endpoints. `useTrajectories` sets it to `true` by default.
 - **F3 route-similarity clustering**: `/api/analysis/clustering/route-similarity` — Jaccard distance on link-id sets, DBSCAN with `metric='precomputed'`. Capped at `sample_size=2000` (O(N²) pairwise).
 - **F3 frontend overlays**: speed-gradient `PathLayer` (red→orange→yellow→green→blue by km/h) and dwell-markers `ScatterplotLayer` (log-scaled radius). Two new layer toggles, default off.
-- **12 DuckDB indexes** on hot filter columns (vehicle_type, vehicle_key, city+simulation_day, dep_hour, distance_km, link_id, (lon,lat), source_id, speed_avg_kmh, dwell_minutes, detour_ratio, run_id). Without these, scans on the 4.43M-trip / 233M-waypoint PFLOW dataset would blow the p99 budgets in `.claude/rules/trajectory-viz.md`.
+- **12 DuckDB indexes** on hot filter columns (vehicle_type, vehicle_key, city+simulation_day, dep_hour, distance_km, link_id, (lon,lat), source_id, speed_avg_kmh, dwell_minutes, detour_ratio, run_id). Without these, scans on the 4.43M-trip / 233M-waypoint PFLOW dataset would blow the p99 budgets documented in `docs/ARCHITECTURE.md` (stats < 200ms / trips < 1s / trajectories < 500ms).
 - **Docker deployment**: multi-stage `Dockerfile` (node:20-alpine builds frontend, python:3.11-slim runtime); FastAPI's `StaticFiles` serves the built React app at `/`; single port 8080. `docker compose up --build` is one-command first-time setup.
 - **GitHub Actions CI** (`.github/workflows/ci.yml`): 4 jobs — backend pytest + ruff (py3.11/3.12), frontend build, Docker image build + smoke, sources.yaml example validation.
 - **Vitest scaffold** + 1 smoke test for URL filter encoding (round-trip + SQL-injection defense).
