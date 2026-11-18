@@ -157,12 +157,16 @@ export interface DatasetCapabilities {
   attr_keys: string[];
   /** Public name is agent_key; physical column remains vehicle_key for now. */
   agent_key_column: string;
+  /** Phase C — native string agent id column (vehicle_id remains int/hash). */
+  agent_id_column?: string;
+  /** Phase C — viz_meta.schema_version (e.g. "0.3"). */
+  schema_version?: string;
 }
 
-/** Mode chip contract — labels from sources.yaml mode_map / PFLOW defaults. */
+/** Mode chip contract — labels from trips.mode / mode_map / PFLOW defaults. */
 export interface ModeOption {
-  id: number;       // transport_mode filter id (PFLOW int until v0.3 string modes)
-  label: string;
+  id: number | null;  // optional PFLOW mode_code; null for string-only datasets
+  label: string;      // canonical filter key (modes=)
   count: number;
 }
 
@@ -329,7 +333,10 @@ export interface FilterState {
   maxDetourRatio?: number;
   // Transport-mode multi-select (undefined/empty = all modes) + color scheme.
   // NAMING: "transportModes", never bare "mode" (taken by SourceStyle.mode).
+  // Legacy PFLOW int codes (hash tm=). Prefer modeLabels for v0.3.
   transportModes?: number[];
+  // Canonical string mode labels (trips.mode); hash key ml=.
+  modeLabels?: string[];
   colorBy?: 'source' | 'transportMode';
   // Pedestrianization scenario (Phase 4): query-time exclusion of car trips
   // whose trajectories enter the bbox. Every fetch carrying the filter

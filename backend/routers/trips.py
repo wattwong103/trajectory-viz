@@ -24,6 +24,8 @@ def _row_to_trip(r) -> dict:
         "goods_type":   r[9],
         "city":         r[10],
         "transport_mode": r[11],
+        "agent_id":     r[12] if len(r) > 12 else None,
+        "mode":         r[13] if len(r) > 13 else None,
     }
 
 
@@ -38,7 +40,7 @@ async def sample(
     rows = conn.execute(f"""
         SELECT vehicle_id, trip_id, starttime, start_lon, start_lat,
                end_lon, end_lat, vehicle_type, distance_km, goods_type, city,
-               transport_mode
+               transport_mode, agent_id, mode
         FROM trips {where}
         USING SAMPLE {n} ROWS
     """).fetchall()
@@ -117,7 +119,7 @@ async def query(q: TripQuery):
     rows = conn.execute(f"""
         SELECT vehicle_id, trip_id, starttime, start_lon, start_lat,
                end_lon, end_lat, vehicle_type, distance_km, goods_type, city,
-               transport_mode
+               transport_mode, agent_id, mode
         FROM trips {where}
         LIMIT {int(q.limit)}
     """).fetchall()

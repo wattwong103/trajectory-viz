@@ -216,7 +216,11 @@ class ColumnsConfig(BaseModel):
         ),
     )
     vehicle_id_col: str = Field(
-        description="Column whose value becomes trips.vehicle_id."
+        description=(
+            "Column whose native value becomes trips.agent_id (VARCHAR) and, "
+            "via int-or-hash fallback, trips.vehicle_id (INTEGER). Join "
+            "identity remains vehicle_key / agent_key."
+        )
     )
     trips: dict[str, ColumnSpec] = Field(
         default_factory=dict,
@@ -325,10 +329,12 @@ class SourceConfig(BaseModel):
     mode_map: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Optional map from raw transport_mode values (int codes as strings, "
-            "e.g. '0'→'Walk') to display labels. Used by /api/stats/filter-options "
-            "`modes[]`. Canonical public mode language is the label string; PFLOW "
-            "int codes remain filterable via transport_modes until schema v0.3."
+            "Optional map from raw transport_mode int codes (as strings, "
+            "e.g. '0'→'Walk') to canonical string mode labels stored in "
+            "trips.mode. Used at ingest (int→label) and by "
+            "/api/stats/filter-options `modes[]`. Prefer declaring "
+            "`columns.*.mode` (varchar) for non-PFLOW datasets; keep "
+            "`transport_mode` (int) only as optional mode_code."
         ),
     )
     trips_synthesis: TripsSynthesisConfig | None = Field(

@@ -36,6 +36,7 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
       const city = filter.city;
       const simulationDay = filter.simulationDay;
       const transportModes = filter.transportModes;
+      const modeLabels = filter.modeLabels;
       const scenario = filter.scenario;
 
       // Always fetch trips (OD points) — they exist even without trajectory
@@ -47,6 +48,7 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
           transportModes, scenario,
           filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
           filter.minDetourRatio, filter.maxDetourRatio,
+          modeLabels,
         );
         setTrips(tripRes.trips);
       }
@@ -61,6 +63,7 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
           filter.goodsType, filter.minHour, filter.maxHour,
           filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
           filter.minDetourRatio, filter.maxDetourRatio,
+          modeLabels,
         );
         setTrajectories(trajRes.trajectories);
       } else {
@@ -79,6 +82,7 @@ export function useTrajectories(filter: FilterState): UseTrajectories {
       filter.minSpeed, filter.maxSpeed, filter.maxDwellMinutes,
       filter.minDetourRatio, filter.maxDetourRatio,
       filter.transportModes?.join(','),
+      filter.modeLabels?.join(','),
       filter.scenario && JSON.stringify(filter.scenario.bbox)]);
 
   useEffect(() => {

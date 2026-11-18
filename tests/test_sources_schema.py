@@ -86,13 +86,26 @@ def test_source_with_render_is_valid():
 
 
 def test_source_mode_map_optional():
-    """Phase A — optional mode_map for filter-options mode labels."""
+    """Phase A/C — optional mode_map for ingest labels + filter-options."""
     src = SourceConfig.model_validate(
         {**MINIMAL_SOURCE, "mode_map": {"0": "Walk", "3": "Drive"}}
     )
     assert src.mode_map == {"0": "Walk", "3": "Drive"}
     bare = SourceConfig.model_validate(MINIMAL_SOURCE)
     assert bare.mode_map is None
+
+
+def test_matsim_example_declares_string_mode():
+    """Phase C — MATSim example maps canonical mode varchar, not int transport_mode."""
+    from pathlib import Path
+    import yaml
+    path = Path(__file__).resolve().parent.parent / "docs" / "examples" / "sources-matsim.yaml"
+    data = yaml.safe_load(path.read_text())
+    for key in ("matsim-car", "matsim-pt"):
+        trips = data["sources"][key]["columns"]["trips"]
+        assert "mode" in trips
+        assert trips["mode"]["type"] == "varchar"
+        assert "transport_mode" not in trips
 
 
 def test_repo_sources_yaml_declares_render_for_all_sources():

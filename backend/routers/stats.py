@@ -305,26 +305,45 @@ async def filter_options():
 
     # Transport modes present in the dataset, with counts — the FilterPanel
     # renders one chip per entry and needs no second call for the breakdown.
-    mode_rows = conn.execute("""
+    # Phase C: prefer canonical string trips.mode; fall back to int codes.
+    registry_mode_map = _registry_mode_map()
+    string_mode_rows = conn.execute("""
+        SELECT mode,
+               ANY_VALUE(transport_mode) AS mode_code,
+               COUNT(*) AS cnt
+        FROM trips
+        WHERE mode IS NOT NULL
+        GROUP BY mode
+        ORDER BY mode
+    """).fetchall()
+    int_mode_rows = conn.execute("""
         SELECT transport_mode, COUNT(*) FROM trips
         WHERE transport_mode IS NOT NULL
         GROUP BY transport_mode ORDER BY transport_mode
     """).fetchall()
     transport_modes = [
         {"mode": int(r[0]), "count": r[1]}
-        for r in mode_rows
+        for r in int_mode_rows
     ]
 
-    # Labels from registry mode_map (when present) + PFLOW defaults.
-    registry_mode_map = _registry_mode_map()
-    modes = [
-        {
-            "id": int(r[0]),
-            "label": label_for_mode(int(r[0]), registry_mode_map),
-            "count": r[1],
-        }
-        for r in mode_rows
-    ]
+    if string_mode_rows:
+        modes = [
+            {
+                "id": int(r[1]) if r[1] is not None else None,
+                "label": str(r[0]),
+                "count": r[2],
+            }
+            for r in string_mode_rows
+        ]
+    else:
+        modes = [
+            {
+                "id": int(r[0]),
+                "label": label_for_mode(int(r[0]), registry_mode_map),
+                "count": r[1],
+            }
+            for r in int_mode_rows
+        ]
 
     # Sprint B5 — per-source F1 metric availability so the frontend can disable
     # sliders that would silently filter to zero rows. Single grouped query.
@@ -371,17 +390,26 @@ def _registry_mode_map() -> dict[str, str]:
 
 
 def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dict:
-    """Inferred dataset capabilities for form availability (Phase A).
+    """Inferred dataset capabilities for form availability (Phase A/C).
 
     Lab attr columns stay sparse/nullable — listed in attr_keys only when
-    at least one non-null value exists (hide-when-empty posture).
+    at least one non-null value exists (hide-when-empty posture). No JSON
+    attrs migration (Phase C locked decision).
     """
+    from ..db import get_schema_version
+
     wp_count = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
     trip_count = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
     try:
         density_count = conn.execute("SELECT COUNT(*) FROM density_hourly").fetchone()[0]
     except Exception:
         density_count = 0
+    try:
+        string_mode_count = conn.execute(
+            "SELECT COUNT(*) FROM trips WHERE mode IS NOT NULL"
+        ).fetchone()[0]
+    except Exception:
+        string_mode_count = 0
 
     # Sparse lab columns — only advertise when populated.
     lab_cols = (
@@ -403,10 +431,12 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
         "has_trips": trip_count > 0,
         "has_trajectories": wp_count > 0,
         "has_density_hourly": density_count > 0,
-        "has_modes": len(transport_modes) > 0,
+        "has_modes": len(transport_modes) > 0 or string_mode_count > 0,
         "attr_keys": attr_keys,
-        # agent_key is the public name for vehicle_key (Phase C renames later).
+        # agent_key is the public name for vehicle_key (physical rename deferred).
         "agent_key_column": "vehicle_key",
+        "agent_id_column": "agent_id",
+        "schema_version": get_schema_version(conn),
     }
 
 

@@ -115,13 +115,19 @@ class TripFilters(ScenarioFields):
     simulation_day: int | None = Field(None, ge=0)
     goods_type: str | None = Field(None, pattern="^[a-z_]+$")
     # Comma-separated PFLOW transport-mode ids, e.g. "0,3" (0=walk, 1=bike,
-    # 2=bus, 3=car, 4=train; 8=taxi). String form (not list[int]) so GET query
+    # 2=bus, 3=car, 4=train; 8=taxi). Legacy int wire format — prefer `modes`
+    # (string labels) for v0.3. String form (not list[int]) so GET query
     # params and POST bodies share one representation — mirrors the
     # /trajectories/by-vehicle comma-separated vehicle_keys contract.
-    # INVARIANT: transport_mode is per-TRIP. It is filtered exclusively from
-    # trips.transport_mode; waypoints.transport_mode is display-only garbage
-    # for router-generated trajectories (uniform per source).
+    # INVARIANT: mode is per-TRIP. Filter exclusively from trips.mode /
+    # trips.transport_mode; waypoint mode columns are display-only.
     transport_modes: str | None = Field(None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$")
+    # Canonical v0.3 mode filter: comma-separated string labels (Walk,Car,…).
+    # Pattern keeps SQL f-string injection-safe (alphanumeric + space/_/-).
+    modes: str | None = Field(
+        None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}(,[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}){0,15}$",
+    )
     min_hour: int | None = Field(None, ge=0, le=23)
     max_hour: int | None = Field(None, ge=0, le=23)
     # F1 derived-metric filters (Phase 2 Step 2.2)
@@ -148,6 +154,12 @@ class TripFilters(ScenarioFields):
         if not self.transport_modes:
             return None
         return [int(m) for m in self.transport_modes.split(",")]
+
+    def mode_label_list(self) -> list[str] | None:
+        """Parsed modes (string labels), or None when unset."""
+        if not self.modes:
+            return None
+        return [m.strip() for m in self.modes.split(",") if m.strip()]
 
     def extra_conds(self) -> list[str]:
         """The hour/goods_type conditions every router used to hand-build.
@@ -179,6 +191,7 @@ class TripFilters(ScenarioFields):
             extra=conds or None,
             source_id=self.source_id,
             transport_modes=self.transport_mode_list(),
+            modes=self.mode_label_list(),
             min_speed=self.min_speed,
             max_speed=self.max_speed,
             max_dwell_minutes=self.max_dwell_minutes,
@@ -216,7 +229,11 @@ def trip_filters(
     goods_type: str | None = Query(None, pattern="^[a-z_]+$"),
     transport_modes: str | None = Query(
         None, pattern=r"^\d{1,2}(,\d{1,2}){0,15}$",
-        description="Comma-separated transport-mode ids, e.g. '0,3' (0=walk 1=bike 2=bus 3=car 4=train 8=taxi)"),
+        description="Legacy comma-separated transport-mode ids, e.g. '0,3'. Prefer modes=."),
+    modes: str | None = Query(
+        None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}(,[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}){0,15}$",
+        description="Canonical comma-separated mode labels, e.g. 'Walk,Car' (trips.mode)."),
     min_hour: int | None = Query(None, ge=0, le=23),
     max_hour: int | None = Query(None, ge=0, le=23),
     min_speed: float | None = Query(None, ge=0, le=300,
@@ -246,6 +263,7 @@ def trip_filters(
         simulation_day=simulation_day,
         goods_type=goods_type,
         transport_modes=transport_modes,
+        modes=modes,
         min_hour=min_hour,
         max_hour=max_hour,
         min_speed=min_speed,

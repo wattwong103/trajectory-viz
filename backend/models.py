@@ -62,6 +62,8 @@ class TrajectoryMetadata(BaseModel):
     """Metadata attached to each trajectory for filtering/coloring in the UI."""
     vehicle_type: str
     vehicle_id: int
+    # Phase C — native string agent id (vehicle_id remains int/hash fallback).
+    agent_id: str | None = None
     vehicle_key: str
     trip_id: int
     # The TRIP's transport mode (trips.transport_mode, joined at
@@ -69,6 +71,8 @@ class TrajectoryMetadata(BaseModel):
     # carry a uniform per-source value (taxi writer stamps 8 on everything),
     # verified empirically. 0=walk 1=bike 2=bus 3=car 4=train 8=taxi.
     transport_mode: int | None = None
+    # Canonical string mode label (trips.mode). Prefer over transport_mode.
+    mode: str | None = None
     goods_type: str | None = None
     vehicle_size: str | None = None
     passenger_in: str | None = None
@@ -108,6 +112,7 @@ class TrajectoryResponse(BaseModel):
 class TripPoint(BaseModel):
     """Single trip O-D pair for ScatterplotLayer."""
     vehicle_id: int
+    agent_id: str | None = None
     trip_id: int
     starttime: int
     start_lon: float
@@ -118,8 +123,10 @@ class TripPoint(BaseModel):
     distance_km: float | None = None
     goods_type: str | None = None
     city: str | None = None
-    # 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (trips.transport_mode)
+    # 0=walk 1=bike 2=bus 3=car 4=train 8=taxi (optional PFLOW mode_code)
     transport_mode: int | None = None
+    # Canonical string mode (trips.mode)
+    mode: str | None = None
 
 
 class TripResponse(BaseModel):

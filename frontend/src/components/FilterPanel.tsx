@@ -263,8 +263,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </div>
       </div>
 
-      {/* Mode multi-select — prefer string labels from modes[]; submit PFLOW
-          ints on the wire. Hidden for single-mode / mode-less datasets. */}
+      {/* Mode multi-select — prefer string labels (modeLabels / modes=);
+          keep PFLOW int codes in transportModes when available. */}
       {modeOptions.length >= 2 && (
         <div style={styles.section}>
           <label style={styles.sectionLabel}>Mode</label>
@@ -273,18 +273,25 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               key="all-modes"
               style={{
                 ...styles.modeChip,
-                ...(!filter.transportModes?.length ? styles.toggleActive : {}),
+                ...(!filter.modeLabels?.length && !filter.transportModes?.length
+                  ? styles.toggleActive : {}),
               }}
-              onClick={() => onChange({ ...filter, transportModes: undefined })}
+              onClick={() => onChange({
+                ...filter,
+                transportModes: undefined,
+                modeLabels: undefined,
+              })}
             >
               All
             </button>
             {modeOptions.map(({ id, label, count }) => {
-              const active = filter.transportModes?.includes(id) ?? false;
-              const c = TRANSPORT_MODE_META[id]?.color ?? [128, 128, 128];
+              const active = filter.modeLabels?.includes(label)
+                ?? (id != null && (filter.transportModes?.includes(id) ?? false));
+              const c = (id != null ? TRANSPORT_MODE_META[id]?.color : undefined)
+                ?? [128, 128, 128];
               return (
                 <button
-                  key={id}
+                  key={label}
                   style={{
                     ...styles.modeChip,
                     ...(active ? styles.toggleActive : {}),
@@ -292,11 +299,22 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                   }}
                   title={`${count.toLocaleString()} trips`}
                   onClick={() => {
-                    const cur = filter.transportModes ?? [];
-                    const next = cur.includes(id)
-                      ? cur.filter(m => m !== id)
-                      : [...cur, id].sort((a, b) => a - b);
-                    onChange({ ...filter, transportModes: next.length ? next : undefined });
+                    const curLabels = filter.modeLabels
+                      ?? modeOptions
+                        .filter(m => m.id != null && filter.transportModes?.includes(m.id))
+                        .map(m => m.label);
+                    const nextLabels = curLabels.includes(label)
+                      ? curLabels.filter(l => l !== label)
+                      : [...curLabels, label];
+                    const nextIds = modeOptions
+                      .filter(m => nextLabels.includes(m.label) && m.id != null)
+                      .map(m => m.id as number)
+                      .sort((a, b) => a - b);
+                    onChange({
+                      ...filter,
+                      modeLabels: nextLabels.length ? nextLabels : undefined,
+                      transportModes: nextIds.length ? nextIds : undefined,
+                    });
                   }}
                 >
                   {label}

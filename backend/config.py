@@ -89,13 +89,14 @@ def get_viz_db_path() -> Path:
     """Return the DuckDB database file path.
 
     Priority:
-      1. PFLOW_VIZ_DB env var (absolute path to .duckdb file)
-      2. PFLOW_HOME/output/viz/pflow.duckdb (monorepo mode)
+      1. TRAJECTORY_VIZ_DB env var (canonical standalone alias, Phase C)
+      2. PFLOW_VIZ_DB env var (legacy standalone alias — same semantics)
+      3. PFLOW_HOME/output/viz/pflow.duckdb (monorepo mode)
 
-    In standalone mode (PFLOW_VIZ_DB set), the backend serves from
+    In standalone mode (either DB env set), the backend serves from
     wherever that path points and never touches PFLOW_HOME.
     """
-    env = os.environ.get("PFLOW_VIZ_DB")
+    env = os.environ.get("TRAJECTORY_VIZ_DB") or os.environ.get("PFLOW_VIZ_DB")
     if env:
         p = Path(env)
         p.parent.mkdir(parents=True, exist_ok=True)

@@ -56,14 +56,16 @@ _DUCKDB_TYPE_MAP: dict[str, str] = {
 # directly by the ingester, not by source.columns.trips) are marked below.
 # A source need not declare every column — anything not declared becomes NULL.
 TRIP_COLUMNS: tuple[str, ...] = (
-    "vehicle_id",      # implicit: CAST(columns.vehicle_id_col AS INTEGER)
+    "vehicle_id",      # implicit: int-or-hash of columns.vehicle_id_col
+    "agent_id",        # implicit: CAST(columns.vehicle_id_col AS VARCHAR)
     "trip_id",         # implicit: CAST(columns.trip_id_col AS BIGINT)
     "starttime",       # required (declared)
     "start_lon",       # required (declared)
     "start_lat",       # required (declared)
     "end_lon",         # required (declared)
     "end_lat",         # required (declared)
-    "transport_mode",
+    "transport_mode",  # optional int mode_code (PFLOW)
+    "mode",            # canonical string label (Phase C)
     "purpose",
     "vehicle_type",    # implicit: source_id literal (back-compat alias)
     "distance_km",
@@ -85,6 +87,7 @@ TRIP_COLUMNS: tuple[str, ...] = (
 
 WAYPOINT_COLUMNS: tuple[str, ...] = (
     "vehicle_id",      # implicit
+    "agent_id",        # implicit string native id
     "trip_id",         # implicit
     "unix_time_ms",    # required (declared)
     "lon",             # required (declared)
@@ -92,6 +95,7 @@ WAYPOINT_COLUMNS: tuple[str, ...] = (
     "link_id",
     "vehicle_type",    # implicit
     "transport_mode",
+    "mode",
     "purpose",
     "goods_type",
     "vehicle_size",
@@ -256,6 +260,63 @@ def _int_or_hash_sql(col: str, duck_type: str) -> str:
     )
 
 
+def _transport_mode_spec(declared: dict[str, ColumnSpec]) -> ColumnSpec | None:
+    """Declared transport_mode ColumnSpec, if any."""
+    return declared.get("transport_mode")
+
+
+def _mode_spec(declared: dict[str, ColumnSpec]) -> ColumnSpec | None:
+    """Declared mode ColumnSpec, if any."""
+    return declared.get("mode")
+
+
+def _select_mode_exprs(
+    src: SourceConfig,
+    declared: dict[str, ColumnSpec],
+    epoch_anchor: int | None,
+) -> tuple[str, str]:
+    """Build (transport_mode_expr, mode_expr) for SELECT AS aliases.
+
+    Rules (Phase C):
+    - Canonical storage is string `mode`.
+    - `transport_mode` stays optional int mode_code (PFLOW).
+    - Declared varchar `transport_mode` (legacy MATSim-style) feeds `mode`
+      and TRY_CASTs into the int column.
+    - Declared int/bigint `transport_mode`, or a derived expression without
+      an explicit type, feeds the int column and derives `mode` via
+      mode_map / DEFAULT_MODE_LABELS.
+    """
+    from backend.mode_labels import mode_label_case_sql
+
+    mode_spec = _mode_spec(declared)
+    tm_spec = _transport_mode_spec(declared)
+
+    def _inner(spec: ColumnSpec, alias: str) -> str:
+        return _column_expr(alias, spec, epoch_anchor).rsplit(" AS ", 1)[0]
+
+    tm_is_varchar = tm_spec is not None and tm_spec.type == "varchar"
+    # int/bigint OR derived-without-type (legacy) count as mode_code expressions.
+    tm_is_code = tm_spec is not None and not tm_is_varchar
+
+    if mode_spec is not None:
+        mode_sql = _inner(mode_spec, "mode")
+    elif tm_is_varchar:
+        mode_sql = _inner(tm_spec, "mode")
+    elif tm_is_code:
+        mode_sql = mode_label_case_sql(f"({_inner(tm_spec, 'transport_mode')})", src.mode_map)
+    else:
+        mode_sql = "NULL"
+
+    if tm_is_code:
+        tm_sql = _inner(tm_spec, "transport_mode")
+    elif tm_is_varchar:
+        tm_sql = f"TRY_CAST(({_inner(tm_spec, '_tm_raw')}) AS INTEGER)"
+    else:
+        tm_sql = "NULL"
+
+    return f"{tm_sql} AS transport_mode", f"{mode_sql} AS mode"
+
+
 def _select_clause(
     src: SourceConfig,
     scope_value: str | None,
@@ -265,9 +326,9 @@ def _select_clause(
 ) -> str:
     """Assemble the SELECT clause for one source's INSERT.
 
-    Implicit columns (vehicle_id, trip_id, source_id, vehicle_type, vehicle_key,
-    city) are constructed by this function. All other columns are pulled from
-    `declared` or NULL-filled.
+    Implicit columns (vehicle_id, agent_id, trip_id, source_id, vehicle_type,
+    vehicle_key, city, and dual-written mode/transport_mode) are constructed
+    by this function. All other columns are pulled from `declared` or NULL-filled.
     """
     parts: list[str] = []
     # Trip CSVs carry the trip's primary key in src.columns.trip_id_col (often
@@ -275,10 +336,17 @@ def _select_clause(
     # in a column literally called "trip_id". The two paths are asymmetric in
     # the v0.1 schema and we preserve that here.
     is_waypoints = db_columns is WAYPOINT_COLUMNS
+    tm_as, mode_as = _select_mode_exprs(src, declared, epoch_anchor)
     for col in db_columns:
         if col == "vehicle_id":
             parts.append(
                 f'{_int_or_hash_sql(src.columns.vehicle_id_col, "INTEGER")} AS vehicle_id'
+            )
+        elif col == "agent_id":
+            # Native string id (Phase C). vehicle_key remains the join identity;
+            # vehicle_id keeps the int/hash fallback for legacy consumers.
+            parts.append(
+                f'CAST("{src.columns.vehicle_id_col}" AS VARCHAR) AS agent_id'
             )
         elif col == "trip_id":
             if is_waypoints and src.trips_synthesis is not None:
@@ -305,6 +373,10 @@ def _select_clause(
                 parts.append(f"{_sql_string_literal(scope_value)} AS city")
             else:
                 parts.append("NULL AS city")
+        elif col == "transport_mode":
+            parts.append(tm_as)
+        elif col == "mode":
+            parts.append(mode_as)
         elif col in declared:
             parts.append(_column_expr(col, declared[col], epoch_anchor))
         else:
@@ -612,16 +684,16 @@ def synthesize_trips(conn, src: SourceConfig, anchor_sec: int) -> int:
     conn.execute("DELETE FROM trips WHERE source_id = ?", [src.source_id])
     conn.execute(f"""
         INSERT INTO trips (
-            vehicle_id, trip_id, starttime,
+            vehicle_id, agent_id, trip_id, starttime,
             start_lon, start_lat, end_lon, end_lat,
-            transport_mode, purpose, vehicle_type, distance_km, dep_hour,
+            transport_mode, mode, purpose, vehicle_type, distance_km, dep_hour,
             simulation_day, goods_type, city, vehicle_key, source_id
         )
         WITH marked AS (
             SELECT
                 rowid AS rid,
-                vehicle_key, vehicle_id, unix_time_ms, lon, lat,
-                transport_mode, purpose, goods_type,
+                vehicle_key, vehicle_id, agent_id, unix_time_ms, lon, lat,
+                transport_mode, mode, purpose, goods_type,
                 CAST((unix_time_ms // 1000 - {anchor}) // 86400 AS BIGINT) AS day_idx,
                 {new_trip_expr} AS new_trip
             FROM waypoints
@@ -650,6 +722,7 @@ def synthesize_trips(conn, src: SourceConfig, anchor_sec: int) -> int:
         )
         SELECT
             ANY_VALUE(vehicle_id) AS vehicle_id,
+            ANY_VALUE(agent_id) AS agent_id,
             ordinal + 1 AS trip_id,
             CAST((MIN(unix_time_ms) // 1000 - {anchor}) % 86400 AS INTEGER) AS starttime,
             arg_min(lon, unix_time_ms) AS start_lon,
@@ -657,6 +730,7 @@ def synthesize_trips(conn, src: SourceConfig, anchor_sec: int) -> int:
             arg_max(lon, unix_time_ms) AS end_lon,
             arg_max(lat, unix_time_ms) AS end_lat,
             ANY_VALUE(transport_mode) AS transport_mode,
+            ANY_VALUE(mode) AS mode,
             ANY_VALUE(purpose) AS purpose,
             {src_lit} AS vehicle_type,
             SUM(seg_km) AS distance_km,

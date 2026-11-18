@@ -1,4 +1,4 @@
-"""Phase A — mode label resolution + source_id alias helper."""
+"""Phase A/C — mode label resolution + source_id alias helper."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from backend.filters import resolve_source_id  # noqa: E402
 from backend.mode_labels import (  # noqa: E402
     label_for_mode,
     merge_mode_maps,
+    mode_label_case_sql,
+    reverse_mode_map,
 )
 
 
@@ -34,3 +36,17 @@ def test_label_for_mode_defaults_and_overrides():
 def test_merge_mode_maps_first_wins():
     merged = merge_mode_maps([{"0": "A"}, {"0": "B", "1": "Bike"}])
     assert merged == {"0": "A", "1": "Bike"}
+
+
+def test_reverse_mode_map_defaults_and_overrides():
+    rev = reverse_mode_map({"3": "Drive"})
+    assert rev["walk"] == 0
+    assert rev["drive"] == 3
+    assert rev["car"] == 3  # default still present; Drive is extra
+
+
+def test_mode_label_case_sql_includes_overrides():
+    sql = mode_label_case_sql("transport_mode", {"3": "Drive"})
+    assert "WHEN 3 THEN 'Drive'" in sql
+    assert "WHEN 0 THEN 'Walk'" in sql
+    assert "ELSE 'mode ' || CAST(transport_mode AS VARCHAR) END" in sql
