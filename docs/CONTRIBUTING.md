@@ -114,7 +114,7 @@ Start the backend and open `/api/stats/filter-options`. Your new `source_id` sho
 ### TypeScript (frontend)
 
 - **No new dependencies** without justification — the pinned set is Vite + React + DeckGL + recharts + maplibre. Adding a new charting lib duplicates recharts.
-- **Filter state** lives in URL hash for shareability; encode/decode handlers in `App.tsx`.
+- **Filter state** lives in URL hash for shareability; codec in `frontend/src/filterHash.ts` (see [`docs/EXPORT.md` → Shareable dashboard URLs](EXPORT.md#shareable-dashboard-urls)).
 - **DeckGL layer ordering** matters for z-fighting — see `MapView.tsx` for the established stack (heatmap → density → trips → origins → destinations → ...).
 - **No DOM globals** — use React refs / state. DeckGL has its own picking system; route map clicks through it, not through `document.addEventListener`.
 
