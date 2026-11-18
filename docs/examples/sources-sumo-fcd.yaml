@@ -1,14 +1,18 @@
 # Example sources.yaml for SUMO floating-car data (FCD).
 #
-# Prefer SUMO's native tabular FCD export when possible:
+# Preferred path — native tabular FCD (no XML adapter):
 #   sumo --fcd-output fcd.xml --fcd-output.geo true
 #   # or TraceExporter / --output.format csv|parquet
+# Then point trajectories_glob at the CSV/Parquet (see sumo-fcd-csv below).
 #
-# For raw FCD XML, run the thin adapter first (writes canonical `mode`):
+# Fallback — raw `<fcd-export>` XML via the thin adapter (CSV default):
 #   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
-#       -o /path/to/output/sumo/fcd.ndjson
+#       -o /path/to/output/sumo/demo/fcd.csv --epoch-ms 1717200000000
+#   # or --format ndjson → fcd.ndjson
 #
-# Then point trajectories_glob at the NDJSON (or CSV/Parquet) and ingest.
+# CI fixtures (same globs under tests/fixtures/adapters/output_root):
+#   tests/fixtures/adapters/sources.sumo.yaml
+#
 # No new FormatType — XML stays out-of-process (survey decision §6.1).
 #
 # Validate:
@@ -20,12 +24,12 @@ time:
   epoch_anchor: "2024-06-01T00:00:00+09:00"
 
 sources:
-  sumo-fcd:
-    label: "SUMO FCD (geo)"
+  # ── Preferred: CSV / Parquet tabular FCD ───────────────────────────────
+  sumo-fcd-csv:
+    label: "SUMO FCD (CSV)"
     source_id: sumo
     discovery:
-      trajectories_glob: "sumo/**/fcd*.ndjson"
-      trajectories_format: ndjson
+      trajectories_glob: "sumo/**/fcd*.csv"
       latest_only: false
     vehicle_key_template: "sumo:{vehicle_id}"
     trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
@@ -40,4 +44,26 @@ sources:
         lat:          { csv: y,       type: double }
         link_id:      { csv: edge,    type: varchar }
         # Adapter (or TraceExporter) should emit a canonical mode label.
+        mode:         { csv: mode,    type: varchar }
+
+  # ── Fallback: NDJSON from XML adapter ──────────────────────────────────
+  sumo-fcd-ndjson:
+    label: "SUMO FCD (NDJSON)"
+    source_id: sumo_ndjson
+    discovery:
+      trajectories_glob: "sumo/**/fcd*.ndjson"
+      trajectories_format: ndjson
+      latest_only: false
+    vehicle_key_template: "sumo_ndjson:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
+    render:
+      mode: trails
+      color: [90, 180, 220]
+    columns:
+      vehicle_id_col: id
+      waypoints:
+        unix_time_ms: { csv: time_ms, type: bigint }
+        lon:          { csv: x,       type: double }
+        lat:          { csv: y,       type: double }
+        link_id:      { csv: edge,    type: varchar }
         mode:         { csv: mode,    type: varchar }

@@ -6,6 +6,12 @@
 # which writes trips_car.csv + events_car_geo.csv matching this column map.
 # Other post-processors (matsim2osm, ARENA, …) also work — adapt columns.
 #
+# CI fixtures use the same globs under tests/fixtures/adapters/output_root:
+#   python scripts/matsim_events_to_csv.py tests/fixtures/adapters/matsim_events_tiny.xml \
+#       -o tests/fixtures/adapters/output_root/matsim/berlin/iter_001 \
+#       --network tests/fixtures/adapters/matsim_network_tiny.xml
+#   # wired YAML: tests/fixtures/adapters/sources.matsim.yaml
+#
 # No native XML FormatType (survey decision): scripts + example YAML only.
 #
 # Real-world usage: add this block to your top-level sources.yaml, point the
