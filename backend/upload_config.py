@@ -1318,3 +1318,63 @@ def load_uploads_registry_ids(registry_path: Path) -> set[str]:
     ids |= set((loaded.get("pois") or {}).keys())
     ids |= set((loaded.get("zones") or {}).keys())
     return ids
+
+
+_RENDER_MODES = frozenset({"trails", "points", "arcs"})
+
+
+def patch_upload_source_style(
+    registry_path: Path,
+    source_id: str,
+    *,
+    mode: str | None = None,
+    color: list[int] | tuple[int, ...] | None = None,
+) -> dict:
+    """Update render.mode / render.color for an uploads-registry source only.
+
+    Refuses to touch hand-written registries — the source must already exist
+    under ``sources.uploads.yaml``. Returns the updated source dict.
+    """
+    if not registry_path.exists():
+        raise UploadConfigError([
+            f"source {source_id!r} is not an upload source (no uploads registry)"
+        ])
+    loaded = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise UploadConfigError(["uploads registry is not a mapping"])
+    sources = dict(loaded.get("sources") or {})
+    if source_id not in sources:
+        raise UploadConfigError([
+            f"source {source_id!r} is not in the uploads registry — "
+            "only upload-and-go sources can be restyled here"
+        ])
+    if mode is None and color is None:
+        raise UploadConfigError(["provide mode and/or color"])
+
+    entry = dict(sources[source_id])
+    render = dict(entry.get("render") or {})
+    if mode is not None:
+        if mode not in _RENDER_MODES:
+            raise UploadConfigError([
+                f"mode must be one of {sorted(_RENDER_MODES)}, got {mode!r}"
+            ])
+        render["mode"] = mode
+    if color is not None:
+        if len(color) != 3 or any(
+            not isinstance(c, int) or c < 0 or c > 255 for c in color
+        ):
+            raise UploadConfigError(["color must be an RGB triple of ints 0–255"])
+        render["color"] = [int(c) for c in color]
+    entry["render"] = render
+    sources[source_id] = entry
+    loaded["sources"] = sources
+    # Preserve empty overlay maps omission.
+    if not loaded.get("pois"):
+        loaded.pop("pois", None)
+    if not loaded.get("zones"):
+        loaded.pop("zones", None)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return entry

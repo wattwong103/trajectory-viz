@@ -27,9 +27,18 @@ export interface BuildAnimatedTrailLayersArgs {
   styleBySource: Record<string, SourceStyle>;
   sourceStyles: SourceStyle[];
   selectedAgents: string[];
-  colorBy: 'source' | 'transportMode';
+  colorBy: 'source' | 'transportMode' | string;
   trailColorFor: (
-    vehicleType: string, transportMode?: number | null,
+    vehicleType: string,
+    transportMode?: number | null,
+    attrs?: {
+      goods_type?: string | null;
+      purpose?: number | string | null;
+      taxi_id?: string | number | null;
+      passenger_in?: string | number | null;
+      cargo_loaded?: string | number | null;
+      is_night_trip?: string | number | boolean | null;
+    },
   ) => [number, number, number];
   colorFor: (vehicleType: string) => [number, number, number];
   buildingsOn: boolean;
@@ -119,7 +128,11 @@ export function buildAnimatedTrailLayers({
         getPath: (d: Trajectory) => d.path,
         getTimestamps: (d: Trajectory) => d.timestamps,
         getColor: (d: Trajectory) => {
-          const c = trailColorFor(d.metadata.vehicle_type, d.metadata.transport_mode);
+          const c = trailColorFor(
+            d.metadata.vehicle_type,
+            d.metadata.transport_mode,
+            d.metadata,
+          );
           return dimmed ? [c[0], c[1], c[2], 40] : c;
         },
         updateTriggers: { getColor: [dimmed, sourceStyles, colorBy] },
@@ -153,7 +166,9 @@ export function buildAnimatedTrailLayers({
         getPath: (d: Trajectory) => d.path,
         getTimestamps: (d: Trajectory) => d.timestamps,
         getColor: (d: Trajectory) => {
-          const c = trailColorFor(d.metadata.vehicle_type, d.metadata.transport_mode);
+          const c = trailColorFor(
+            d.metadata.vehicle_type, d.metadata.transport_mode, d.metadata,
+          );
           return [c[0], c[1], c[2], dimmed ? 20 : 80];
         },
         updateTriggers: { getColor: [dimmed, sourceStyles, colorBy] },
@@ -169,6 +184,7 @@ export function buildAnimatedTrailLayers({
     type Dot = {
       position: [number, number]; vehicle_key: string; source: string;
       transport_mode?: number | null;
+      meta: Trajectory['metadata'];
     };
     const dots: Dot[] = [];
     for (const t of pointTrajs) {
@@ -176,6 +192,7 @@ export function buildAnimatedTrailLayers({
       if (p) dots.push({
         position: p, vehicle_key: t.metadata.vehicle_key,
         source: t.metadata.vehicle_type, transport_mode: t.metadata.transport_mode,
+        meta: t.metadata,
       });
     }
     if (dots.length > 0) {
@@ -185,7 +202,7 @@ export function buildAnimatedTrailLayers({
           data: dots,
           getPosition: (d) => d.position,
           getFillColor: (d) => {
-            const c = trailColorFor(d.source, d.transport_mode);
+            const c = trailColorFor(d.source, d.transport_mode, d.meta);
             return [c[0], c[1], c[2], dimmed ? 60 : 230];
           },
           getRadius: 25,
@@ -215,11 +232,15 @@ export function buildAnimatedTrailLayers({
           getSourcePosition: (d: TripPoint) => [d.start_lon, d.start_lat],
           getTargetPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
           getSourceColor: (d: TripPoint) => {
-            const c = trailColorFor(d.vehicle_type, d.transport_mode);
+            const c = trailColorFor(d.vehicle_type, d.transport_mode, {
+              goods_type: d.goods_type,
+            });
             return [c[0], c[1], c[2], dimmed ? 40 : 200];
           },
           getTargetColor: (d: TripPoint) => {
-            const c = trailColorFor(d.vehicle_type, d.transport_mode);
+            const c = trailColorFor(d.vehicle_type, d.transport_mode, {
+              goods_type: d.goods_type,
+            });
             return [c[0], c[1], c[2], dimmed ? 20 : 90];
           },
           updateTriggers: {

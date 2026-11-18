@@ -13,6 +13,12 @@ import { TRANSPORT_MODE_META, resolveModeOptions } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
 import { poiColor } from '../poiColors';
 import {
+  colorableAttrKeys, attrChipLabel,
+} from '../attrColors';
+import {
+  BASEMAP_OPTIONS, type BasemapSelection, styleUrlFor,
+} from '../basemap';
+import {
   LAYER_GROUPS, LAYER_PRESETS, visibleLayerGroups, hasLabAttr,
   type LayerAvailabilityContext, type LayerPresetId,
 } from '../layerCatalog';
@@ -48,6 +54,18 @@ interface FilterPanelProps {
   enabledPoiCategories?: string[];
   onTogglePoiCategory?: (category: string) => void;
   onSetAllPoiCategories?: (enabled: boolean) => void;
+  // TV-30 S6 — per-zone-layer chips (source_key). Hidden when empty.
+  zoneLayers?: Array<{
+    source_key: string;
+    label: string;
+    color: [number, number, number];
+  }>;
+  disabledZoneSources?: string[];
+  onToggleZoneSource?: (sourceKey: string) => void;
+  onSetAllZoneSources?: (enabled: boolean) => void;
+  // TV-30 S5 — basemap picker
+  basemap?: BasemapSelection;
+  onBasemapChange?: (sel: BasemapSelection) => void;
   // Upload-and-go — shared uploader owned by App; the button opens a hidden
   // file input (drag-and-drop alone is undiscoverable).
   onUploadFiles?: (files: File[]) => void;
@@ -100,6 +118,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   enabledPoiCategories,
   onTogglePoiCategory,
   onSetAllPoiCategories,
+  zoneLayers = [],
+  disabledZoneSources = [],
+  onToggleZoneSource,
+  onSetAllZoneSources,
+  basemap,
+  onBasemapChange,
   onUploadFiles,
   onReloadFilterOptions,
   onChange, onRefetch, onClearDrill, onLayerToggle, onApplyPreset,
@@ -109,6 +133,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [customBasemapUrl, setCustomBasemapUrl] = useState(
+    () => (basemap?.kind === 'custom' ? basemap.url : ''),
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Per-group expansion inside the Layers section (core/scene open first).
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>(
@@ -417,12 +444,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               );
             })}
           </div>
-          <div style={{ ...styles.row, marginTop: 6, alignItems: 'center' }}>
+          <div style={{ ...styles.row, marginTop: 6, alignItems: 'center', flexWrap: 'wrap' as const }}>
             <span style={{ fontSize: 10, color: '#999' }}>Color by</span>
             <button
               style={{
                 ...styles.modeChip,
-                ...(filter.colorBy !== 'transportMode' ? styles.toggleActive : {}),
+                ...((!filter.colorBy || filter.colorBy === 'source') ? styles.toggleActive : {}),
               }}
               onClick={() => onChange({ ...filter, colorBy: undefined })}
             >
@@ -437,6 +464,50 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             >
               Mode
             </button>
+            {colorableAttrKeys(filterOptions?.capabilities?.attr_keys).map(key => (
+              <button
+                key={key}
+                style={{
+                  ...styles.modeChip,
+                  ...(filter.colorBy === key ? styles.toggleActive : {}),
+                }}
+                title={`Color trails by ${key}`}
+                onClick={() => onChange({ ...filter, colorBy: key })}
+              >
+                {attrChipLabel(key)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Color-by attrs when modes section is hidden but attrs exist */}
+      {(!modeOptions.length || !(filterOptions?.modes?.length || filterOptions?.transport_modes?.length))
+        && colorableAttrKeys(filterOptions?.capabilities?.attr_keys).length > 0 && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>Color by</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...((!filter.colorBy || filter.colorBy === 'source') ? styles.toggleActive : {}),
+              }}
+              onClick={() => onChange({ ...filter, colorBy: undefined })}
+            >
+              Source
+            </button>
+            {colorableAttrKeys(filterOptions?.capabilities?.attr_keys).map(key => (
+              <button
+                key={key}
+                style={{
+                  ...styles.modeChip,
+                  ...(filter.colorBy === key ? styles.toggleActive : {}),
+                }}
+                onClick={() => onChange({ ...filter, colorBy: key })}
+              >
+                {attrChipLabel(key)}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -491,6 +562,102 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* TV-30 S6 — per-zone-layer visibility (mirrors POI chips). */}
+      {zoneLayers.length > 0 && layerVisibility.zones !== false && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>Zones</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            <button
+              style={{
+                ...styles.modeChip,
+                ...(disabledZoneSources.length === 0 ? styles.toggleActive : {}),
+              }}
+              onClick={() => onSetAllZoneSources?.(true)}
+            >
+              All
+            </button>
+            {zoneLayers.map(z => {
+              const active = !disabledZoneSources.includes(z.source_key);
+              return (
+                <button
+                  key={z.source_key}
+                  style={{
+                    ...styles.modeChip,
+                    ...(active ? styles.toggleActive : {}),
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                  title={`${z.label} — click to toggle`}
+                  onClick={() => onToggleZoneSource?.(z.source_key)}
+                >
+                  <span style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 2,
+                    flexShrink: 0,
+                    background: active
+                      ? `rgb(${z.color[0]},${z.color[1]},${z.color[2]})`
+                      : 'transparent',
+                    border: `1px solid rgb(${z.color[0]},${z.color[1]},${z.color[2]})`,
+                  }} />
+                  {z.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TV-30 S5 — basemap picker (Dark Matter default). */}
+      {onBasemapChange && (
+        <div style={styles.section}>
+          <label style={styles.sectionLabel}>Basemap</label>
+          <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
+            {BASEMAP_OPTIONS.map(opt => {
+              const active = basemap?.kind === 'preset' && basemap.id === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  style={{
+                    ...styles.modeChip,
+                    ...(active ? styles.toggleActive : {}),
+                  }}
+                  onClick={() => onBasemapChange({ kind: 'preset', id: opt.id })}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ ...styles.row, marginTop: 6, gap: 6, alignItems: 'center' }}>
+            <input
+              type="text"
+              placeholder="Custom style URL…"
+              value={customBasemapUrl}
+              onChange={e => setCustomBasemapUrl(e.target.value)}
+              style={{ ...styles.select, flex: 1, minWidth: 0 }}
+            />
+            <button
+              style={styles.modeChip}
+              title="Apply custom MapLibre style JSON URL"
+              onClick={() => {
+                const url = customBasemapUrl.trim();
+                if (!url) return;
+                onBasemapChange({ kind: 'custom', url });
+              }}
+            >
+              Apply
+            </button>
+          </div>
+          {basemap?.kind === 'custom' && (
+            <div style={{ fontSize: 10, color: '#8a94a5', marginTop: 4 }}>
+              Custom: {styleUrlFor(basemap).slice(0, 48)}…
+            </div>
+          )}
         </div>
       )}
 

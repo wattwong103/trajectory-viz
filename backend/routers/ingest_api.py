@@ -61,6 +61,7 @@ from ..upload_config import (
     geojson_property_keys,
     load_uploads_registry_ids,
     looks_like_trips_table,
+    patch_upload_source_style,
     slugify_source_id,
     sniff_failure_reasons,
     sniff_from_mapping,
@@ -953,6 +954,36 @@ async def upload_confirm_overlay(body: ConfirmOverlayPayload):
         raise HTTPException(status_code=422, detail="no valid overlays to confirm")
 
     return _start_job(prepared)
+
+
+class SourceStylePatch(BaseModel):
+    mode: Literal["trails", "points", "arcs"] | None = None
+    color: list[int] | None = None
+
+
+@router.patch("/sources/{source_id}/style")
+async def patch_source_style(source_id: str, body: SourceStylePatch):
+    """Update render.mode / render.color for an upload-and-go source only.
+
+    Hand-written ``sources.yaml`` entries are refused — edit those in YAML.
+    """
+    if body.mode is None and body.color is None:
+        raise HTTPException(status_code=422, detail="provide mode and/or color")
+    try:
+        entry = patch_upload_source_style(
+            uploads_registry_path(),
+            source_id,
+            mode=body.mode,
+            color=body.color,
+        )
+    except UploadConfigError as exc:
+        raise HTTPException(status_code=422, detail={"reasons": exc.reasons}) from exc
+    render = entry.get("render") or {}
+    return {
+        "source_id": source_id,
+        "mode": render.get("mode", "trails"),
+        "color": render.get("color"),
+    }
 
 
 def _job_view(job: dict) -> dict:

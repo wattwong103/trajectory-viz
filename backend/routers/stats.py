@@ -519,6 +519,14 @@ def _source_styles(conn) -> list[dict]:
         "SELECT DISTINCT source_id FROM waypoints WHERE source_id IS NOT NULL"
     ).fetchall()}
 
+    # Upload sources can edit render.mode/color via PATCH (TV-30).
+    try:
+        from backend.config import uploads_registry_path
+        from backend.upload_config import load_uploads_registry_ids
+        upload_ids = load_uploads_registry_ids(uploads_registry_path())
+    except Exception:
+        upload_ids = set()
+
     styles = []
     covered = set()
     for key, src in sources_file.sources.items():
@@ -533,6 +541,7 @@ def _source_styles(conn) -> list[dict]:
             "mode": render.mode if render else "trails",
             "color": list(render.color) if render and render.color else None,
             "has_waypoints": src.source_id in with_waypoints,
+            "editable": src.source_id in upload_ids or key in upload_ids,
         })
     # Misconfiguration guard: ingested fleets with no registry entry render
     # with wrong labels/colors/modes (e.g. serving gufm.duckdb while

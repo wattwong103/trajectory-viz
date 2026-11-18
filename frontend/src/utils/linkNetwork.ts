@@ -23,7 +23,7 @@ export type LinkStroke = {
 export function strokesFromLinks(
   links: LinkDensityItem[],
   opts: {
-    colorBy: 'source' | 'transportMode';
+    colorBy: 'source' | 'transportMode' | string;
     hiddenSources: ReadonlySet<string>;
     colorFor?: (sourceId: string) => [number, number, number];
   },
@@ -75,10 +75,12 @@ function visibleGroups(
 
 function strokeColor(
   key: string,
-  colorBy: 'source' | 'transportMode',
+  colorBy: 'source' | 'transportMode' | string,
   colorFor: (sourceId: string) => [number, number, number],
 ): [number, number, number] {
   if (key === '_all') return [253, 128, 93];
+  // Link groups are source_id or transport_mode keys — attr color-by falls
+  // back to source coloring (attrs aren't on the link aggregate).
   if (colorBy === 'transportMode') {
     const n = Number(key);
     if (Number.isFinite(n)) return transportModeColor(n);

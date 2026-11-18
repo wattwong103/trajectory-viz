@@ -28,6 +28,7 @@ import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensit
 import type { LayerVisibility } from '../layerVisibility';
 import { transportModeColor, transportModeLabel } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
+import { resolveTrailColor, type TrailColorInput } from '../attrColors';
 import type { PoiIconAtlas } from '../poiSprites';
 import type { Bbox } from '../utils/bbox';
 
@@ -85,9 +86,11 @@ interface MapViewProps {
   buildingsCity?: string;
   // Phase 3 — building height multiplier (FilterPanel slider, default 1)
   buildingExaggeration?: number;
-  // Phase 1 (transport mode) — color scheme + per-source visibility
-  colorBy?: 'source' | 'transportMode';
+  // Phase 1 / TV-30 — color scheme + per-source visibility
+  colorBy?: 'source' | 'transportMode' | string;
   hiddenSources?: string[];
+  /** MapLibre style URL (TV-30 basemap picker). Defaults to Dark Matter. */
+  mapStyle?: string;
   // Universal-trajectory Phase 2 — POI context layer. `pois` is already
   // restricted to enabled categories by usePois; the color map is category →
   // [r,g,b] (YAML override or hash fallback, precomputed in App).
@@ -128,6 +131,7 @@ export const MapView: React.FC<MapViewProps> = ({
   buildingExaggeration = 1,
   colorBy = 'source',
   hiddenSources = [],
+  mapStyle = MAP_STYLE,
   pois = [],
   poiColorByCategory = {},
   poiSourceLabels = {},
@@ -173,12 +177,27 @@ export const MapView: React.FC<MapViewProps> = ({
   const colorFor = (vehicleType: string): [number, number, number] =>
     styleBySource[vehicleType]?.color ?? sourceFallbackColor(vehicleType);
 
-  // Phase 1 — single color indirection for data layers: per-source style, or
-  // the TRIP's transport-mode color when colorBy === 'transportMode'.
+  // Phase 1 / TV-30 — source | transport mode | lab attr color indirection.
   const trailColorFor = (
-    vehicleType: string, transportMode?: number | null,
+    vehicleType: string,
+    transportMode?: number | null,
+    attrs?: Partial<TrailColorInput>,
   ): [number, number, number] =>
-    colorBy === 'transportMode' ? transportModeColor(transportMode) : colorFor(vehicleType);
+    resolveTrailColor(
+      colorBy,
+      {
+        vehicle_type: vehicleType,
+        transport_mode: transportMode,
+        goods_type: attrs?.goods_type,
+        purpose: attrs?.purpose,
+        taxi_id: attrs?.taxi_id,
+        passenger_in: attrs?.passenger_in,
+        cargo_loaded: attrs?.cargo_loaded,
+        is_night_trip: attrs?.is_night_trip,
+      },
+      colorFor,
+      transportModeColor,
+    );
 
   // Phase 1 — per-source visibility (legend row toggles). Data-level filter,
   // not layer `visible`: sources share single layers.
@@ -475,7 +494,14 @@ export const MapView: React.FC<MapViewProps> = ({
         return null;
       }}
     >
-      <Map mapStyle={MAP_STYLE} preserveDrawingBuffer />
+      <Map
+        mapStyle={mapStyle}
+        preserveDrawingBuffer
+        onError={(e) => {
+          // Invalid custom style URLs — surface via console; App toast reverts.
+          console.warn('MapLibre style error', e);
+        }}
+      />
     </DeckGL>
   );
 };
