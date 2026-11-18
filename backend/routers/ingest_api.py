@@ -5,6 +5,10 @@ POST /api/ingest/upload  — multipart upload of one or more trajectory files.
     into the current DB as a background job. Source configs are auto-generated
     and persisted to sources.uploads.yaml next to the DB (the user's
     hand-written sources.yaml is never mutated).
+    When tabular sniff fails, returns 422 with ``mapping_required`` + column
+    census (staged file kept) so the UI can show an interactive mapping sheet.
+POST /api/ingest/upload/confirm — apply column mapping to staged tabular files
+    and run the same ingest job pipeline.
 GET  /api/ingest/jobs/{job_id} — job status/progress/result/error.
 GET  /api/ingest/jobs — last 20 jobs, newest first.
 
@@ -21,9 +25,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from ..config import uploads_dir, uploads_registry_path
 from ..db import get_connection, get_epoch_anchor
@@ -38,10 +43,14 @@ from ..sources_schema import TimeConfig
 from ..upload_config import (
     UploadConfigError,
     census_geojson_geometry,
+    census_tabular,
+    census_to_api_dict,
     generate_source_config,
     load_uploads_registry_ids,
     slugify_source_id,
     sniff_columns,
+    sniff_failure_reasons,
+    sniff_from_mapping,
     write_uploads_registry,
 )
 
@@ -256,9 +265,69 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
         job["error"] = f"{type(exc).__name__}: {exc}"
 
 
+class ColumnMappingPayload(BaseModel):
+    """Interactive column mapping for one staged tabular upload."""
+
+    lon: str
+    lat: str
+    time: str
+    vehicle_id: str | None = None
+    agent_id: str | None = None  # alias for vehicle_id
+    name: str | None = None
+    mode: str | None = None
+    time_kind: str | None = None
+    mode_map: dict[str, str] | None = None
+
+
+class ConfirmFilePayload(BaseModel):
+    staged_name: str = Field(description="Basename under uploads/ (e.g. mystery.csv)")
+    source_id: str | None = None
+    filename: str | None = None
+    mapping: ColumnMappingPayload
+
+
+class ConfirmUploadPayload(BaseModel):
+    files: list[ConfirmFilePayload] = Field(min_length=1)
+
+
+def _start_job(prepared: list[dict]) -> dict:
+    job = _new_job()
+    if _RUN_JOBS_INLINE:
+        _run_job(job["job_id"], prepared)
+    else:
+        _executor.submit(_run_job, job["job_id"], prepared)
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "files": [
+            {"filename": p["filename"], "source_id": p["source_id"], "format": p["format"]}
+            for p in prepared
+        ],
+    }
+
+
+def _resolve_staged_path(staged_name: str) -> Path:
+    """Resolve a confirm staged_name under uploads_dir (no path traversal)."""
+    name = Path(staged_name).name
+    if name != staged_name or ".." in staged_name or "/" in staged_name or "\\" in staged_name:
+        raise HTTPException(status_code=422, detail=f"invalid staged_name {staged_name!r}")
+    path = uploads_dir() / name
+    if not path.is_file():
+        raise HTTPException(
+            status_code=422,
+            detail=f"staged file {name!r} not found — re-upload, then map columns",
+        )
+    return path
+
+
 @router.post("/upload", status_code=202)
 async def upload(files: Annotated[list[UploadFile], File(...)]):
-    """Accept one or more trajectory files and ingest them as a job."""
+    """Accept one or more trajectory files and ingest them as a job.
+
+    Heuristic happy path (sniff succeeds) returns 202 and starts the job.
+    When tabular sniff fails, returns 422 with ``mapping_required`` + column
+    census and keeps the staged file for ``POST /upload/confirm``.
+    """
     if not files:
         raise HTTPException(status_code=422, detail="no files uploaded")
 
@@ -267,13 +336,16 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
     existing = _existing_source_ids(conn)
 
     prepared: list[dict] = []
-    reasons: list[str] = []
+    hard_reasons: list[str] = []
+    mapping_files: list[dict] = []
+    mapping_staged: list[Path] = []
+
     for uf in files:
         # Filename guard: strip any directory components from the client name.
         name = Path(uf.filename or "upload").name
         ext = Path(name).suffix.lower()
         if ext not in _ALLOWED_EXTENSIONS and ext != ".json":
-            reasons.append(
+            hard_reasons.append(
                 f"{name}: unsupported file type {ext!r} — accepted: "
                 + ", ".join(sorted([*_ALLOWED_EXTENSIONS, ".json"]))
             )
@@ -285,14 +357,30 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
 
         try:
             fmt = _detect_upload_format(staged_path, ext)
-            sniff = None
-            if fmt not in ("geojson", "gpx"):
-                sniff = sniff_columns(staged_path, fmt)
             if fmt == "geojson":
                 # Upfront geometry census: polygon layers must not reach the
                 # background job, where one bad file would abort the whole
                 # batch after earlier files already mutated the DB.
                 census_geojson_geometry(staged_path)
+                sniff = None
+            elif fmt == "gpx":
+                sniff = None
+            else:
+                census = census_tabular(staged_path, fmt)
+                sniff = census.sniff
+                missing = sniff_failure_reasons(sniff)
+                if missing:
+                    mapping_files.append(census_to_api_dict(
+                        filename=name,
+                        source_id=source_id,
+                        fmt=fmt,
+                        staged_name=staged_path.name,
+                        census=census,
+                    ))
+                    mapping_staged.append(staged_path)
+                    existing.add(source_id)
+                    continue
+
             cfg = generate_source_config(
                 source_id=source_id,
                 fmt=fmt,
@@ -301,11 +389,11 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
                 sniff=sniff,
             )
         except UploadConfigError as exc:
-            reasons.extend(f"{name}: {r}" for r in exc.reasons)
+            hard_reasons.extend(f"{name}: {r}" for r in exc.reasons)
             staged_path.unlink(missing_ok=True)
             continue
         except Exception as exc:
-            reasons.append(f"{name}: {type(exc).__name__}: {exc}")
+            hard_reasons.append(f"{name}: {type(exc).__name__}: {exc}")
             staged_path.unlink(missing_ok=True)
             continue
 
@@ -318,27 +406,114 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
             "cfg": cfg,
         })
 
-    if reasons:
+    # Mapping affordance takes priority over starting a partial job: keep the
+    # staged tabular files that need a sheet, drop any already-prepared siblings
+    # (user can re-drop those after — one-click path still works alone).
+    if mapping_files:
         for p in prepared:
             p["staged_path"].unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail={"reasons": reasons})
+        reasons = list(hard_reasons)
+        for mf in mapping_files:
+            reasons.extend(f"{mf['filename']}: {r}" for r in mf["reasons"])
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "reasons": reasons,
+                "mapping_required": True,
+                "files": mapping_files,
+            },
+        )
+
+    if hard_reasons:
+        for p in prepared:
+            p["staged_path"].unlink(missing_ok=True)
+        for path in mapping_staged:
+            path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail={"reasons": hard_reasons})
     if not prepared:
         raise HTTPException(status_code=422, detail="no valid files uploaded")
 
-    job = _new_job()
-    if _RUN_JOBS_INLINE:
-        _run_job(job["job_id"], prepared)
-    else:
-        _executor.submit(_run_job, job["job_id"], prepared)
+    return _start_job(prepared)
 
-    return {
-        "job_id": job["job_id"],
-        "status": job["status"],
-        "files": [
-            {"filename": p["filename"], "source_id": p["source_id"], "format": p["format"]}
-            for p in prepared
-        ],
-    }
+
+@router.post("/upload/confirm", status_code=202)
+async def upload_confirm(body: ConfirmUploadPayload):
+    """Apply interactive column mapping to staged tabular uploads and ingest."""
+    conn = get_connection()
+    existing = _existing_source_ids(conn)
+    prepared: list[dict] = []
+    reasons: list[str] = []
+
+    for item in body.files:
+        try:
+            staged_path = _resolve_staged_path(item.staged_name)
+        except HTTPException as exc:
+            detail = exc.detail
+            reasons.append(str(detail))
+            continue
+
+        ext = staged_path.suffix.lower()
+        try:
+            fmt = _detect_upload_format(staged_path, ext if ext != ".json" else ".json")
+        except UploadConfigError as exc:
+            reasons.extend(f"{item.staged_name}: {r}" for r in exc.reasons)
+            continue
+
+        if fmt in ("geojson", "gpx"):
+            reasons.append(
+                f"{item.staged_name}: column mapping applies to "
+                "CSV/NDJSON/Parquet only"
+            )
+            continue
+
+        mapping: dict[str, Any] = item.mapping.model_dump(exclude_none=True)
+        # Prefer explicit vehicle_id; accept agent_id alias from the sheet.
+        if not mapping.get("vehicle_id") and mapping.get("agent_id"):
+            mapping["vehicle_id"] = mapping["agent_id"]
+        mapping.pop("agent_id", None)
+
+        try:
+            sniff, mode_map = sniff_from_mapping(
+                path=staged_path, fmt=fmt, mapping=mapping,
+            )
+            source_id = item.source_id or slugify_source_id(
+                staged_path.stem, existing
+            )
+            # Re-slug if caller-supplied id collides with a different stem.
+            if source_id in existing and source_id != staged_path.stem:
+                # Same staged stem re-upload: allow replacing that source_id.
+                pass
+            label = Path(item.filename or staged_path.stem).stem
+            cfg = generate_source_config(
+                source_id=source_id,
+                fmt=fmt,
+                staged_rel_path=f"uploads/{staged_path.name}",
+                label=label,
+                sniff=sniff,
+                mode_map=mode_map,
+            )
+        except UploadConfigError as exc:
+            reasons.extend(f"{item.staged_name}: {r}" for r in exc.reasons)
+            continue
+        except Exception as exc:
+            reasons.append(f"{item.staged_name}: {type(exc).__name__}: {exc}")
+            continue
+
+        existing.add(source_id)
+        prepared.append({
+            "filename": item.filename or staged_path.name,
+            "source_id": source_id,
+            "format": fmt,
+            "staged_path": staged_path,
+            "cfg": cfg,
+        })
+
+    if reasons:
+        raise HTTPException(status_code=422, detail={"reasons": reasons})
+    if not prepared:
+        raise HTTPException(status_code=422, detail="no valid files to confirm")
+
+    return _start_job(prepared)
 
 
 def _job_view(job: dict) -> dict:

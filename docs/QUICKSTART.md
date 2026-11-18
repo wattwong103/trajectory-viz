@@ -82,8 +82,11 @@ What happens:
    content-sniffed as GeoJSON vs NDJSON).
 2. For CSV/NDJSON/Parquet, lon/lat/time/id columns are identified by name
    heuristics; GeoJSON and GPX normalize automatically. If the columns can't
-   be identified, you get a 422 with the exact reasons — rename the columns or
-   write an explicit `sources.yaml` block instead (see below).
+   be identified, a **column-mapping sheet** opens (census of your headers +
+   the candidates that were tried) — assign longitude / latitude / time /
+   agent id (and optional mode), confirm, and ingest continues. Well-named
+   files still go one-click with no wizard. You can also rename columns or
+   write an explicit `sources.yaml` block (see below).
 3. Trips are synthesized from the points (30-minute gap split) and ingest runs
    as a background job with a live progress card.
 4. When the job finishes, the new source simply appears — **Sources** button,

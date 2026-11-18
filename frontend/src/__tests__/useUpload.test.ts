@@ -82,6 +82,51 @@ describe('useUpload', () => {
     ]);
   });
 
+  it('422 mapping_required opens the mapping state with census files', async () => {
+    const mappingFile = {
+      filename: 'opaque.csv',
+      source_id: 'opaque',
+      format: 'csv',
+      staged_name: 'opaque.csv',
+      columns: [{ name: 'xpos', sample_type: 'number', samples: ['1'], guessed_role: null, time_kind: null }],
+      guesses: { lon: null, lat: null, time: null, vehicle_id: null, name: null, mode: null, time_kind: null },
+      reasons: ['could not identify longitude/latitude columns'],
+      tried_candidates: { lon: ['lon'], lat: ['lat'], time: ['ts'], vehicle_id: ['id'] },
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(res(422, {
+      detail: {
+        reasons: ['opaque.csv: could not identify longitude/latitude columns'],
+        mapping_required: true,
+        files: [mappingFile],
+      },
+    }));
+    const { result } = renderHook(() => useUpload({ pollMs: 5 }));
+    await act(async () => { result.current.upload([makeFile('opaque.csv')]); });
+    expect(result.current.state).toBe('mapping');
+    expect(result.current.mappingFiles).toHaveLength(1);
+    expect(result.current.mappingFiles[0].staged_name).toBe('opaque.csv');
+  });
+
+  it('confirmMapping posts mapping and polls the job', async () => {
+    const mock = vi.mocked(fetch);
+    mock
+      .mockResolvedValueOnce(res(202, { job_id: 'job-2', status: 'queued', files: [] }))
+      .mockResolvedValueOnce(res(200, DONE_JOB));
+    const { result } = renderHook(() => useUpload({ pollMs: 5 }));
+    await act(async () => {
+      await result.current.confirmMapping([{
+        staged_name: 'opaque.csv',
+        source_id: 'opaque',
+        filename: 'opaque.csv',
+        mapping: { lon: 'xpos', lat: 'ypos', time: 'when', vehicle_id: 'device' },
+      }]);
+    });
+    await waitFor(() => expect(result.current.state).toBe('done'), { timeout: 2000 });
+    expect(String(mock.mock.calls[0][0])).toContain('/api/ingest/upload/confirm');
+    const init = mock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body)).files[0].mapping.lon).toBe('xpos');
+  });
+
   it('422 with string detail still produces one reason', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(res(422, { detail: 'no files uploaded' }));
     const { result } = renderHook(() => useUpload({ pollMs: 5 }));

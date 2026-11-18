@@ -313,11 +313,12 @@ time:
 
 ---
 
-## 7. Upload path — column heuristics (no YAML needed)
+## 7. Upload path — column heuristics + interactive mapping
 
 > **This section applies ONLY to the upload-and-go path** (`POST /api/ingest/upload`
 > — drag-and-drop, the ⬆ Upload button, the empty-state drop area). It describes
-> how the backend *guesses* a source config when you don't write one. An explicit
+> how the backend *guesses* a source config when you don't write one, and how the
+> interactive mapping sheet finishes the job when heuristics miss. An explicit
 > `sources.yaml` mapping (section 6) always gives full control and is unaffected
 > by these heuristics.
 
@@ -339,6 +340,7 @@ wins; the file's original casing is used downstream):
 | Timestamp | `timestamp`, `time`, `ts`, `datetime`, `epoch`, `created_at` |
 | Vehicle/device id | `vehicle_id`, `device_id`, `track_id`, `agent_id`, `objectid`, `id`, `mmsi`, `trip_id`, `entity_id`, `vehicle` |
 | Name (optional) | `vehicle_name`, `name`, `label` |
+| Mode (optional) | `mode`, `transport_mode`, `travel_mode`, `modality`, `transportation_mode` |
 
 Matches are validated against the sampled values:
 
@@ -348,9 +350,29 @@ Matches are validated against the sampled values:
   `iso` (parsed as TIMESTAMPTZ); all-numeric within the 2000–2100 epoch range →
   `epoch_s` or `epoch_ms` by magnitude. Anything else → the column is rejected.
 
-If lon/lat, time, or id can't be identified, the upload fails with **422 and a
-per-file list of reasons** naming exactly the candidates that were tried — fix
-by renaming the columns, or by writing an explicit YAML block (section 6).
+**Happy path:** if lon/lat, time, and id are identified, ingest starts immediately
+(one-click) — same as before.
+
+**Mapping path:** if a required role is missing, the API returns **422** with
+`mapping_required: true`, the tried candidate lists, and a per-file **column
+census** (names, sample types, sample values, guessed roles). The staged file
+is kept under `uploads/`. The UI opens a mapping sheet where you assign roles
+`lon | lat | time | agent_id | name | mode | ignore`, optionally set `time_kind`
+(`iso` / `epoch_ms` / `epoch_s`), and optionally paste a tiny `mode_map` JSON
+for int→label codes. Confirm posts to `POST /api/ingest/upload/confirm` and
+runs the same ingest job pipeline; the generated `SourceConfig` is written to
+`sources.uploads.yaml` (hand-written registries are never mutated).
+
+Mode handling on upload:
+
+- Mapped **string** mode → `columns.waypoints.mode` (varchar); stored/filtered
+  as string labels.
+- Optional **`mode_map`** → column treated as int `transport_mode` +
+  `mode_map` (lab int codes only when you supply the map — no invented PFLOW
+  ints).
+
+You can still rename columns or write an explicit YAML block (section 6) instead
+of using the sheet.
 
 Generated defaults for accepted uploads: `source_id` slugified from the filename
 stem, `vehicle_key_template` `{source_id}:{vehicle_id}`, `gap_split` trip
