@@ -10,6 +10,8 @@ export interface ClustersTabProps {
   loading: boolean;
   loadClusters: () => void;
   clusterResult: ClusterResult | null;
+  /** Clear OD-distance clusters from the map + panel. */
+  onClearClusters?: () => void;
   routeSimSampleSize: number;
   setRouteSimSampleSize: (n: number) => void;
   routeSimEps: number;
@@ -23,6 +25,7 @@ export interface ClustersTabProps {
 
 export const ClustersTab: React.FC<ClustersTabProps> = ({
   clusterAlgo, setClusterAlgo, loading, loadClusters, clusterResult,
+  onClearClusters,
   routeSimSampleSize, setRouteSimSampleSize, routeSimEps, setRouteSimEps,
   routeSimMinSamples, setRouteSimMinSamples, routeSimLoading,
   loadRouteSimilarity, routeSimResult,
@@ -54,8 +57,20 @@ export const ClustersTab: React.FC<ClustersTabProps> = ({
             {clusterAlgo === 'od_distance' && (
               <>
                 <p style={styles.desc}>Groups similar trips by OD pattern, distance, and time.</p>
+                {clusterResult && (
+                  <div style={styles.mapActive} role="status">
+                    {clusterResult.num_clusters} clusters on map
+                  </div>
+                )}
                 <button onClick={loadClusters} style={styles.actionBtn} disabled={loading}>
-                  {loading ? 'Clustering...' : 'Run Clustering'}
+                  {loading ? 'Clustering…' : clusterResult ? 'Re-run Clustering' : 'Run Clustering'}
+                </button>
+                <button
+                  onClick={onClearClusters}
+                  style={styles.clearBtn}
+                  disabled={!clusterResult}
+                >
+                  Clear map
                 </button>
                 {clusterResult && (
                   <div style={styles.results}>

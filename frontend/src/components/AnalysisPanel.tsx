@@ -101,6 +101,11 @@ interface AnalysisPanelProps {
   onLinkDensity: (links: LinkDensityItem[]) => void;
   /** Fleet-comparison grid-diff toggle (⇄ tab) — null clears the overlay. */
   onCompareGrid?: (grid: CompareGridResponse | null) => void;
+  /** Live map-overlay counts so tabs can show “on map” status (App owns state). */
+  odFlowCount?: number;
+  densityCount?: number;
+  linkCount?: number;
+  mapHasClusters?: boolean;
   // Sprint A1a — Trajectory Details
   selectedTrajectory?: Trajectory | null;
   onClearSelectedTrajectory?: () => void;
@@ -144,6 +149,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   vehicleType, city, simulationDay, goodsType, minHour, maxHour,
   hasData, insights, insightsLoading, insightsError = null,
   onODFlows, onDensity, onClusters, onLinkDensity, onCompareGrid,
+  odFlowCount = 0, densityCount = 0, linkCount = 0, mapHasClusters = false,
   selectedTrajectory, onClearSelectedTrajectory,
   zoneBBox, zoneTrips, onZoneResult, onClearZone,
   scenarioActive = false, onPedestrianize, onClearScenario,
@@ -181,6 +187,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   // Shared failure line for the temporal tab's three parallel fetches —
   // without it a backend error leaves three empty charts and no explanation.
   const [temporalError, setTemporalError] = useState<string | null>(null);
+  const [temporalLoading, setTemporalLoading] = useState(false);
   const [chainData, setChainData] = useState<Array<{ chain_length: number; vehicle_count: number }>>([]);
   const [clusterResult, setClusterResult] = useState<ClusterResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -239,20 +246,49 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
 
   // Auto-load temporal data when panel opens
   useEffect(() => {
-    if (hasData && tab === 'temporal') {
-      setTemporalError(null);
-      const onFail = (e: unknown) =>
+    if (!hasData || tab !== 'temporal') return;
+    let cancelled = false;
+    setTemporalError(null);
+    setTemporalLoading(true);
+    const onFail = (e: unknown) => {
+      if (!cancelled) {
         setTemporalError(friendlyFetchError(String((e as Error)?.message ?? e)).text);
-      fetchHourlyDepartures(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setHourlyData).catch(onFail);
-      fetchTemporalPeaks(vehicleType, city, simulationDay, goodsType, minHour, maxHour).then(setPeaksData).catch(onFail);
-      fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour).then(setDurationData).catch(onFail);
-    }
+      }
+    };
+    Promise.all([
+      fetchHourlyDepartures(vehicleType, city, simulationDay, goodsType, minHour, maxHour)
+        .then(d => { if (!cancelled) setHourlyData(d); })
+        .catch(onFail),
+      fetchTemporalPeaks(vehicleType, city, simulationDay, goodsType, minHour, maxHour)
+        .then(d => { if (!cancelled) setPeaksData(d); })
+        .catch(onFail),
+      fetchDurationDistribution(vehicleType, city, simulationDay, 10, goodsType, minHour, maxHour)
+        .then(d => { if (!cancelled) setDurationData(d); })
+        .catch(onFail),
+    ]).finally(() => {
+      if (!cancelled) setTemporalLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [hasData, vehicleType, city, simulationDay, goodsType, minHour, maxHour, tab]);
 
-  // Auto-switch to Detail tab when a trajectory is clicked on the map.
+  // Map click → Detail: expand the panel if collapsed (narrow) and open Trip.
   useEffect(() => {
-    if (selectedTrajectory) setTab('detail');
+    if (!selectedTrajectory) return;
+    setTab('detail');
+    setCollapsed(false);
   }, [selectedTrajectory]);
+
+  // Keep local overlay mirrors in sync when App clears via StatusBanner /
+  // filter change (App is source of truth for what’s on the map).
+  useEffect(() => {
+    if (!mapHasClusters) setClusterResult(null);
+  }, [mapHasClusters]);
+  useEffect(() => {
+    if (linkCount === 0) {
+      setLinkData(null);
+      linkLoadedRef.current = false;
+    }
+  }, [linkCount]);
 
   // Auto-load F1 metric distributions when the Metrics tab is opened.
   // Three histograms fire in parallel (each is one DuckDB query).
@@ -482,22 +518,30 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         <button onClick={() => setCollapsed(true)} style={styles.closeBtn}>&times;</button>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — cyan dot = that tab currently has a live map overlay */}
       <div style={styles.tabs}>
         {(Object.keys(TAB_LABELS) as Tab[])
           // 'detail' tab only shown when a trajectory is selected (Sprint A1a)
           .filter(t => t !== 'detail' || selectedTrajectory)
-          .map(t => (
+          .map(t => {
+          const mapLive =
+            (t === 'od' && odFlowCount > 0) ||
+            (t === 'density' && densityCount > 0) ||
+            (t === 'clusters' && (mapHasClusters || !!clusterResult)) ||
+            (t === 'links' && linkCount > 0);
+          return (
           <button
             key={t}
             style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}
             onClick={() => { setTab(t); setActionError(null); }}
-            title={TAB_TITLES[t]}
-            aria-label={TAB_TITLES[t]}
+            title={mapLive ? `${TAB_TITLES[t]} (on map)` : TAB_TITLES[t]}
+            aria-label={mapLive ? `${TAB_TITLES[t]} (on map)` : TAB_TITLES[t]}
           >
             {TAB_LABELS[t]}
+            {mapLive && <span style={styles.tabDot} aria-hidden />}
           </button>
-        ))}
+          );
+        })}
       </div>
 
       {/* Tab content */}
@@ -520,6 +564,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         {tab === 'temporal' && (
           <TemporalTab
             temporalError={temporalError}
+            temporalLoading={temporalLoading}
             peaksData={peaksData}
             hourlyData={hourlyData}
             durationData={durationData}
@@ -541,6 +586,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             loading={loading}
             onLoad={loadODFlows}
             onClear={() => onODFlows([])}
+            activeCount={odFlowCount}
           />
         )}
 
@@ -551,6 +597,7 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             loading={loading}
             loadDensity={loadDensity}
             onClearDensity={() => onDensity([])}
+            activeCount={densityCount}
             hotspotsLoading={hotspotsLoading}
             loadHotspots={loadHotspots}
             hotspotsData={hotspotsData}
@@ -564,6 +611,10 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             loading={loading}
             loadClusters={loadClusters}
             clusterResult={clusterResult}
+            onClearClusters={() => {
+              setClusterResult(null);
+              onClusters(null);
+            }}
             routeSimSampleSize={routeSimSampleSize}
             setRouteSimSampleSize={setRouteSimSampleSize}
             routeSimEps={routeSimEps}

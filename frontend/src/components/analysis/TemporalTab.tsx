@@ -9,13 +9,15 @@ import { styles } from './styles';
 
 export interface TemporalTabProps {
   temporalError: string | null;
+  /** True while the three temporal fetches are in flight. */
+  temporalLoading?: boolean;
   peaksData: { peaks: Array<{ hour: number; count: number }>; mean: number; std: number; threshold: number } | null;
   hourlyData: HourlyData[];
   durationData: Array<{ distance_km: number; count: number; vehicle_type: string }>;
 }
 
 export const TemporalTab: React.FC<TemporalTabProps> = ({
-  temporalError, peaksData, hourlyData, durationData,
+  temporalError, temporalLoading = false, peaksData, hourlyData, durationData,
 }) => (
           <div>
             <div style={styles.subtitle}>Hourly Departures</div>
@@ -29,7 +31,9 @@ export const TemporalTab: React.FC<TemporalTabProps> = ({
                 <span style={{ color: '#888' }}>(threshold: {peaksData.threshold.toLocaleString(undefined, { maximumFractionDigits: 0 })})</span>
               </div>
             )}
-            {hourlyData.length > 0 ? (
+            {temporalLoading && hourlyData.length === 0 ? (
+              <SkeletonLines />
+            ) : hourlyData.length > 0 ? (
               <ResponsiveContainer width="100%" height={140}>
                 <BarChart data={hourlyData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                   <XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#888' }} interval={2} />
@@ -52,9 +56,11 @@ export const TemporalTab: React.FC<TemporalTabProps> = ({
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            ) : (
-              <SkeletonLines />
-            )}
+            ) : temporalError === null ? (
+              <div style={styles.empty}>
+                No hourly departures for the current filters.
+              </div>
+            ) : null}
             {durationData.length > 0 && (
               <>
                 <div style={{ ...styles.subtitle, marginTop: 10 }}>Distance Distribution</div>

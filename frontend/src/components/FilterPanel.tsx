@@ -168,6 +168,31 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const noData = !loading && totalTrips === 0;
   const allFilteredOut = !loading && totalTrips > 0 && tripCount === 0 && trajectoryCount === 0;
 
+  // Compact reminder of non-default filters (everyday research: what’s scoping the map).
+  const activeFilterChips: string[] = [];
+  if (filter.vehicleType) {
+    const srcLabel = filterOptions?.sources?.find(s => s.source_id === filter.vehicleType)?.label
+      ?? filter.vehicleType;
+    activeFilterChips.push(srcLabel);
+  }
+  if (filter.minHour !== 0 || filter.maxHour !== 23) {
+    activeFilterChips.push(`${filter.minHour}–${filter.maxHour}h`);
+  }
+  if (filter.city) activeFilterChips.push(filter.city);
+  if (filter.simulationDay !== undefined) activeFilterChips.push(`day ${filter.simulationDay}`);
+  if (filter.goodsType) activeFilterChips.push(formatGoodsType(filter.goodsType));
+  if (filter.modeLabels?.length) {
+    activeFilterChips.push(`${filter.modeLabels.length} modes`);
+  } else if (filter.transportModes?.length) {
+    activeFilterChips.push(`${filter.transportModes.length} modes`);
+  }
+  if (filter.minSpeed !== undefined || filter.maxSpeed !== undefined
+      || filter.maxDwellMinutes !== undefined
+      || filter.minDetourRatio !== undefined || filter.maxDetourRatio !== undefined) {
+    activeFilterChips.push('F1 ranges');
+  }
+  if (filter.scenario) activeFilterChips.push('pedestrianize');
+
   // POI chips (universal-trajectory Phase 2): aggregate the per-(source_key,
   // category) catalogue rows into one chip per category NAME — duplicate
   // names across POI sources share a chip and toggle together (same keying
@@ -594,12 +619,29 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         )}
       </div>
 
+      {activeFilterChips.length > 0 && (
+        <div style={styles.activeFilters} aria-label="Active filters">
+          {activeFilterChips.map(chip => (
+            <span key={chip} style={styles.activeFilterChip}>{chip}</span>
+          ))}
+        </div>
+      )}
+
       {/* Currently loaded / empty state */}
       <div style={styles.loaded}>
         {loading ? (
-          <div>
-            <div style={styles.skeletonLine} />
-          </div>
+          (trajectoryCount > 0 || tripCount > 0) ? (
+            <div>
+              {trajectoryCount > 0 && <div>{trajectoryCount} trajectories</div>}
+              {tripCount > 0 && <div>{tripCount} trip points</div>}
+              <div style={styles.updatingHint}>Updating matches…</div>
+            </div>
+          ) : (
+            <div>
+              <div style={styles.skeletonLine} />
+              <div style={{ ...styles.updatingHint, marginTop: 4 }}>Loading matches…</div>
+            </div>
+          )
         ) : allFilteredOut ? (
           <div style={styles.emptyState}>
             No trips match current filters.
@@ -619,6 +661,11 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           <>
             {trajectoryCount > 0 && <div>{trajectoryCount} trajectories</div>}
             {tripCount > 0 && <div>{tripCount} trip points</div>}
+            {trajectoryCount === 0 && tripCount === 0 && totalTrips > 0 && (
+              <div style={{ color: '#777', fontSize: 11 }}>
+                Waiting for map sample…
+              </div>
+            )}
           </>
         )}
         {error && (() => {
@@ -997,6 +1044,25 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#888',
     marginBottom: 8,
     lineHeight: 1.5,
+  },
+  updatingHint: {
+    fontSize: 10,
+    color: '#4fc3f7',
+    marginTop: 2,
+  },
+  activeFilters: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: 4,
+    marginBottom: 8,
+  },
+  activeFilterChip: {
+    fontSize: 10,
+    color: '#9ab4c8',
+    background: 'rgba(79,195,247,0.08)',
+    border: '1px solid rgba(79,195,247,0.22)',
+    borderRadius: 4,
+    padding: '1px 6px',
   },
   error: {
     color: '#ef5350',

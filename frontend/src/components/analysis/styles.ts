@@ -105,6 +105,26 @@ export const styles: Record<string, CSSProperties> = {
     textAlign: 'center' as const,
     padding: 20,
   },
+  /** Live map-overlay status chip inside analysis tabs. */
+  mapActive: {
+    fontSize: 10,
+    color: '#9fd8f0',
+    background: 'rgba(79, 195, 247, 0.10)',
+    border: '1px solid rgba(79, 195, 247, 0.35)',
+    borderRadius: 4,
+    padding: '4px 8px',
+    marginBottom: 6,
+    lineHeight: 1.4,
+  },
+  tabDot: {
+    display: 'inline-block',
+    width: 5,
+    height: 5,
+    borderRadius: '50%',
+    background: '#4fc3f7',
+    marginLeft: 4,
+    verticalAlign: 'middle' as const,
+  },
   errorBox: {
     fontSize: 11, color: '#ff9a9a',
     background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.35)',
