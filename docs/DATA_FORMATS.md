@@ -5,10 +5,13 @@ ABM output. This document is the field-level reference for every supported
 input format and the `sources.yaml` cookbook for wiring your own data.
 
 **Canonical names** (API / docs): `source_id` (Sources), `agent_key`
-(physical column `vehicle_key`), `mode` (string labels; PFLOW ints via
-`mode_map`). Query param `vehicle_type=` is a deprecated alias of
-`source_id=` — same concept, not a second dimension. See
-[ARCHITECTURE.md → Canonical vocabulary](ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-a).
+(physical column `vehicle_key`), `agent_id` (VARCHAR native id; `vehicle_id`
+int/hash fallback), `mode` (VARCHAR string labels; optional PFLOW int
+`transport_mode` / `mode_code` via `mode_map`). Query param `modes=` filters
+string labels; `transport_modes=` remains for int codes. Query param
+`vehicle_type=` is a deprecated alias of `source_id=` — same concept, not a
+second dimension. See
+[ARCHITECTURE.md → Canonical vocabulary](ARCHITECTURE.md#canonical-vocabulary-universal-forms--phase-abc).
 
 Supported formats: **CSV**, **GeoJSON**, **GPX**, **NDJSON**, **Parquet** —
 plus static **POI layers** (any of the same formats). Format is auto-detected

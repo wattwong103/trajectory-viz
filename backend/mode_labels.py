@@ -1,8 +1,9 @@
-"""Default transport-mode display labels (PFLOW int codes → string labels).
+"""Transport-mode display labels and int↔string helpers.
 
-Canonical public language is the string label (`Walk`, `Bike`, …). Integer
-`transport_mode` codes remain the filter wire format until schema v0.3 adds
-string mode columns. Per-source overrides live in sources.yaml `mode_map`.
+Canonical public language is the **string label** (`Walk`, `Bike`, …) stored
+in `trips.mode`. Integer `transport_mode` codes remain as optional PFLOW
+`mode_code` via sources.yaml `mode_map`. Per-source overrides live in
+`mode_map` (keys are strings for YAML friendliness).
 """
 
 # Mirrors frontend/src/transportModes.ts TRANSPORT_MODE_META labels.
@@ -39,3 +40,48 @@ def merge_mode_maps(maps: list[dict[str, str] | None]) -> dict[str, str]:
             if sk not in merged:
                 merged[sk] = v
     return merged
+
+
+def reverse_mode_map(mode_map: dict[str, str] | None = None) -> dict[str, int]:
+    """Map label (case-insensitive) → int code.
+
+    Prefer explicit `mode_map` values; fall back to DEFAULT_MODE_LABELS.
+    First-seen label wins when duplicates exist.
+    """
+    rev: dict[str, int] = {}
+    for code, label in DEFAULT_MODE_LABELS.items():
+        key = label.casefold()
+        if key not in rev:
+            rev[key] = code
+    if mode_map:
+        for code_s, label in mode_map.items():
+            try:
+                code = int(code_s)
+            except (TypeError, ValueError):
+                continue
+            key = str(label).casefold()
+            if key not in rev:
+                rev[key] = code
+    return rev
+
+
+def mode_label_case_sql(
+    transport_mode_expr: str,
+    mode_map: dict[str, str] | None = None,
+) -> str:
+    """SQL CASE expression: int transport_mode → string mode label."""
+    mapping = dict(DEFAULT_MODE_LABELS)
+    if mode_map:
+        for k, v in mode_map.items():
+            try:
+                mapping[int(k)] = v
+            except (TypeError, ValueError):
+                continue
+    arms = " ".join(
+        f"WHEN {code} THEN '{label.replace(chr(39), chr(39)+chr(39))}'"
+        for code, label in sorted(mapping.items())
+    )
+    return (
+        f"CASE {transport_mode_expr} {arms} "
+        f"ELSE 'mode ' || CAST({transport_mode_expr} AS VARCHAR) END"
+    )

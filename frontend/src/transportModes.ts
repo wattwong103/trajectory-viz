@@ -6,9 +6,9 @@
  * the full transportMode / transport_mode name.
  *
  * Public UI language is the **string label** (from filter-options `modes[]` /
- * sources.yaml `mode_map`). Integer codes remain the filter wire format for
- * PFLOW-shaped datasets until schema v0.3. The value shown here is always
- * the TRIP's mode (trips.transport_mode) — waypoint modes are uniform per
+ * sources.yaml `mode_map` / trips.mode). Phase C prefers `modes=` labels on
+ * the wire; integer `transport_modes=` remains for PFLOW mode_code compat.
+ * The value shown is always the TRIP's mode — waypoint modes are uniform per
  * source in router output and are never surfaced.
  */
 
@@ -37,7 +37,8 @@ export function transportModeColor(m?: number | null): [number, number, number] 
 
 /**
  * Prefer labeled `modes[]` from filter-options; fall back to transport_modes
- * counts + default PFLOW labels. Filter chips still submit integer ids.
+ * counts + default PFLOW labels. Chips submit string labels (and ints when
+ * a PFLOW mode_code id is present).
  */
 export function resolveModeOptions(
   modes?: ModeOption[] | null,

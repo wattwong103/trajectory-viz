@@ -72,8 +72,12 @@ function encodeHash(filter: FilterState): string {
   if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
   if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
   if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
-  // Phase 1 — transport-mode selection + color scheme (short keys tm/cb)
-  if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
+  // Phase 1/C — mode selection + color scheme (tm= ints, ml= labels, cb)
+  if (filter.modeLabels?.length) {
+    parts.push(`ml=${filter.modeLabels.map(encodeURIComponent).join(',')}`);
+  } else if (filter.transportModes?.length) {
+    parts.push(`tm=${filter.transportModes.join(',')}`);
+  }
   if (filter.colorBy === 'transportMode') parts.push('cb=tm');
   // Phase 4 — scenario: sc=p:{w},{s},{e},{n}
   if (filter.scenario) {
@@ -97,12 +101,24 @@ function decodeScenario(params: URLSearchParams): FilterState['scenario'] {
 // tm= value: comma-separated small ints, capped at 16 entries (mirrors the
 // backend TripFilters pattern ^\d{1,2}(,\d{1,2}){0,15}$).
 const TM_RE = /^\d{1,2}(,\d{1,2}){0,15}$/;
+// ml= value: comma-separated mode labels (Phase C canonical string modes).
+const ML_RE = /^[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}(,[A-Za-z0-9][A-Za-z0-9 _\-]{0,31}){0,15}$/;
 
 function decodeTransportModes(params: URLSearchParams): number[] | undefined {
   const tm = params.get('tm');
   if (!tm || !TM_RE.test(tm)) return undefined;
   const modes = [...new Set(tm.split(',').map(Number))];
   return modes.length > 0 ? modes : undefined;
+}
+
+function decodeModeLabels(params: URLSearchParams): string[] | undefined {
+  const ml = params.get('ml');
+  if (!ml) return undefined;
+  const decoded = ml.split(',').map(s => decodeURIComponent(s.trim())).filter(Boolean);
+  if (!decoded.length) return undefined;
+  // Re-join to validate the same pattern the backend accepts.
+  if (!ML_RE.test(decoded.join(','))) return undefined;
+  return [...new Set(decoded)];
 }
 
 function decodeHash(hash: string): FilterState {
@@ -125,6 +141,7 @@ function decodeHash(hash: string): FilterState {
     minDetourRatio: numParam(params, 'mr'),
     maxDetourRatio: numParam(params, 'xr'),
     transportModes: decodeTransportModes(params),
+    modeLabels: decodeModeLabels(params),
     colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
     scenario: decodeScenario(params),
   };
@@ -616,8 +633,10 @@ export default function App() {
   const layerAvailability = useMemo<LayerAvailabilityContext>(() => {
     const caps = filterOptions?.capabilities;
     const labeled = filterOptions?.modes ?? [];
+    // Phase C: modes[].id may be null for string-only datasets — drop nulls
+    // for LayerAvailabilityContext.transportModes (number[] / PFLOW codes).
     const modeIds = labeled.length > 0
-      ? labeled.map(m => m.id)
+      ? labeled.map(m => m.id).filter((id): id is number => id != null)
       : (filterOptions?.transport_modes ?? []).map(m => m.mode);
     const hasDensityHourly = caps?.has_density_hourly ?? null;
     // Capabilities win when known; probe still supplies 409 fix-it detail.
@@ -856,9 +875,14 @@ export default function App() {
         attrKeys={filterOptions?.capabilities?.attr_keys ?? []}
         modeLabels={(filterOptions?.modes ?? []).map(m => m.label)}
         datasetTransportModes={
-          (filterOptions?.modes ?? []).map(m => m.id).length > 0
-            ? (filterOptions?.modes ?? []).map(m => m.id)
-            : (filterOptions?.transport_modes ?? []).map(m => m.mode)
+          (() => {
+            const fromModes = (filterOptions?.modes ?? [])
+              .map(m => m.id)
+              .filter((id): id is number => id != null);
+            return fromModes.length > 0
+              ? fromModes
+              : (filterOptions?.transport_modes ?? []).map(m => m.mode);
+          })()
         }
         colorBy={filter.colorBy ?? 'source'}
         linkLoadNonce={linkLoadNonce}

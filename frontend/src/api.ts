@@ -33,6 +33,11 @@ function transportModesParam(modes?: number[]): string | undefined {
   return modes && modes.length > 0 ? modes.join(',') : undefined;
 }
 
+// Phase C — canonical string mode labels (trips.mode).
+function modeLabelsParam(labels?: string[]): string | undefined {
+  return labels && labels.length > 0 ? labels.join(',') : undefined;
+}
+
 // Pedestrianization scenario (Phase 4) — same field names on GET and POST.
 type Scenario = FilterState['scenario'];
 
@@ -58,6 +63,7 @@ export type TripFilterParams = {
   minHour?: number;
   maxHour?: number;
   transportModes?: number[];
+  modeLabels?: string[];
   scenario?: Scenario;
   minSpeed?: number;
   maxSpeed?: number;
@@ -74,8 +80,11 @@ export function appendTripFilters(params: URLSearchParams, f: TripFilterParams):
   if (f.goodsType) params.set('goods_type', f.goodsType);
   if (f.minHour !== undefined) params.set('min_hour', String(f.minHour));
   if (f.maxHour !== undefined) params.set('max_hour', String(f.maxHour));
+  const ml = modeLabelsParam(f.modeLabels);
+  if (ml) params.set('modes', ml);
   const tm = transportModesParam(f.transportModes);
-  if (tm) params.set('transport_modes', tm);
+  // Prefer canonical modes=; still send ints when no string labels set.
+  if (!ml && tm) params.set('transport_modes', tm);
   appendScenarioParams(params, f.scenario);
   if (f.minSpeed !== undefined) params.set('min_speed', String(f.minSpeed));
   if (f.maxSpeed !== undefined) params.set('max_speed', String(f.maxSpeed));
@@ -93,7 +102,10 @@ export function tripFilterBody(f: TripFilterParams): Record<string, unknown> {
     goods_type: f.goodsType || null,
     min_hour: f.minHour,
     max_hour: f.maxHour,
-    transport_modes: transportModesParam(f.transportModes) ?? null,
+    modes: modeLabelsParam(f.modeLabels) ?? null,
+    transport_modes: modeLabelsParam(f.modeLabels)
+      ? null
+      : (transportModesParam(f.transportModes) ?? null),
     min_speed: f.minSpeed ?? null,
     max_speed: f.maxSpeed ?? null,
     max_dwell_minutes: f.maxDwellMinutes ?? null,
@@ -199,11 +211,12 @@ export async function fetchTripSample(
   maxDwellMinutes?: number,
   minDetourRatio?: number,
   maxDetourRatio?: number,
+  modeLabels?: string[],
 ): Promise<TripResponse> {
   const params = new URLSearchParams({ n: String(n) });
   appendTripFilters(params, {
     vehicleType, city, simulationDay, goodsType, minHour, maxHour,
-    transportModes, scenario, minSpeed, maxSpeed, maxDwellMinutes,
+    transportModes, modeLabels, scenario, minSpeed, maxSpeed, maxDwellMinutes,
     minDetourRatio, maxDetourRatio,
   });
   return fetchJson(`/api/trips/sample?${params}`);
@@ -213,20 +226,22 @@ export async function queryTrips(filter: FilterState, limit: number = 2000): Pro
   return fetchJson('/api/trips/query', {
     method: 'POST',
     body: JSON.stringify({
-      source_id: filter.vehicleType === 'all' ? null : filter.vehicleType,
-      min_hour: filter.minHour,
-      max_hour: filter.maxHour,
-      goods_type: filter.goodsType || null,
-      city: filter.city || null,
-      simulation_day: filter.simulationDay ?? null,
-      // F1 advanced filters (Phase 2 Step 2.2)
-      min_speed: filter.minSpeed ?? null,
-      max_speed: filter.maxSpeed ?? null,
-      max_dwell_minutes: filter.maxDwellMinutes ?? null,
-      min_detour_ratio: filter.minDetourRatio ?? null,
-      max_detour_ratio: filter.maxDetourRatio ?? null,
-      transport_modes: transportModesParam(filter.transportModes) ?? null,
-      ...scenarioBody(filter.scenario),
+      ...tripFilterBody({
+        vehicleType: filter.vehicleType,
+        city: filter.city,
+        simulationDay: filter.simulationDay,
+        goodsType: filter.goodsType,
+        minHour: filter.minHour,
+        maxHour: filter.maxHour,
+        transportModes: filter.transportModes,
+        modeLabels: filter.modeLabels,
+        minSpeed: filter.minSpeed,
+        maxSpeed: filter.maxSpeed,
+        maxDwellMinutes: filter.maxDwellMinutes,
+        minDetourRatio: filter.minDetourRatio,
+        maxDetourRatio: filter.maxDetourRatio,
+        scenario: filter.scenario,
+      }),
       limit,
     }),
   });
@@ -250,12 +265,13 @@ export async function fetchTrajectorySample(
   maxDwellMinutes?: number,
   minDetourRatio?: number,
   maxDetourRatio?: number,
+  modeLabels?: string[],
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({ n: String(n) });
   if (includeSegments) params.set('include_segments', 'true');
   appendTripFilters(params, {
     vehicleType, city, simulationDay, goodsType, minHour, maxHour,
-    transportModes, scenario, minSpeed, maxSpeed, maxDwellMinutes,
+    transportModes, modeLabels, scenario, minSpeed, maxSpeed, maxDwellMinutes,
     minDetourRatio, maxDetourRatio,
   });
   return fetchJson(`/api/trajectories/sample?${params}`);

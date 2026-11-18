@@ -148,3 +148,24 @@ def test_standalone_db_never_consults_the_workspace(isolated_resolver, monkeypat
 
     assert config.get_viz_db_path() == db
     assert config._pflow_home is None  # the resolver never ran
+
+
+def test_trajectory_viz_db_alias_beats_pflow_viz_db(isolated_resolver, monkeypatch):
+    """Phase C: TRAJECTORY_VIZ_DB is checked before PFLOW_VIZ_DB."""
+    monkeypatch.setattr(config, "_REPO_ROOT", _make_workspace(isolated_resolver / "PFLOW"))
+    canon = isolated_resolver / "canon" / "viz.duckdb"
+    legacy = isolated_resolver / "legacy" / "viz.duckdb"
+    monkeypatch.setenv("TRAJECTORY_VIZ_DB", str(canon))
+    monkeypatch.setenv("PFLOW_VIZ_DB", str(legacy))
+
+    assert config.get_viz_db_path() == canon
+    assert config._pflow_home is None
+
+
+def test_trajectory_viz_db_alone_enables_standalone(isolated_resolver, monkeypatch):
+    monkeypatch.setattr(config, "_REPO_ROOT", _make_workspace(isolated_resolver / "PFLOW"))
+    db = isolated_resolver / "standalone" / "traj.duckdb"
+    monkeypatch.setenv("TRAJECTORY_VIZ_DB", str(db))
+
+    assert config.get_viz_db_path() == db
+    assert config._pflow_home is None

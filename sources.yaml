@@ -27,6 +27,14 @@ sources:
       latest_only: true
       validation_relative: "validation.csv"
     vehicle_key_template: "truck:{vehicle_id}"
+    # Phase C — int mode_code → canonical string trips.mode labels.
+    mode_map:
+      "0": Walk
+      "1": Bike
+      "2": Bus
+      "3": Car
+      "4": Train
+      "8": Taxi
     render:
       mode: trails
       color: [253, 128, 93]

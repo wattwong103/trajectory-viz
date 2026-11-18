@@ -41,6 +41,16 @@ describe('appendTripFilters', () => {
     expect(params.get('min_hour')).toBe('0');
     expect(params.get('transport_modes')).toBeNull();
   });
+
+  it('prefers modes= labels over transport_modes ints (Phase C)', () => {
+    const params = new URLSearchParams();
+    appendTripFilters(params, {
+      modeLabels: ['Walk', 'Car'],
+      transportModes: [0, 3],
+    });
+    expect(params.get('modes')).toBe('Walk,Car');
+    expect(params.get('transport_modes')).toBeNull();
+  });
 });
 
 describe('tripFilterBody', () => {

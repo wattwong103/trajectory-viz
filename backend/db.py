@@ -73,6 +73,7 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS trips (
             vehicle_id    INTEGER NOT NULL,
+            agent_id      VARCHAR,
             trip_id       BIGINT  NOT NULL,
             starttime     INTEGER NOT NULL,
             start_lon     DOUBLE  NOT NULL,
@@ -80,6 +81,7 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             end_lon       DOUBLE  NOT NULL,
             end_lat       DOUBLE  NOT NULL,
             transport_mode INTEGER,
+            mode          VARCHAR,
             purpose       INTEGER,
             vehicle_type  VARCHAR NOT NULL,
             distance_km   DOUBLE,
@@ -107,6 +109,7 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS waypoints (
             vehicle_id     INTEGER NOT NULL,
+            agent_id       VARCHAR,
             trip_id        BIGINT  NOT NULL,
             unix_time_ms   BIGINT  NOT NULL,
             lon            DOUBLE  NOT NULL,
@@ -114,6 +117,7 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             link_id        VARCHAR,
             vehicle_type   VARCHAR NOT NULL,
             transport_mode INTEGER,
+            mode           VARCHAR,
             purpose        INTEGER,
             goods_type     VARCHAR,
             vehicle_size   VARCHAR,
@@ -136,6 +140,11 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         ("trips",     "speed_avg_kmh", "DOUBLE"),
         ("trips",     "dwell_minutes", "DOUBLE"),
         ("trips",     "detour_ratio",  "DOUBLE"),
+        # v0.3 (Phase C): string agent_id + canonical string mode
+        ("trips",     "agent_id",      "VARCHAR"),
+        ("waypoints", "agent_id",      "VARCHAR"),
+        ("trips",     "mode",          "VARCHAR"),
+        ("waypoints", "mode",          "VARCHAR"),
     ]
     for table, col, typ in _additive_columns:
         try:
@@ -146,6 +155,10 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
             except Exception:
                 pass  # already exists; safe to ignore
+
+    # Best-effort backfill for DBs ingested before Phase C (no --reset needed).
+    # agent_id ← string form of legacy int vehicle_id; mode ← PFLOW default labels.
+    _backfill_phase_c_columns(conn)
 
     # Phase 2B — pulse heatmap aggregate. Built at ingest time (or via
     # `python -m backend.ingest --aggregates-only`) from the 233M-row
@@ -204,15 +217,16 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
-    # Per-DB visualization metadata. Currently one key: 'epoch_anchor' — the
-    # absolute-time anchor (epoch seconds) that unix_time_ms values are
-    # relative to. Written on first ingest; read via get_epoch_anchor().
+    # Per-DB visualization metadata. Keys: 'epoch_anchor' (absolute-time
+    # anchor for unix_time_ms) and 'schema_version' (Phase C / v0.3).
+    # Epoch written on first ingest; schema_version upserted below.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS viz_meta (
             key   VARCHAR PRIMARY KEY,
             value VARCHAR NOT NULL
         )
     """)
+    _ensure_schema_version(conn)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS zones (
@@ -282,6 +296,86 @@ def reset_db() -> None:
     _init_schema(conn)
 
 
+# Schema version written to viz_meta (Phase C / v0.3). Bump when additive
+# contracts change in a way clients should detect.
+SCHEMA_VERSION = "0.3"
+
+# Default int→label map used when backfilling trips.mode from transport_mode.
+# Kept in sync with mode_labels.DEFAULT_MODE_LABELS (inline to avoid import cycle).
+_DEFAULT_MODE_BACKFILL: dict[int, str] = {
+    0: "Walk",
+    1: "Bike",
+    2: "Bus",
+    3: "Car",
+    4: "Train",
+    8: "Taxi",
+}
+
+
+def _backfill_phase_c_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    """Fill agent_id / mode on legacy rows when the new columns are still NULL."""
+    try:
+        conn.execute(
+            "UPDATE trips SET agent_id = CAST(vehicle_id AS VARCHAR) "
+            "WHERE agent_id IS NULL"
+        )
+        conn.execute(
+            "UPDATE waypoints SET agent_id = CAST(vehicle_id AS VARCHAR) "
+            "WHERE agent_id IS NULL"
+        )
+    except Exception:
+        pass
+    # CASE over known PFLOW codes; unknown ints become 'mode N'.
+    case_arms = " ".join(
+        f"WHEN {code} THEN '{label}'" for code, label in _DEFAULT_MODE_BACKFILL.items()
+    )
+    mode_expr = (
+        f"CASE transport_mode {case_arms} "
+        f"ELSE 'mode ' || CAST(transport_mode AS VARCHAR) END"
+    )
+    try:
+        conn.execute(
+            f"UPDATE trips SET mode = {mode_expr} "
+            "WHERE mode IS NULL AND transport_mode IS NOT NULL"
+        )
+        conn.execute(
+            f"UPDATE waypoints SET mode = {mode_expr} "
+            "WHERE mode IS NULL AND transport_mode IS NOT NULL"
+        )
+    except Exception:
+        pass
+
+
+def _ensure_schema_version(conn: duckdb.DuckDBPyConnection) -> None:
+    """Upsert viz_meta.schema_version to the current SCHEMA_VERSION."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO viz_meta (key, value) VALUES ('schema_version', ?)
+            ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            """,
+            [SCHEMA_VERSION],
+        )
+    except Exception:
+        # viz_meta may not exist yet on very old paths; ignore — CREATE above
+        # runs first on normal init.
+        pass
+
+
+def get_schema_version(conn: duckdb.DuckDBPyConnection | None = None) -> str:
+    """Return viz_meta schema_version, or SCHEMA_VERSION when unset."""
+    c = conn if conn is not None else get_connection()
+    try:
+        row = c.execute(
+            "SELECT value FROM viz_meta WHERE key = 'schema_version'"
+        ).fetchone()
+    except Exception:
+        return SCHEMA_VERSION
+    if row is None:
+        return SCHEMA_VERSION
+    return str(row[0])
+
+
 def get_epoch_anchor(conn: duckdb.DuckDBPyConnection | None = None) -> int:
     """The DB's epoch anchor in seconds — the single read path for absolute
     time conversion.
@@ -349,6 +443,11 @@ def get_table_stats() -> dict:
 
 
 
+def _sql_string_literal(value: str) -> str:
+    """Single-quote a string for raw SQL (escape embedded quotes)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def build_trip_filter(
     vehicle_type: str | None = None,
     city: str | None = None,
@@ -357,6 +456,7 @@ def build_trip_filter(
     *,
     source_id: str | None = None,
     transport_modes: list[int] | None = None,
+    modes: list[str] | None = None,
     min_speed: float | None = None,
     max_speed: float | None = None,
     max_dwell_minutes: float | None = None,
@@ -372,6 +472,10 @@ def build_trip_filter(
     `source_id` is the v0.2 canonical filter (preferred for new code); `vehicle_type`
     is a back-compat alias and resolves to the same DB column. If both are passed,
     `source_id` wins.
+
+    Mode filter (Phase C): canonical `modes` (string labels on trips.mode) wins
+    when set; otherwise legacy `transport_modes` ints filter trips.transport_mode.
+    Never filter on waypoints.mode / waypoints.transport_mode.
 
     Phase 2 (Step 2.2) adds five F1-derived-metric filters
     (min_speed/max_speed/max_dwell_minutes/min_detour_ratio/max_detour_ratio).
@@ -389,11 +493,12 @@ def build_trip_filter(
         conds.append(f"city = '{city}'")
     if simulation_day is not None:
         conds.append(f"simulation_day = {int(simulation_day)}")
-    # Transport mode is a PER-TRIP attribute (trips.transport_mode). This is
-    # the only place a mode condition is emitted — never filter on
-    # waypoints.transport_mode (uniform per source in router output).
-    # int-cast per element blocks injection, same discipline as the floats below.
-    if transport_modes:
+    # Mode is a PER-TRIP attribute. String modes (canonical) take precedence;
+    # int transport_modes remain for PFLOW / pre-v0.3 clients.
+    if modes:
+        labels = ", ".join(_sql_string_literal(m) for m in modes)
+        conds.append(f"mode IN ({labels})")
+    elif transport_modes:
         ids = ", ".join(str(int(m)) for m in transport_modes)
         conds.append(f"transport_mode IN ({ids})")
     # F1 derived metrics — float-cast on the Python side blocks injection.

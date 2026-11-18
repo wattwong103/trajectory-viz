@@ -151,6 +151,8 @@ def test_stats_filter_options(client):
     assert caps["has_trajectories"] is True  # fixture includes truck waypoints
     assert caps["has_modes"] is True
     assert caps["agent_key_column"] == "vehicle_key"
+    assert caps.get("agent_id_column") == "agent_id"
+    assert caps.get("schema_version") == "0.3"
     assert isinstance(caps["attr_keys"], list)
     assert "modes" in body
     assert len(body["modes"]) >= 1
@@ -158,12 +160,28 @@ def test_stats_filter_options(client):
         assert set(m.keys()) >= {"id", "label", "count"}
         assert isinstance(m["label"], str) and m["label"]
         assert isinstance(m["count"], int)
-    # Labels come from defaults (not bare "mode N") for known PFLOW ids.
-    by_id = {m["id"]: m for m in body["modes"]}
+        assert m["id"] is None or isinstance(m["id"], int)
+    # Labels come from trips.mode / defaults for known PFLOW ids.
+    by_id = {m["id"]: m for m in body["modes"] if m["id"] is not None}
     if 0 in by_id:
         assert by_id[0]["label"] == "Walk"
     if 8 in by_id:
         assert by_id[8]["label"] == "Taxi"
+    by_label = {m["label"]: m for m in body["modes"]}
+    assert "Walk" in by_label or "Taxi" in by_label or len(by_label) >= 1
+
+
+def test_modes_string_filter_matches_transport_modes(client):
+    """Phase C: modes=Walk filters the same set as transport_modes=0 when both exist."""
+    via_int = client.get("/api/trips/sample", params={"transport_modes": "0", "n": 500})
+    via_str = client.get("/api/trips/sample", params={"modes": "Walk", "n": 500})
+    assert via_int.status_code == 200
+    assert via_str.status_code == 200
+    # Fixture may or may not have walk trips; counts must agree either way.
+    assert via_int.json()["count"] == via_str.json()["count"]
+    for t in via_str.json()["trips"]:
+        assert t.get("mode") == "Walk"
+        assert t.get("transport_mode") == 0
 
 
 def test_source_id_alias_matches_vehicle_type(client):

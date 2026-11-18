@@ -136,19 +136,23 @@ def _rows_to_trajectories(
 
         vid = waypoints[0][0]
         vtype = waypoints[0][5] or vehicle_type_hint or "unknown"
+        row0 = waypoints[0]
         meta = TrajectoryMetadata(
             vehicle_type=vtype,
             vehicle_id=vid,
             vehicle_key=vkey or f"{vtype}:{vid}",
             trip_id=tid,
-            # trip's mode from the trips join (index 14); absent on legacy
+            # trip's mode_code from the trips join (index 14); absent on legacy
             # 13/14-column rows (e.g. /randomsample) → None.
-            transport_mode=waypoints[0][14] if len(waypoints[0]) > 14 else None,
-            goods_type=waypoints[0][8],
-            vehicle_size=waypoints[0][9],
-            passenger_in=waypoints[0][10],
-            fare_yen=waypoints[0][11],
-            purpose=waypoints[0][7],
+            transport_mode=row0[14] if len(row0) > 14 else None,
+            # Phase C: string mode (15) + agent_id (16) when joined.
+            mode=row0[15] if len(row0) > 15 else None,
+            agent_id=row0[16] if len(row0) > 16 else None,
+            goods_type=row0[8],
+            vehicle_size=row0[9],
+            passenger_in=row0[10],
+            fare_yen=row0[11],
+            purpose=row0[7],
         )
         segments = _compute_segments(waypoints) if include_segments else None
         result.append(Trajectory(
