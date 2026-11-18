@@ -1,19 +1,22 @@
 # CI fixture wiring for SUMO FCD (CSV preferred, NDJSON fallback).
 # Preferred path matches docs/examples/sources-sumo-fcd.yaml tabular recipe.
 #
-# Generate / refresh (CSV default; NDJSON optional):
+# Generate / refresh (epoch must match time.epoch_anchor below):
+#   python scripts/lab_abm_demo.py --convert-only
+#   # or:
 #   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
 #       -o tests/fixtures/adapters/output_root/sumo/demo/fcd.csv \
-#       --epoch-ms 1717200000000
+#       --epoch-ms 1717167600000
 #   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
 #       -o tests/fixtures/adapters/output_root/sumo/demo/fcd.ndjson \
-#       --format ndjson --epoch-ms 1717200000000
+#       --format ndjson --epoch-ms 1717167600000
 #
 # Discovery:
 #   python -m backend.sources_schema --discovery tests/fixtures/adapters/sources.sumo.yaml \
 #       --output-root tests/fixtures/adapters/output_root
 
 version: 1
+scale: micro
 
 time:
   epoch_anchor: "2024-06-01T00:00:00+09:00"

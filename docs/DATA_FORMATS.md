@@ -384,11 +384,36 @@ Config/recipes first; XML stays out-of-process (no new `FormatType`).
 
 | Recipe | Path | Notes |
 |---|---|---|
-| MATSim events → CSV | `scripts/matsim_events_to_csv.py` + [`sources-matsim.yaml`](examples/sources-matsim.yaml) | Optional `--network` for link centroids; CI fixtures under `tests/fixtures/adapters/` |
+| **Lab first view** | `python scripts/lab_abm_demo.py` + [`demo/abm/sources.yaml`](../demo/abm/sources.yaml) | Convert tiny fixtures → ingest → open map (QUICKSTART Path L) |
+| MATSim events → CSV | `scripts/matsim_events_to_csv.py` + [`sources-matsim.yaml`](examples/sources-matsim.yaml) | `--network` for link centroids; `--epoch-ms` matches `time.epoch_anchor` |
 | SUMO FCD → CSV/NDJSON | `scripts/sumo_fcd_to_ndjson.py` + [`sources-sumo-fcd.yaml`](examples/sources-sumo-fcd.yaml) | Prefer native CSV/Parquet; XML adapter defaults to CSV (`--format ndjson` optional) |
 | OD arcs (trips-only) | [`sources-od-arcs.yaml`](examples/sources-od-arcs.yaml) | `render.mode: arcs` |
 | Phone GPS | [`sources-phone-gps.yaml`](examples/sources-phone-gps.yaml) | RAPIDS-like column names + `gap_split` |
 | JoRAS business traffic v3.0 | [`sources-joras-v3.yaml`](examples/sources-joras-v3.yaml) | Canonical truck/taxi pack; MFS/THTA in `profiles/pflow/sources.yaml` stay as legacy |
+
+### 9.1 Convert → ingest → open (MATSim / SUMO)
+
+```bash
+# 1) Convert (fixtures or your XML). Epoch ms must match YAML time.epoch_anchor.
+python scripts/matsim_events_to_csv.py events.xml -o out/matsim/city/iter_001 \
+    --network network.xml --epoch-ms 1717167600000
+python scripts/sumo_fcd_to_ndjson.py fcd.xml -o out/sumo/run/fcd.csv \
+    --epoch-ms 1717167600000
+
+# 2) Ingest (globs are relative to --output-root)
+trajectory-viz-ingest --sources docs/examples/sources-matsim.yaml \
+    --output-root out --db-path lab.duckdb --reset
+
+# 3) Open — point the UI at that DB (see QUICKSTART Path L)
+PFLOW_VIZ_DB=lab.duckdb PFLOW_VIZ_SOURCES=docs/examples/sources-matsim.yaml \
+PFLOW_VIZ_OUTPUT_ROOT=out npm run --prefix frontend dev
+```
+
+One-shot with the committed Tokyo micro pack: `python scripts/lab_abm_demo.py`.
+
+**Time contract:** trip `start_time_sec` is seconds-from-midnight; waypoint
+`time_ms` must be **absolute** epoch milliseconds (`epoch_ms + sim_s * 1000`).
+Mismatch → trails animate on the wrong hour.
 
 PFLOW person / truck / taxi / GUFM / Kichijōji registries declare a shared
 `mode_map` (`0` Walk … `8` Taxi) so int `transport_mode` codes become string

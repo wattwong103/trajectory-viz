@@ -214,9 +214,56 @@ pre-midnight starttimes (the animation wraps them mod-86400).
 
 ---
 
+## Path L: MATSim / SUMO lab first view
+
+Adapters already convert XML → CSV/NDJSON (no native XML `FormatType`). Use the
+bundled tiny fixtures to reach a useful map in one command:
+
+```bash
+pip install -e ".[dev]"          # once
+python scripts/lab_abm_demo.py   # convert fixtures → ingest demo/abm/abm.duckdb
+```
+
+Then open the map with the printed env (or):
+
+```bash
+PFLOW_VIZ_DB=demo/abm/abm.duckdb \
+PFLOW_VIZ_SOURCES=demo/abm/sources.yaml \
+PFLOW_VIZ_OUTPUT_ROOT=demo/abm \
+  npm run --prefix frontend dev
+# → http://localhost:5173  (Sources: MATSim + SUMO, trails around Tokyo)
+```
+
+**Your own XML** (same adapters, your output tree):
+
+```bash
+# MATSim events (+ network for link centroids / trails)
+python scripts/matsim_events_to_csv.py /path/to/events.xml \
+    -o /path/to/out/matsim/berlin/iter_001 \
+    --network /path/to/network.xml \
+    --epoch-ms 1717167600000          # must match time.epoch_anchor in YAML
+
+# SUMO FCD XML → CSV (preferred) or --format ndjson
+python scripts/sumo_fcd_to_ndjson.py /path/to/fcd.xml \
+    -o /path/to/out/sumo/run/fcd.csv --epoch-ms 1717167600000
+
+trajectory-viz-ingest \
+  --sources docs/examples/sources-matsim.yaml \   # or sources-sumo-fcd.yaml / your YAML
+  --output-root /path/to/out \
+  --db-path /path/to/lab.duckdb --reset
+```
+
+`--epoch-ms` must match `time.epoch_anchor` in the sources YAML so waypoint
+trails share the trip clock. Prefer SUMO’s native CSV/Parquet FCD when you
+have it (skip the XML adapter). Recipes: [`sources-matsim.yaml`](examples/sources-matsim.yaml),
+[`sources-sumo-fcd.yaml`](examples/sources-sumo-fcd.yaml), pack under
+[`demo/abm/`](../demo/abm/). Field notes: [DATA_FORMATS §9](DATA_FORMATS.md#9-external-abms--recipe-packs).
+
+---
+
 ## Adding a new ABM source
 
-The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step and [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook plus external ABM recipes (§9). Worked examples: [MATSim](examples/sources-matsim.yaml), [SUMO FCD](examples/sources-sumo-fcd.yaml), [OD arcs](examples/sources-od-arcs.yaml), [evacuation micro](examples/sources-evacuation-micro.yaml), [phone GPS](examples/sources-phone-gps.yaml), [JoRAS v3](examples/sources-joras-v3.yaml). MATSim/SUMO XML → thin adapters under `scripts/` (no native XML FormatType).
+The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step and [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook plus external ABM recipes (§9). Worked examples: [MATSim](examples/sources-matsim.yaml), [SUMO FCD](examples/sources-sumo-fcd.yaml), [OD arcs](examples/sources-od-arcs.yaml), [evacuation micro](examples/sources-evacuation-micro.yaml), [phone GPS](examples/sources-phone-gps.yaml), [JoRAS v3](examples/sources-joras-v3.yaml). MATSim/SUMO XML → thin adapters under `scripts/` (no native XML FormatType). First useful view: **Path L** above.
 
 **Simulation scale** (`capabilities.scale`: micro | meso | macro) — auto-detect from agent/waypoint counts, or set `scale:` in `sources.yaml`:
 
@@ -276,3 +323,5 @@ For an offline file, use export above instead.
 | Dashboard shows "No data yet" / empty-hint but you expected demo trips | Docker: ensure `TRAJECTORY_VIZ_SEED_DEMO` is not `0` and you did not override `TRAJECTORY_VIZ_DB` to an empty file. Native: run `trajectory-viz-demo` (or `npm run dev`, which auto-ingests). |
 | Opened :9999 and got JSON (`Frontend dist/ not bundled`) instead of the map | API-only serve — run `cd frontend && npm run build` once, or use `npm run dev` / `docker compose up --build`. |
 | Dashboard shows empty day filter but ingest completed | Check `simulation_day` filter — it might be filtering to a day with no data. Click "All days" in the dropdown. |
+| MATSim/SUMO trails animate at the wrong hour | Adapter `--epoch-ms` must match `time.epoch_anchor` in sources.yaml (demo uses `1717167600000` ↔ `2024-06-01T00:00:00+09:00`). Re-convert + `--reset`. |
+| Path L ingest finds 0 files | Globs are relative to `--output-root`. For the demo pack use `--output-root demo/abm` (or `python scripts/lab_abm_demo.py`). |

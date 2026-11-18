@@ -21,9 +21,21 @@ const venvPython = venvLayouts
 const python = process.env.PFLOW_VIZ_PYTHON ?? venvPython ?? (isWin ? 'python' : 'python3')
 
 // Demo defaults — only applied when the caller hasn't pointed the backend
-// at real data via the environment.
-const userSetDb = Boolean(process.env.PFLOW_VIZ_DB)
+// at real data via the environment. Honor TRAJECTORY_VIZ_* aliases too
+// (lab ABM / Path L often exports those).
+const userSetDb = Boolean(
+  process.env.PFLOW_VIZ_DB || process.env.TRAJECTORY_VIZ_DB,
+)
 const env = { ...process.env }
+if (process.env.TRAJECTORY_VIZ_DB && !process.env.PFLOW_VIZ_DB) {
+  env.PFLOW_VIZ_DB = process.env.TRAJECTORY_VIZ_DB
+}
+if (process.env.TRAJECTORY_VIZ_SOURCES && !process.env.PFLOW_VIZ_SOURCES) {
+  env.PFLOW_VIZ_SOURCES = process.env.TRAJECTORY_VIZ_SOURCES
+}
+if (process.env.TRAJECTORY_VIZ_OUTPUT_ROOT && !process.env.PFLOW_VIZ_OUTPUT_ROOT) {
+  env.PFLOW_VIZ_OUTPUT_ROOT = process.env.TRAJECTORY_VIZ_OUTPUT_ROOT
+}
 env.PFLOW_VIZ_DB ??= path.join(repoRoot, 'demo', 'demo.duckdb')
 env.PFLOW_VIZ_SOURCES ??= path.join(repoRoot, 'demo', 'sources.demo.yaml')
 env.PFLOW_VIZ_OUTPUT_ROOT ??= path.join(repoRoot, 'demo')

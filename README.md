@@ -64,6 +64,8 @@ trajectory-viz-demo --serve
 
 Opt-in PFLOW lab pack: `TRAJECTORY_VIZ_PROFILE=pflow PFLOW_HOME=… trajectory-viz-ingest --profile pflow --reset`.
 
+MATSim / SUMO first view (fixtures → ingest → map): `python scripts/lab_abm_demo.py` — see [QUICKSTART Path L](docs/QUICKSTART.md#path-l-matsim--sumo-lab-first-view).
+
 Details: [`docs/QUICKSTART.md`](docs/QUICKSTART.md), formats: [`docs/DATA_FORMATS.md`](docs/DATA_FORMATS.md).
 
 ---
@@ -98,6 +100,7 @@ trajectory-viz/
 ├── frontend/            React + DeckGL + MapLibre
 ├── tests/               pytest unit tests
 ├── demo/                Default universal dataset + sources.demo.yaml
+│   └── abm/             MATSim+SUMO micro seed (Path L / lab_abm_demo.py)
 ├── profiles/            Opt-in lab packs (pflow, gufm, …)
 ├── docs/                QUICKSTART, DATA_FORMATS, ARCHITECTURE, CONTRIBUTING, examples/
 ├── presets/             Cinematic export presets (forms: declared)
@@ -170,7 +173,7 @@ on bare `(vehicle_id, trip_id)` — vehicle_id collides across source_ids too.
 3. `trajectory-viz-ingest --reset` (or `--profile …` / `TRAJECTORY_VIZ_SOURCES=…`)
 4. The dashboard's **Sources** buttons populate from `/api/stats/filter-options` — your new source appears automatically.
 
-Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). Worked examples: [`sources-matsim.yaml`](docs/examples/sources-matsim.yaml), [`sources-sumo-fcd.yaml`](docs/examples/sources-sumo-fcd.yaml), [`sources-od-arcs.yaml`](docs/examples/sources-od-arcs.yaml), [`sources-phone-gps.yaml`](docs/examples/sources-phone-gps.yaml), [`sources-joras-v3.yaml`](docs/examples/sources-joras-v3.yaml). MATSim/SUMO XML adapters: `scripts/matsim_events_to_csv.py`, `scripts/sumo_fcd_to_ndjson.py`.
+Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). Worked examples: [`sources-matsim.yaml`](docs/examples/sources-matsim.yaml), [`sources-sumo-fcd.yaml`](docs/examples/sources-sumo-fcd.yaml), [`sources-od-arcs.yaml`](docs/examples/sources-od-arcs.yaml), [`sources-phone-gps.yaml`](docs/examples/sources-phone-gps.yaml), [`sources-joras-v3.yaml`](docs/examples/sources-joras-v3.yaml). MATSim/SUMO XML adapters: `scripts/matsim_events_to_csv.py`, `scripts/sumo_fcd_to_ndjson.py`. One-command lab seed: `python scripts/lab_abm_demo.py`.
 
 ---
 

@@ -241,9 +241,10 @@ trajectory-viz/
 │   ├── EXPORT.md           Offline HTML export
 │   └── examples/           MATSim, SUMO FCD, OD arcs, phone GPS, JoRAS v3, …
 ├── demo/                   Default universal dataset + sources.demo.yaml
+│   └── abm/                MATSim+SUMO micro seed (lab_abm_demo.py / Path L)
 ├── profiles/               Opt-in lab packs (pflow, gufm, …) — see README
 ├── presets/                Export preset gallery (demo-paper / demo-deck / tokyo-night)
-├── scripts/                docker-entrypoint, MATSim/SUMO adapters, vendor fetch
+├── scripts/                docker-entrypoint, MATSim/SUMO adapters, lab_abm_demo, vendor fetch
 ├── pyproject.toml          Project metadata + deps + entry points
 ├── Dockerfile              Multi-stage Docker build (bakes demo DB + UI)
 ├── docker-compose.yml      One-command first run → :8080

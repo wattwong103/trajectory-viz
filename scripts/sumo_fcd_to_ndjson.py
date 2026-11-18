@@ -10,7 +10,7 @@ path). Pass ``--format ndjson`` when you need line-delimited JSON.
 Usage:
   python scripts/sumo_fcd_to_ndjson.py fcd.xml -o fcd.csv
   python scripts/sumo_fcd_to_ndjson.py fcd.xml -o fcd.ndjson --format ndjson \\
-      --epoch-ms 1717200000000
+      --epoch-ms 1717167600000
 """
 
 from __future__ import annotations

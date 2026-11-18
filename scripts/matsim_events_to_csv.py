@@ -2,7 +2,7 @@
 """Thin MATSim events.xml → trips + geo-events CSV bridge.
 
 No FormatType change — run this out-of-process, then ingest the CSVs with
-docs/examples/sources-matsim.yaml (or your own column map).
+docs/examples/sources-matsim.yaml / demo/abm/sources.yaml (or your own map).
 
 Minimal event types handled:
   - activity end / departure  → trip start
@@ -12,8 +12,14 @@ Minimal event types handled:
 Without a network file, link enter/leave events are skipped (trips-only arcs).
 CRS: link coords are emitted as-is; convert to WGS84 upstream or post-process.
 
+``--epoch-ms`` turns sim-relative event times into absolute epoch milliseconds
+for waypoint ``time_ms`` (same contract as the SUMO adapter). Match it to
+``time.epoch_anchor`` in sources.yaml so trails animate on the trip clock.
+Trip ``start_time_sec`` stays seconds-from-midnight of the sim day.
+
 Usage:
-  python scripts/matsim_events_to_csv.py events.xml -o out_dir [--network network.xml]
+  python scripts/matsim_events_to_csv.py events.xml -o out_dir \\
+      --network network.xml --epoch-ms 1717167600000
 """
 
 from __future__ import annotations
@@ -85,6 +91,7 @@ def convert(
     out_dir: Path,
     network_path: Path | None = None,
     mode_default: str = "car",
+    epoch_ms: int = 0,
 ) -> tuple[int, int]:
     centroids = load_network_centroids(network_path) if network_path else {}
 
@@ -155,7 +162,8 @@ def convert(
             geo.append({
                 "person_id": agent,
                 "trip_id": trip_seq.get(agent) or 1,
-                "time_ms": int(time_s * 1000),
+                # Absolute epoch ms when --epoch-ms set; else sim-relative ms.
+                "time_ms": int(epoch_ms + time_s * 1000),
                 "lon_wgs84": x,
                 "lat_wgs84": y,
                 "link_id": link,
@@ -200,8 +208,23 @@ def main() -> None:
     p.add_argument("-o", "--out-dir", type=Path, required=True)
     p.add_argument("--network", type=Path, default=None, help="Optional network.xml")
     p.add_argument("--mode-default", default="car")
+    p.add_argument(
+        "--epoch-ms",
+        type=int,
+        default=0,
+        help=(
+            "Absolute epoch ms added to event sim-time for waypoint time_ms "
+            "(default 0 = relative ms). Match sources.yaml time.epoch_anchor."
+        ),
+    )
     args = p.parse_args()
-    n_trips, n_geo = convert(args.events, args.out_dir, args.network, args.mode_default)
+    n_trips, n_geo = convert(
+        args.events,
+        args.out_dir,
+        args.network,
+        args.mode_default,
+        args.epoch_ms,
+    )
     print(f"Wrote {n_trips} trips → {args.out_dir / 'trips_car.csv'}")
     print(f"Wrote {n_geo} geo events → {args.out_dir / 'events_car_geo.csv'}")
 

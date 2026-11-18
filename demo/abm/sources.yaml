@@ -1,0 +1,78 @@
+# Lab ABM first-view pack — MATSim events + SUMO FCD (tiny Tokyo coords).
+#
+# One-command (from repo root):
+#   python scripts/lab_abm_demo.py
+#   # → demo/abm/abm.duckdb + print open-viz env
+#
+# Manual:
+#   python scripts/matsim_events_to_csv.py tests/fixtures/adapters/matsim_events_tiny.xml \
+#       -o demo/abm/matsim/berlin/iter_001 \
+#       --network tests/fixtures/adapters/matsim_network_tiny.xml \
+#       --epoch-ms 1717167600000
+#   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
+#       -o demo/abm/sumo/demo/fcd.csv --epoch-ms 1717167600000
+#   trajectory-viz-ingest --sources demo/abm/sources.yaml \
+#       --output-root demo/abm --db-path demo/abm/abm.duckdb --reset
+#
+# No native XML FormatType — adapters stay out-of-process (locked prefs).
+# Full recipes: docs/examples/sources-matsim.yaml, sources-sumo-fcd.yaml
+
+version: 1
+scale: micro
+
+time:
+  # Must match --epoch-ms 1717167600000 on both adapters (= this instant).
+  epoch_anchor: "2024-06-01T00:00:00+09:00"
+
+sources:
+  matsim-car:
+    label: "MATSim (demo)"
+    source_id: matsim
+    discovery:
+      trips_glob: "matsim/berlin/iter_*/trips_car.csv"
+      trajectories_glob: "matsim/berlin/iter_*/events_car_geo.csv"
+      latest_only: true
+      scope: { value: berlin }
+    vehicle_key_template: "matsim:{scope}:{vehicle_id}"
+    render:
+      mode: trails
+      color: [200, 80, 60]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: person_id
+      trips:
+        starttime:   { csv: start_time_sec,  type: int }
+        start_lon:   { csv: start_lon_wgs84, type: double }
+        start_lat:   { csv: start_lat_wgs84, type: double }
+        end_lon:     { csv: end_lon_wgs84,   type: double }
+        end_lat:     { csv: end_lat_wgs84,   type: double }
+        mode:        { csv: mode,            type: varchar }
+        distance_km: { csv: trip_length_m,   type: double,
+                       transform: "value / 1000.0" }
+        dep_hour:    { derived: "CAST(start_time_sec / 3600 AS INTEGER)" }
+      waypoints:
+        unix_time_ms: { csv: time_ms,   type: bigint }
+        lon:          { csv: lon_wgs84, type: double }
+        lat:          { csv: lat_wgs84, type: double }
+        link_id:      { csv: link_id,   type: varchar }
+        mode:         { csv: mode,      type: varchar }
+
+  sumo-fcd:
+    label: "SUMO FCD (demo)"
+    source_id: sumo
+    discovery:
+      trajectories_glob: "sumo/**/fcd*.csv"
+      latest_only: false
+    vehicle_key_template: "sumo:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
+    render:
+      mode: trails
+      color: [90, 160, 255]
+    columns:
+      vehicle_id_col: id
+      waypoints:
+        unix_time_ms: { csv: time_ms, type: bigint }
+        lon:          { csv: x,       type: double }
+        lat:          { csv: y,       type: double }
+        link_id:      { csv: edge,    type: varchar }
+        mode:         { csv: mode,    type: varchar }
