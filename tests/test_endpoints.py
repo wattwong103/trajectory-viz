@@ -154,9 +154,18 @@ def test_stats_filter_options(client):
     assert caps.get("agent_id_column") == "agent_id"
     assert caps.get("schema_version") == "0.3"
     assert "has_legs" in caps
+    assert isinstance(caps["attr_keys"], list)
+    # Mega-sim LOD scale estimates (fixture is below threshold → standard)
+    assert isinstance(caps.get("agent_count"), int)
     assert isinstance(caps.get("trip_count"), int)
     assert isinstance(caps.get("waypoint_count"), int)
-    assert isinstance(caps["attr_keys"], list)
+    assert caps["agent_count"] >= 1
+    assert caps["mega_sim"] is False
+    assert caps["scale"] == "standard"
+    assert caps["trails_default"] is True
+    assert "lod" in caps
+    assert caps["lod"]["trails_override_allowed"] is True
+    assert isinstance(caps.get("fix_its"), list)
     assert "modes" in body
     assert len(body["modes"]) >= 1
     for m in body["modes"]:
@@ -325,6 +334,28 @@ def test_trajectories_sample_with_segments(client):
         assert "path" in traj and "timestamps" in traj
         assert traj["segments"] is not None
         assert len(traj["segments"]) == len(traj["path"]) - 1
+
+
+def test_mega_sim_capabilities_and_sample_cap(client, monkeypatch):
+    """When agent threshold is crossed, capabilities flip to mega and sample clamps."""
+    import backend.lod as lod
+
+    monkeypatch.setattr(lod, "MEGA_AGENT_THRESHOLD", 1)
+
+    caps = client.get("/api/stats/filter-options").json()["capabilities"]
+    assert caps["mega_sim"] is True
+    assert caps["scale"] == "mega"
+    assert caps["recommended_default_forms"] == ["arcs", "pulse"]
+    assert caps["trails_default"] is False
+    assert caps["lod"]["trajectory_sample_cap"] == lod.TRAJECTORY_RENDER_CAP
+    assert caps["lod"]["agent_threshold"] == 1
+
+    r = client.get("/api/trajectories/sample", params={"n": 5000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["capped"] is True
+    assert body["sample_cap"] == lod.TRAJECTORY_RENDER_CAP
+    assert body["count"] <= lod.TRAJECTORY_RENDER_CAP
 
 
 def test_trajectories_sample_respects_hour(client):

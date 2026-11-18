@@ -397,9 +397,32 @@ Flatten to one of the supported tabular shapes first:
 MultiLineString / nested geometry dumps should be exploded upstream. A
 dedicated nested normalizer is deferred.
 
-Mega-sim LOD auto-switch (arcs + pulse when scale is huge) is tracked
-separately (TV-15). Capabilities already expose `trip_count` /
-`waypoint_count` as hooks for that UX.
+## 11. Mega-sim ingest (trips + aggregates first)
+
+For sims larger than ~**1M agents** (or ~**10M** waypoint rows), do **not** load
+full trails into the viz DB. Prefer:
+
+1. **Always ingest trips** (OD endpoints + time) — filters, arcs, and temporal
+   views need them. Set `render.mode: arcs` for trips-only sources.
+2. **Waypoints optional** — skip or thin:
+   ```bash
+   # Trips only → UI defaults to arcs (+ pulse once aggregates exist)
+   python -m backend.ingest --skip-waypoints
+
+   # Or keep a sparse path sample
+   python -m backend.ingest --max-waypoints-per-trip=64
+   python -m backend.ingest --waypoint-sample-frac=0.1
+   ```
+3. **Require aggregates for pulse** — build `density_hourly` (and prefer
+   link / mesh aggregates upstream when available):
+   ```bash
+   python -m backend.ingest --aggregates-only
+   ```
+4. **UI contract** — when `capabilities.mega_sim` is true, the map auto-switches
+   to **arcs + pulse** and hides trails; re-enable **Trajectories** (or the
+   Trails preset) to override. Sample APIs still cap at ≤500 trails per render.
+
+See [ARCHITECTURE.md → Mega-sim LOD](ARCHITECTURE.md#mega-sim-lod-1m-agents).
 
 ---
 
@@ -420,4 +443,5 @@ separately (TV-15). Capabilities already expose `trip_count` /
   (`iterparse`) and NDJSON (line-by-line) always stream.
 - `.json` files always need an explicit `format:` declaration (the upload path
   content-sniffs them instead — section 7).
-
+- Full nationwide trail dumps (Pseudo-PFLOW scale) are out of scope for the
+  map — use section 11 mega-sim ingest + arcs/pulse instead.

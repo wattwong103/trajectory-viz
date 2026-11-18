@@ -30,6 +30,7 @@ function ctx(overrides: Partial<LayerAvailabilityContext> = {}): LayerAvailabili
     hasModes: true,
     hasDensityHourly: true,
     sourceModes: ['trails', 'arcs'],
+    megaSim: false,
     pulseBuilt: true,
     pulseDetail: undefined,
     hasClusterResult: true,
@@ -169,9 +170,23 @@ describe('layer availability', () => {
     expect(reason('sourceArcs', ctx({ sourceModes: ['trails', 'points'] })))
       .toBe('Only relevant for sources without waypoint data');
     expect(reason('sourceArcs', ctx({ sourceModes: ['trails', 'arcs'] }))).toBeNull();
+    // Mega-sim unlocks OD arcs even when no source declares mode: arcs.
+    expect(reason('sourceArcs', ctx({
+      sourceModes: ['trails', 'points'],
+      megaSim: true,
+    }))).toBeNull();
     expect(reason('agents', ctx({ hasFollowedAgents: false })))
       .toBe('Follow agents from the Agents tab first');
     expect(reason('pois', ctx({ hasPois: false }))).toBe('No POI sources in this dataset');
     expect(reason('buildings', ctx({ hasPois: false }))).toBeNull();
+  });
+
+  it('Mega preset hides trails and enables arcs+pulse', () => {
+    const vis = LAYER_PRESETS.mega.visibility;
+    expect(vis.trajectories).toBe(false);
+    expect(vis.sourceArcs).toBe(true);
+    expect(vis.pulse).toBe(true);
+    expect(vis.origins).toBe(true);
+    expect(vis.destinations).toBe(true);
   });
 });

@@ -109,6 +109,9 @@ class TrajectoryResponse(BaseModel):
     trajectories: list[Trajectory]
     count: int                                  # number returned
     total_matching: int | None = None        # total matching the query (if computed)
+    # Mega-sim LOD: True when the requested n/limit was clamped to the render cap.
+    capped: bool = False
+    sample_cap: int | None = None
 
 
 class TripPoint(BaseModel):

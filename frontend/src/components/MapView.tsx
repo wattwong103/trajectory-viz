@@ -131,6 +131,11 @@ interface MapViewProps {
   // yellow zone bbox (they can coexist)
   scenarioBBox?: { w: number; s: number; e: number; n: number } | null;
   layerVisibility: LayerVisibility;
+  /**
+   * Mega-sim LOD: render OD arcs for all visible trips (not only sources with
+   * render.mode: arcs). Trails remain gated by layerVisibility.trajectories.
+   */
+  forceOdArcs?: boolean;
   // Phase 2A — agent selection & per-source rendering
   agentTrajectories?: Trajectory[];
   selectedAgents?: string[];
@@ -177,6 +182,7 @@ export const MapView: React.FC<MapViewProps> = ({
   zoneBBox,
   scenarioBBox = null,
   layerVisibility,
+  forceOdArcs = false,
   agentTrajectories = [],
   selectedAgents = [],
   sourceStyles = [],
@@ -949,11 +955,12 @@ export const MapView: React.FC<MapViewProps> = ({
     result.push(...chromeMid);
 
     // Layer 3d (Phase 2A): time-windowed arcs for 'arcs' render-mode sources
-    // (trip-only populations with no waypoints). DataFilterExtension applies
-    // the ±30 min window as a GPU uniform — no per-frame data re-upload.
+    // (trip-only populations with no waypoints). Mega-sim LOD can force arcs
+    // for every source when scale exceeds the threshold. DataFilterExtension
+    // applies the ±30 min window as a GPU uniform — no per-frame data re-upload.
     if (layerVisibility.sourceArcs !== false) {
       const arcTrips = visibleTrips.filter(
-        d => styleBySource[d.vehicle_type]?.mode === 'arcs',
+        d => forceOdArcs || styleBySource[d.vehicle_type]?.mode === 'arcs',
       );
       if (arcTrips.length > 0) {
         result.push(
@@ -1095,6 +1102,7 @@ export const MapView: React.FC<MapViewProps> = ({
     groundOverlays, chromeMid, chromeLate, chromeTop,
     drillTrajectories,
     layerVisibility,
+    forceOdArcs,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
     pulseData,
     colorBy, hidden,

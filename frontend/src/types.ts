@@ -147,7 +147,7 @@ export interface SourceStyle {
   has_waypoints: boolean;
 }
 
-/** Dataset form-contract flags from /api/stats/filter-options (Phase A). */
+/** Dataset form-contract flags from /api/stats/filter-options (Phase A + LOD). */
 export interface DatasetCapabilities {
   has_trips: boolean;
   has_trajectories: boolean;
@@ -155,9 +155,6 @@ export interface DatasetCapabilities {
   has_modes: boolean;
   /** True when any trip has a non-null leg_id (PFLOW v3 / MATSim sub-trips). */
   has_legs?: boolean;
-  /** Scale hooks for mega-sim LOD UX (TV-15); counts only. */
-  trip_count?: number;
-  waypoint_count?: number;
   /** Lab columns with at least one non-null value (hide-when-empty). */
   attr_keys: string[];
   /** Public name is agent_key; physical column remains vehicle_key for now. */
@@ -166,6 +163,25 @@ export interface DatasetCapabilities {
   agent_id_column?: string;
   /** Phase C — viz_meta.schema_version (e.g. "0.3"). */
   schema_version?: string;
+  /** Unique agents (COUNT DISTINCT vehicle_key) — mega-sim scale estimate. */
+  agent_count?: number;
+  trip_count?: number;
+  waypoint_count?: number;
+  /** "mega" when agent/waypoint estimates exceed LOD thresholds. */
+  scale?: 'standard' | 'mega' | string;
+  mega_sim?: boolean;
+  /** Default forms when mega: typically ["arcs","pulse"]. */
+  recommended_default_forms?: string[];
+  trails_default?: boolean;
+  lod?: {
+    agent_threshold: number;
+    waypoint_threshold: number;
+    trajectory_sample_cap: number;
+    auto_forms: string[];
+    trails_override_allowed: boolean;
+  };
+  /** Operator fix-its (aggregates, ingest sample flags, …). */
+  fix_its?: string[];
 }
 
 /** Mode chip contract — labels from trips.mode / mode_map / PFLOW defaults. */

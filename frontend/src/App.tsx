@@ -35,6 +35,7 @@ import { fetchFilterOptions, queryTrajectoriesPoint, queryTrajectoriesBBox, fetc
 import { exportCompositePng } from './utils/exportPng';
 import { friendlyFetchError } from './friendlyError';
 import type { LayerAvailabilityContext } from './layerCatalog';
+import { forceOdArcs, isMegaSim, marksLodOverride, megaDefaultVisibility } from './lodPolicy';
 import { MAX_AGENTS } from './components/AgentTab';
 import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
@@ -256,6 +257,10 @@ export default function App() {
   // Renders the backend-error overlay instead of an eternal empty screen.
   const [filterOptionsError, setFilterOptionsError] = useState<string | null>(null);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VIS);
+  // Mega-sim LOD: auto arcs+pulse once; user toggle/preset that re-enables
+  // trails sticks as an override for the rest of the session.
+  const [lodUserOverride, setLodUserOverride] = useState(false);
+  const [megaLodApplied, setMegaLodApplied] = useState(false);
 
   // Drill-down state (map-click radius query)
   const [drillTrajectories, setDrillTrajectories] = useState<Trajectory[]>([]);
@@ -315,6 +320,14 @@ export default function App() {
   useEffect(() => {
     reloadFilterOptions();
   }, [reloadFilterOptions]);
+
+  // Mega-sim LOD auto-switch: arcs + pulse, hide trails (survey §6).
+  useEffect(() => {
+    const caps = filterOptions?.capabilities;
+    if (!isMegaSim(caps) || lodUserOverride || megaLodApplied) return;
+    setLayerVisibility(prev => ({ ...prev, ...megaDefaultVisibility() }));
+    setMegaLodApplied(true);
+  }, [filterOptions, lodUserOverride, megaLodApplied]);
 
   // Pulse availability probe (one-time, tiny): distinguishes "hourly-density
   // aggregate not built" (toggle disabled with a fix-it tooltip) from a
@@ -652,6 +665,7 @@ export default function App() {
       hasModes: caps?.has_modes ?? modeIds.length > 0,
       hasDensityHourly,
       sourceModes: (filterOptions?.sources ?? []).map(s => s.mode),
+      megaSim: isMegaSim(caps),
       pulseBuilt,
       pulseDetail: pulseProbe?.detail
         ?? (hasDensityHourly === false
@@ -693,6 +707,7 @@ export default function App() {
         zoneBBox={zoneBBox}
         scenarioBBox={filter.scenario?.bbox ?? null}
         layerVisibility={layerVisibility}
+        forceOdArcs={forceOdArcs(filterOptions?.capabilities)}
         agentTrajectories={agentTrajectories}
         selectedAgents={selectedAgents}
         sourceStyles={filterOptions?.sources ?? []}
@@ -823,8 +838,19 @@ export default function App() {
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
-        onLayerToggle={(key) => setLayerVisibility(prev => ({ ...prev, [key]: !prev[key] }))}
+        onLayerToggle={(key) => {
+          setLayerVisibility(prev => {
+            const next = { ...prev, [key]: !prev[key] };
+            if (isMegaSim(filterOptions?.capabilities) && marksLodOverride(next, key)) {
+              setLodUserOverride(true);
+            }
+            return next;
+          });
+        }}
         onApplyPreset={(vis) => {
+          if (isMegaSim(filterOptions?.capabilities) && marksLodOverride(vis)) {
+            setLodUserOverride(true);
+          }
           setLayerVisibility(prev => ({ ...prev, ...vis }));
           if (vis.linkDensity) setLinkLoadNonce(n => n + 1);
         }}

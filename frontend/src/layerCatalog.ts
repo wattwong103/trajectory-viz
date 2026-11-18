@@ -14,7 +14,7 @@
  * for lab plugins), instead of being a silent no-op (or worse, a raw 409).
  */
 
-/** Dataset + session context for form availability (Phase B). */
+/** Dataset + session context for form availability (Phase B + mega-sim LOD). */
 export interface LayerAvailabilityContext {
   /** capabilities.has_trajectories / stats.has_trajectories */
   hasTrajectories: boolean;
@@ -33,6 +33,11 @@ export interface LayerAvailabilityContext {
   hasDensityHourly: boolean | null;
   /** render modes declared by the dataset's sources ('arcs' = trip-only) */
   sourceModes: Array<'trails' | 'points' | 'arcs'>;
+  /**
+   * capabilities.mega_sim — when true, OD arcs are a first-class default form
+   * even if no source declares render.mode: arcs.
+   */
+  megaSim: boolean;
   /**
    * Pulse readiness: true = aggregate ready, false = missing (show fix-it),
    * null = not yet known. Prefer capabilities.has_density_hourly; probe
@@ -171,12 +176,21 @@ export const LAYER_GROUPS: LayerGroup[] = [
       },
       {
         key: 'sourceArcs', label: 'O-D arcs',
-        unavailableReason: c =>
-          c.sourceModes.includes('arcs') ? null : 'Only relevant for sources without waypoint data',
+        unavailableReason: c => {
+          if (c.megaSim) return null; // mega-sim default form (arcs + pulse)
+          return c.sourceModes.includes('arcs')
+            ? null
+            : 'Only relevant for sources without waypoint data';
+        },
       },
       {
         key: 'pulse', label: 'Pulse (hourly density)',
-        unavailableReason: pulseUnavailable,
+        unavailableReason: c => {
+          const base = pulseUnavailable(c);
+          if (base) return base;
+          // Encourage aggregates when mega but still allow toggle if built.
+          return null;
+        },
       },
       { key: 'buildings', label: '3D Buildings' },
       {
@@ -225,10 +239,11 @@ export function visibleLayerGroups(ctx: LayerAvailabilityContext): LayerGroup[] 
     .filter(g => g.layers.length > 0);
 }
 
-export type LayerPresetId = 'trails' | 'network' | 'cinematic';
+export type LayerPresetId = 'trails' | 'network' | 'cinematic' | 'mega';
 
 /** One-click layer recipes. Network keeps origins/destinations — some
- *  datasets are trips-only (no waypoints) and those layers ARE the map. */
+ *  datasets are trips-only (no waypoints) and those layers ARE the map.
+ *  Mega = arcs + pulse (hide trails) for sims ≫1M agents. */
 export const LAYER_PRESETS: Record<LayerPresetId, {
   label: string;
   visibility: Record<string, boolean>;
@@ -259,6 +274,16 @@ export const LAYER_PRESETS: Record<LayerPresetId, {
       sourceArcs: true, pois: true, zones: true,
       origins: false, destinations: false,
       linkDensity: false, odFlows: false, density: false, footfall: false,
+    },
+  },
+  mega: {
+    label: 'Mega (arcs+pulse)',
+    visibility: {
+      trajectories: false, origins: true, destinations: true,
+      sourceArcs: true, pulse: true, agents: true, pois: true, zones: true,
+      linkDensity: false, odFlows: false, density: false, buildings: false,
+      footfall: false, speedSegments: false, dwellMarkers: false,
+      clusters: false, compareGrid: false,
     },
   },
 };

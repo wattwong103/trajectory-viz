@@ -143,6 +143,26 @@ Defined in `.claude/rules/trajectory-viz.md`:
 
 When designing new endpoints: profile against these budgets; add indexes for filter columns; avoid serializing >10K rows in one response without pagination.
 
+## Mega-sim LOD (≫1M agents)
+
+Nationwide / city-scale ABMs (Pseudo-PFLOW, MATSim, dense SUMO FCD) must not
+trail-render in full. Policy lives in `backend/lod.py` and the frontend
+`lodPolicy.ts` / layer catalog.
+
+| Signal | Threshold (default) | Source |
+|---|---|---|
+| Unique agents (`COUNT DISTINCT vehicle_key`) | **1,000,000** | `/api/stats/filter-options` → `capabilities.agent_count` |
+| Waypoint rows | **10,000,000** | `capabilities.waypoint_count` |
+
+When either estimate is exceeded, `capabilities.mega_sim=true` / `scale="mega"`:
+
+1. **Default UI:** arcs + pulse, trails off (user can re-enable Trajectories or use the Trails preset — override sticks for the session).
+2. **Query caps:** trajectory sample / bbox `limit` clamped to **500**; response may set `capped=true`.
+3. **Fix-its:** `capabilities.fix_its` cite `python -m backend.ingest --aggregates-only` when `density_hourly` is missing, and ingest thin flags when waypoints are huge.
+4. **Ingest:** prefer trips always; optional `--skip-waypoints`, `--max-waypoints-per-trip=N`, `--waypoint-sample-frac=FRAC`; always build / require `density_hourly` (and link aggregates when available) for pulse.
+
+See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#11-mega-sim-ingest-trips--aggregates-first).
+
 ## v0.2 changes vs v0.1
 
 | | v0.1 | v0.2 |
@@ -171,6 +191,7 @@ trajectory-viz/
 │   ├── demo.py             trajectory-viz-demo: bundled demo ingest + serve
 │   ├── formats.py          geojson/gpx/ndjson normalizers (staging shape)
 │   ├── ingest.py           sources.yaml → staging → DuckDB INSERT...SELECT
+│   ├── lod.py              Mega-sim scale thresholds + sample/ingest caps
 │   ├── models.py           Pydantic request/response models
 │   ├── sources_schema.py   Pydantic models + loader for sources.yaml
 │   ├── routers/            stats.py, trips.py, trajectories.py, pois.py
@@ -181,6 +202,8 @@ trajectory-viz/
 │   └── src/
 │       ├── api.ts                Client for all /api/* endpoints
 │       ├── types.ts              TypeScript mirrors of Pydantic models
+│       ├── lodPolicy.ts          Mega-sim auto arcs+pulse + override helpers
+│       ├── layerCatalog.ts       Form taxonomy + capability gating
 │       ├── hooks/                useTrajectories, useAnimation, useInsights
 │       └── components/           MapView, FilterPanel, AnalysisPanel, TimeSlider
 ├── tests/
