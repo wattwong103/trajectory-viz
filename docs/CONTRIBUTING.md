@@ -87,7 +87,7 @@ If your source adds columns that aren't in the existing DB schema (`backend/db.p
 
 ### Step 6 — Verify in the dashboard
 
-Start the backend and open `/api/stats/filter-options`. Your new `source_id` should appear in `vehicle_types`. The frontend's Vehicle Type buttons populate from this list — so the dashboard now shows a new button for your ABM without any frontend code changes.
+Start the backend and open `/api/stats/filter-options`. Your new `source_id` should appear in `sources[]` (and the back-compat `vehicle_types` mirror). The frontend **Sources** buttons populate from this list — so the dashboard shows a new button for your ABM without frontend code changes.
 
 ---
 

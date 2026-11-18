@@ -271,7 +271,14 @@ async def filter_options():
 
     Used by the frontend FilterPanel to populate dropdowns without
     hardcoding city names or simulation_day ranges.
+
+    Phase A (universal forms): also returns `capabilities` (dataset form
+    contract) and `modes` (id/label/count with labels from sources.yaml
+    mode_map / default PFLOW labels). `vehicle_types` remains as a
+    back-compat mirror of source ids — prefer `sources[].source_id`.
     """
+    from ..mode_labels import label_for_mode
+
     conn = get_connection()
 
     vtypes = [r[0] for r in conn.execute(
@@ -298,13 +305,25 @@ async def filter_options():
 
     # Transport modes present in the dataset, with counts — the FilterPanel
     # renders one chip per entry and needs no second call for the breakdown.
+    mode_rows = conn.execute("""
+        SELECT transport_mode, COUNT(*) FROM trips
+        WHERE transport_mode IS NOT NULL
+        GROUP BY transport_mode ORDER BY transport_mode
+    """).fetchall()
     transport_modes = [
         {"mode": int(r[0]), "count": r[1]}
-        for r in conn.execute("""
-            SELECT transport_mode, COUNT(*) FROM trips
-            WHERE transport_mode IS NOT NULL
-            GROUP BY transport_mode ORDER BY transport_mode
-        """).fetchall()
+        for r in mode_rows
+    ]
+
+    # Labels from registry mode_map (when present) + PFLOW defaults.
+    registry_mode_map = _registry_mode_map()
+    modes = [
+        {
+            "id": int(r[0]),
+            "label": label_for_mode(int(r[0]), registry_mode_map),
+            "count": r[1],
+        }
+        for r in mode_rows
     ]
 
     # Sprint B5 — per-source F1 metric availability so the frontend can disable
@@ -324,6 +343,9 @@ async def filter_options():
         for r in metrics_rows
     }
 
+    sources = _source_styles(conn)
+    capabilities = _dataset_capabilities(conn, transport_modes, goods_types)
+
     return {
         "vehicle_types": vtypes,
         "cities": cities,
@@ -331,8 +353,60 @@ async def filter_options():
         "simulation_days": days,
         "goods_types": goods_types,
         "transport_modes": transport_modes,
+        "modes": modes,
+        "capabilities": capabilities,
         "metrics_available": metrics_available,
-        "sources": _source_styles(conn),
+        "sources": sources,
+    }
+
+
+def _registry_mode_map() -> dict[str, str]:
+    """Merged mode_map from sources.yaml (empty when registry absent)."""
+    from ..mode_labels import merge_mode_maps
+    try:
+        sources_file = load_sources_merged(default_sources_path())
+    except Exception:
+        return {}
+    return merge_mode_maps([src.mode_map for src in sources_file.sources.values()])
+
+
+def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dict:
+    """Inferred dataset capabilities for form availability (Phase A).
+
+    Lab attr columns stay sparse/nullable — listed in attr_keys only when
+    at least one non-null value exists (hide-when-empty posture).
+    """
+    wp_count = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
+    trip_count = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
+    try:
+        density_count = conn.execute("SELECT COUNT(*) FROM density_hourly").fetchone()[0]
+    except Exception:
+        density_count = 0
+
+    # Sparse lab columns — only advertise when populated.
+    lab_cols = (
+        "goods_type", "fare_yen", "taxi_id", "cargo_loaded",
+        "passenger_in", "is_night_trip", "purpose",
+    )
+    attr_keys: list[str] = []
+    for col in lab_cols:
+        try:
+            n = conn.execute(
+                f"SELECT COUNT({col}) FROM trips WHERE {col} IS NOT NULL"
+            ).fetchone()[0]
+        except Exception:
+            continue
+        if n and n > 0:
+            attr_keys.append(col)
+
+    return {
+        "has_trips": trip_count > 0,
+        "has_trajectories": wp_count > 0,
+        "has_density_hourly": density_count > 0,
+        "has_modes": len(transport_modes) > 0,
+        "attr_keys": attr_keys,
+        # agent_key is the public name for vehicle_key (Phase C renames later).
+        "agent_key_column": "vehicle_key",
     }
 
 

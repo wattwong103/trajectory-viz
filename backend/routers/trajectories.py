@@ -169,7 +169,12 @@ def _rows_to_trajectories(
 @router.get("/trajectories/sample")
 async def sample_trajectories(
     n: int = Query(100, ge=1, le=5000),
-    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    source_id: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Canonical source filter (preferred). Alias of vehicle_type."),
+    vehicle_type: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Deprecated alias of source_id."),
     city: str | None = Query(None, pattern="^[a-z_]+$"),
     simulation_day: int | None = Query(None, ge=0),
     transport_modes: str | None = Query(
@@ -191,18 +196,20 @@ async def sample_trajectories(
     city and simulation_day are applied by filtering on trips.vehicle_id,
     since those columns live on trips (not waypoints).
     """
+    from ..filters import resolve_source_id
+    vtype = resolve_source_id(source_id, vehicle_type)
     conn = get_connection()
     modes = [int(m) for m in transport_modes.split(",")] if transport_modes else None
     # Validates all-or-none + w<e/s<n and builds the trips-side exclusion.
     sc_clause = ScenarioFields(
         scenario=scenario, sc_w=sc_w, sc_s=sc_s, sc_e=sc_e, sc_n=sc_n,
     ).scenario_clause()
-    rows = sample_waypoint_rows(conn, n, vehicle_type, city, simulation_day, modes,
+    rows = sample_waypoint_rows(conn, n, vtype, city, simulation_day, modes,
                                 scenario_clause=sc_clause)
     if not rows:
         return TrajectoryResponse(trajectories=[], count=0)
     trajectories = _rows_to_trajectories(
-        rows, vehicle_type, include_segments=include_segments,
+        rows, vtype, include_segments=include_segments,
         anchor_sec=get_epoch_anchor(conn),
     )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
@@ -274,8 +281,9 @@ async def query_trajectories_bbox(q: BBoxQuery):
     since those columns live on trips (not waypoints).
     """
     conn = get_connection()
+    vtype = q.effective_source_id()
 
-    vtype_filter = f"AND vehicle_type = '{q.vehicle_type}'" if q.vehicle_type else ""
+    vtype_filter = f"AND vehicle_type = '{vtype}'" if vtype else ""
     scope_filter = _waypoint_scope_filter(q)
 
     # Step 1: Find (vehicle_key, trip_id) pairs with waypoints in bbox
@@ -294,7 +302,7 @@ async def query_trajectories_bbox(q: BBoxQuery):
 
     rows = _fetch_full_trajectories(conn, matched)
     trajectories = _rows_to_trajectories(
-        rows, q.vehicle_type, include_segments=q.include_segments,
+        rows, vtype, include_segments=q.include_segments,
         anchor_sec=get_epoch_anchor(conn),
     )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
@@ -308,14 +316,15 @@ def _waypoint_scope_filter(q) -> str:
     matching trip would return all its trips). Without either, keep the
     cheaper vehicle_key path.
     """
+    vtype = q.effective_source_id()
     modes = ([int(m) for m in q.transport_modes.split(",")]
              if q.transport_modes else None)
     sc_clause = q.scenario_clause()
     if modes or sc_clause:
         pair_subq = _build_trip_pair_subquery(
-            q.vehicle_type, q.city, q.simulation_day, modes, sc_clause)
+            vtype, q.city, q.simulation_day, modes, sc_clause)
         return f"AND (vehicle_key, trip_id) IN {pair_subq}"
-    key_subq = _build_trip_vehicle_keys_subquery(q.vehicle_type, q.city, q.simulation_day)
+    key_subq = _build_trip_vehicle_keys_subquery(vtype, q.city, q.simulation_day)
     return f"AND vehicle_key IN {key_subq}" if key_subq else ""
 
 
@@ -342,11 +351,12 @@ async def query_trajectories_point(q: PointQuery):
     since those columns live on trips (not waypoints).
     """
     conn = get_connection()
+    vtype = q.effective_source_id()
 
     # Approximate degree offset for the radius (conservative overestimate)
     deg_offset = q.radius_km / 80.0  # ~80km per degree at 35°N latitude
 
-    vtype_filter = f"AND vehicle_type = '{q.vehicle_type}'" if q.vehicle_type else ""
+    vtype_filter = f"AND vehicle_type = '{vtype}'" if vtype else ""
     scope_filter = _waypoint_scope_filter(q)
 
     # Step 1: Find trips with waypoints in the approximate bbox
@@ -365,7 +375,7 @@ async def query_trajectories_point(q: PointQuery):
 
     rows = _fetch_full_trajectories(conn, matched)
     trajectories = _rows_to_trajectories(
-        rows, q.vehicle_type, include_segments=q.include_segments,
+        rows, vtype, include_segments=q.include_segments,
         anchor_sec=get_epoch_anchor(conn),
     )
     return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))

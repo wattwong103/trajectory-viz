@@ -74,7 +74,7 @@ See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for prereqs, troubleshooting, and
 
 ## Architecture (one paragraph)
 
-A declarative source registry (`sources.yaml`) drives ingest from trajectory files in five formats (CSV, GeoJSON, GPX, NDJSON, Parquet) plus static POI layers. Points-only sources get trips synthesized at ingest; absolute time is anchored per-DB via `viz_meta`. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~30 endpoints under `/api/*`. The React frontend dynamically discovers vehicle types from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
+A declarative source registry (`sources.yaml`) drives ingest from trajectory files in five formats (CSV, GeoJSON, GPX, NDJSON, Parquet) plus static POI layers. Points-only sources get trips synthesized at ingest; absolute time is anchored per-DB via `viz_meta`. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~30 endpoints under `/api/*`. The React frontend dynamically discovers **Sources** from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
 
 Full diagram: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -121,7 +121,7 @@ Every data endpoint (`/api/trips/*`, `/api/trajectories/*`, `/api/analysis/*`, `
 
 | Param | Type | Values |
 |---|---|---|
-| `vehicle_type` | `^[a-z][a-z0-9_]*$` | Any source_id from `sources.yaml` (e.g. `truck`, `taxi`) |
+| `source_id` (preferred; `vehicle_type` alias) | `^[a-z][a-z0-9_]*$` | Any source_id from `sources.yaml` (e.g. `truck`, `taxi`) |
 | `city` | `^[a-z_]+$` | e.g. `tokyo`, `osaka`. Query `/api/stats/filter-options` for the live list. |
 | `simulation_day` | `int ≥ 0` | Day index in the run |
 | `transport_modes` | `^\d{1,2}(,\d{1,2}){0,15}$` | Comma-separated PFLOW mode ids (`0`=walk `1`=bike `2`=bus `3`=car `4`=train `8`=taxi). Filters by the **trip's** mode. |
@@ -170,7 +170,7 @@ on bare `(vehicle_id, trip_id)` — vehicle_id collides across source_ids too.
 1. Add a block to `sources.yaml` declaring discovery globs, `vehicle_key_template`, and the column mapping.
 2. `python -m backend.sources_schema --validate sources.yaml`
 3. `trajectory-viz-ingest --reset`
-4. The dashboard's Vehicle Type buttons populate from `/api/stats/filter-options` — your new source appears automatically.
+4. The dashboard's **Sources** buttons populate from `/api/stats/filter-options` — your new source appears automatically.
 
 Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). A worked MATSim example lives at [`docs/examples/sources-matsim.yaml`](docs/examples/sources-matsim.yaml).
 

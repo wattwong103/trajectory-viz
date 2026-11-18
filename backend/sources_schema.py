@@ -322,6 +322,15 @@ class SourceConfig(BaseModel):
         default=None,
         description="Optional frontend rendering hints (mode + color).",
     )
+    mode_map: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Optional map from raw transport_mode values (int codes as strings, "
+            "e.g. '0'→'Walk') to display labels. Used by /api/stats/filter-options "
+            "`modes[]`. Canonical public mode language is the label string; PFLOW "
+            "int codes remain filterable via transport_modes until schema v0.3."
+        ),
+    )
     trips_synthesis: TripsSynthesisConfig | None = Field(
         default=None,
         description=(

@@ -38,6 +38,7 @@ class BBoxQuery(ScenarioFields):
     min_lat: float
     max_lon: float
     max_lat: float
+    source_id: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: str | None = Field(None, pattern="^[a-z_]+$")
     simulation_day: int | None = Field(None, ge=0)
@@ -50,6 +51,10 @@ class BBoxQuery(ScenarioFields):
     # Phase 2 Step 2.5 — opt into per-segment metrics (link_id/speed/dwell)
     include_segments: bool = False
 
+    def effective_source_id(self) -> str | None:
+        from .filters import resolve_source_id
+        return resolve_source_id(self.source_id, self.vehicle_type)
+
 
 class PointQuery(ScenarioFields):
     """Point proximity query — find trajectories near a point.
@@ -58,6 +63,7 @@ class PointQuery(ScenarioFields):
     lon: float
     lat: float
     radius_km: float = Field(1.0, ge=0.1, le=50.0)
+    source_id: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: str | None = Field(None, pattern="^[a-z_]+$")
     simulation_day: int | None = Field(None, ge=0)
@@ -66,6 +72,10 @@ class PointQuery(ScenarioFields):
     limit: int = Field(200, ge=1, le=5000)
     # Phase 2 Step 2.5 — opt into per-segment metrics
     include_segments: bool = False
+
+    def effective_source_id(self) -> str | None:
+        from .filters import resolve_source_id
+        return resolve_source_id(self.source_id, self.vehicle_type)
 
 
 # ─── Response Models ───────────────────────────────────────────

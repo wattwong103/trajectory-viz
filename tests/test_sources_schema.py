@@ -85,6 +85,16 @@ def test_source_with_render_is_valid():
     assert src.render.color == (43, 200, 80)
 
 
+def test_source_mode_map_optional():
+    """Phase A — optional mode_map for filter-options mode labels."""
+    src = SourceConfig.model_validate(
+        {**MINIMAL_SOURCE, "mode_map": {"0": "Walk", "3": "Drive"}}
+    )
+    assert src.mode_map == {"0": "Walk", "3": "Drive"}
+    bare = SourceConfig.model_validate(MINIMAL_SOURCE)
+    assert bare.mode_map is None
+
+
 def test_repo_sources_yaml_declares_render_for_all_sources():
     """The shipped sources.yaml carries render hints on every source (2A)."""
     sources = load_sources(PROJECT_ROOT / "sources.yaml")
