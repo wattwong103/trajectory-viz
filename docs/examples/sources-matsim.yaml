@@ -1,15 +1,15 @@
 # Example sources.yaml block for a hypothetical MATSim output.
 #
-# MATSim emits events.xml; downstream tooling typically post-processes those
-# into per-trip and per-event CSVs. This config shows how a MATSim → trajectory-viz
-# bridge would declare its column mapping — no backend code changes needed.
+# MATSim emits events.xml. Prefer the in-repo thin adapter:
+#   python scripts/matsim_events_to_csv.py events.xml -o matsim/berlin/iter_001 \
+#       --network network.xml
+# which writes trips_car.csv + events_car_geo.csv matching this column map.
+# Other post-processors (matsim2osm, ARENA, …) also work — adapt columns.
+#
+# No native XML FormatType (survey decision): scripts + example YAML only.
 #
 # Real-world usage: add this block to your top-level sources.yaml, point the
-# globs at your MATSim post-processed CSVs, and run trajectory-viz-ingest.
-#
-# Note: this is a *schema demonstration*. Actual MATSim column names and
-# semantics may differ depending on which post-processor you use
-# (matsim2osm, ARENA, MATSim_Octave, etc.). Adapt the column maps accordingly.
+# globs at the adapter output (or your own CSVs), and run trajectory-viz-ingest.
 
 version: 1
 

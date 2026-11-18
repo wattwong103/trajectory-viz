@@ -99,6 +99,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             city          VARCHAR,
             vehicle_key   VARCHAR NOT NULL,
             source_id     VARCHAR,
+            -- PFLOW v3 / MATSim sub-trip leg (optional; NULL when absent)
+            leg_id        INTEGER,
             -- F1 derived metrics (computed after ingest by ingest.compute_derived_metrics)
             speed_avg_kmh DOUBLE,
             dwell_minutes DOUBLE,
@@ -125,7 +127,8 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             fare_yen       DOUBLE,
             is_night_trip  VARCHAR,
             vehicle_key    VARCHAR NOT NULL,
-            source_id      VARCHAR
+            source_id      VARCHAR,
+            leg_id         INTEGER
         )
     """)
 
@@ -140,11 +143,14 @@ def _init_schema(conn: duckdb.DuckDBPyConnection) -> None:
         ("trips",     "speed_avg_kmh", "DOUBLE"),
         ("trips",     "dwell_minutes", "DOUBLE"),
         ("trips",     "detour_ratio",  "DOUBLE"),
-        # v0.3 (Phase C): string agent_id + canonical string mode
+            # v0.3 (Phase C): string agent_id + canonical string mode
         ("trips",     "agent_id",      "VARCHAR"),
         ("waypoints", "agent_id",      "VARCHAR"),
         ("trips",     "mode",          "VARCHAR"),
         ("waypoints", "mode",          "VARCHAR"),
+        # Schema accommodation: PFLOW v3 / MATSim sub-trip legs (first-class)
+        ("trips",     "leg_id",        "INTEGER"),
+        ("waypoints", "leg_id",        "INTEGER"),
     ]
     for table, col, typ in _additive_columns:
         try:

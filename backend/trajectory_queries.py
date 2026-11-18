@@ -33,7 +33,8 @@ WAYPOINT_COLS_WITH_TRIP_MODE = """
     w.vehicle_id, w.trip_id, w.unix_time_ms, w.lon, w.lat,
     w.vehicle_type, w.transport_mode, w.purpose,
     w.goods_type, w.vehicle_size, w.passenger_in, w.fare_yen, w.vehicle_key, w.link_id,
-    t.transport_mode, t.mode, COALESCE(t.agent_id, w.agent_id)
+    t.transport_mode, t.mode, COALESCE(t.agent_id, w.agent_id),
+    COALESCE(t.leg_id, w.leg_id)
 """
 
 # (vehicle_key, trip_id) is the globally-unique trip identity — vehicle_id
@@ -236,7 +237,7 @@ def _stationary_rows_for_vehicles(
                t.start_lon, t.start_lat, t.vehicle_type, t.transport_mode,
                t.purpose, t.goods_type, t.vehicle_size,
                CAST(t.passenger_in AS VARCHAR),
-               t.fare_yen, t.vehicle_key, t.mode, t.agent_id
+               t.fare_yen, t.vehicle_key, t.mode, t.agent_id, t.leg_id
         FROM trips t
         WHERE t.vehicle_key IN ({placeholders}) {day_filter}
           AND NOT EXISTS (
@@ -248,15 +249,16 @@ def _stationary_rows_for_vehicles(
     anchor_sec = get_epoch_anchor(conn)
     rows: list = []
     for (vid, tid, starttime, lon, lat, vtype, mode_code, purpose, goods,
-         vsize, pax_in, fare, vkey, mode_label, agent_id) in trips:
+         vsize, pax_in, fare, vkey, mode_label, agent_id, leg_id) in trips:
         t0 = int(starttime)
         # Collapse the span when it would cross midnight (see _STATIONARY_SPAN_S).
         span = 0 if (t0 % 86400) + _STATIONARY_SPAN_S >= 86400 else _STATIONARY_SPAN_S
         t0_ms = (anchor_sec + t0) * 1000
         t1_ms = t0_ms + span * 1000
-        # Shape matches WAYPOINT_COLS_WITH_TRIP_MODE (+ mode label, agent_id).
+        # Shape matches WAYPOINT_COLS_WITH_TRIP_MODE (+ mode, agent_id, leg_id).
         base = [vid, tid, None, lon, lat, vtype, mode_code, purpose, goods,
-                vsize, pax_in, fare, vkey, None, mode_code, mode_label, agent_id]
+                vsize, pax_in, fare, vkey, None, mode_code, mode_label,
+                agent_id, leg_id]
         rows.append([*base[:2], t0_ms, *base[3:]])
         rows.append([*base[:2], t1_ms, *base[3:]])
     return rows

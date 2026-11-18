@@ -427,11 +427,25 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
         if n and n > 0:
             attr_keys.append(col)
 
+    # Legs (PFLOW v3 / MATSim sub-trips) — advertise when any non-null leg_id.
+    has_legs = False
+    try:
+        leg_n = conn.execute(
+            "SELECT COUNT(leg_id) FROM trips WHERE leg_id IS NOT NULL"
+        ).fetchone()[0]
+        has_legs = bool(leg_n and leg_n > 0)
+    except Exception:
+        has_legs = False
+
     return {
         "has_trips": trip_count > 0,
         "has_trajectories": wp_count > 0,
         "has_density_hourly": density_count > 0,
         "has_modes": len(transport_modes) > 0 or string_mode_count > 0,
+        "has_legs": has_legs,
+        # Scale hooks for mega-sim LOD UX (TV-15) — counts only; no auto-switch here.
+        "trip_count": int(trip_count),
+        "waypoint_count": int(wp_count),
         "attr_keys": attr_keys,
         # agent_key is the public name for vehicle_key (physical rename deferred).
         "agent_key_column": "vehicle_key",

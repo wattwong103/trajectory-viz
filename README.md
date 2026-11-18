@@ -172,7 +172,7 @@ on bare `(vehicle_id, trip_id)` — vehicle_id collides across source_ids too.
 3. `trajectory-viz-ingest --reset`
 4. The dashboard's **Sources** buttons populate from `/api/stats/filter-options` — your new source appears automatically.
 
-Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). A worked MATSim example lives at [`docs/examples/sources-matsim.yaml`](docs/examples/sources-matsim.yaml).
+Full step-by-step in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#adding-a-new-abm-source). Worked examples: [`sources-matsim.yaml`](docs/examples/sources-matsim.yaml), [`sources-sumo-fcd.yaml`](docs/examples/sources-sumo-fcd.yaml), [`sources-od-arcs.yaml`](docs/examples/sources-od-arcs.yaml), [`sources-phone-gps.yaml`](docs/examples/sources-phone-gps.yaml), [`sources-joras-v3.yaml`](docs/examples/sources-joras-v3.yaml). MATSim/SUMO XML adapters: `scripts/matsim_events_to_csv.py`, `scripts/sumo_fcd_to_ndjson.py`.
 
 ---
 

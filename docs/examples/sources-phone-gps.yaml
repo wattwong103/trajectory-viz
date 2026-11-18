@@ -1,0 +1,35 @@
+# Example sources.yaml for smartphone GPS pings (RAPIDS-like column names).
+#
+# Expected columns (case-sensitive as written by the producer):
+#   DEVICE_ID, TIMESTAMP (epoch ms), LATITUDE, LONGITUDE
+# Optional extras (accuracy/speed) are ignored until mapped — flatten into
+# ColumnSpec only when you need them later.
+#
+# Points-only + gap_split synthesis → trails or points render.
+#
+# Validate:
+#   python -m backend.sources_schema --validate docs/examples/sources-phone-gps.yaml
+
+version: 1
+
+time:
+  epoch_anchor: "2024-03-01T00:00:00+00:00"
+
+sources:
+  phone-gps:
+    label: "Phone GPS (RAPIDS-like)"
+    source_id: phone
+    discovery:
+      trajectories_glob: "phone/**/*.csv"
+      latest_only: false
+    vehicle_key_template: "phone:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 30 }
+    render:
+      mode: points
+      color: [120, 200, 255]
+    columns:
+      vehicle_id_col: DEVICE_ID
+      waypoints:
+        unix_time_ms: { csv: TIMESTAMP, type: bigint }
+        lon:          { csv: LONGITUDE, type: double }
+        lat:          { csv: LATITUDE,  type: double }
