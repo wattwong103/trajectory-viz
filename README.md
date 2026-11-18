@@ -211,32 +211,33 @@ Bold = v0.2/Phase-2 additions. Full OpenAPI spec served at `/docs` when the back
 
 Package a scene into **one self-contained, offline HTML file** — animated
 trails, optional pulse / buildings / agents — to mail to collaborators or drop
-into a deck (no server, zero runtime network).
+into a deck (no server, zero runtime network). For a **live** shareable view,
+use **Share link** in the UI (URL hash) instead.
 
-**Prerequisite (deck engine):** fetch the deck.gl vendor bundle once per machine
-(`scripts/fetch_vendor.py`). `--engine minimal` skips the vendor and emits a
-lighter Canvas 2D HTML.
+**Engines:** paper presets default to `engine: minimal` (Canvas 2D, no vendor).
+Deck / cinematic presets default to `engine: deck` — fetch the vendor once
+(`scripts/fetch_vendor.py`). CLI `--engine` overrides the preset.
 
 ```bash
 trajectory-viz-demo --ensure            # demo/demo.duckdb if missing
-python scripts/fetch_vendor.py          # once; verifies pinned deck.gl SHA-256
+viz-export --list-presets               # paper · deck · cinematic gallery
 
-# paper/deck (demo DB) — preferred out-of-box path
+# paper (demo DB) — preferred out-of-box path; no vendor fetch
 viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
            --out exports/demo-paper.html
 
-# smaller file, no vendor fetch
-viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
-           --engine minimal --out exports/demo-paper-minimal.html
+# richer demo deck (needs vendor once)
+python scripts/fetch_vendor.py
+viz-export --preset presets/demo-deck.yaml --db demo/demo.duckdb \
+           --out exports/demo-deck.html
 
 # lab cinematic (needs a taxi-ingested / PFLOW DuckDB)
 viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
 ```
 
-Preset gallery: [`presets/README.md`](presets/README.md). Size gate, `forms:`
-gating, and `--engine minimal`:
-[`docs/EXPORT.md`](docs/EXPORT.md). Live shareable URL hash keys are documented
-there too (separate from offline HTML).
+Preset gallery: [`presets/README.md`](presets/README.md). Choose-a-path, size
+gate, `forms:` gating, and engines:
+[`docs/EXPORT.md`](docs/EXPORT.md).
 
 ---
 

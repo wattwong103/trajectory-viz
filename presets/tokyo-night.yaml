@@ -1,16 +1,22 @@
 # Cinematic export preset (Phase 2D) — Tokyo taxis over one simulated night.
 #
-# Lab/PFLOW-oriented: point TRAJECTORY_VIZ_PROFILE=pflow (and PFLOW_HOME) or
-# TRAJECTORY_VIZ_DB at a taxi-ingested DuckDB before exporting.
+# workflow: cinematic → engine: deck. Lab/PFLOW-oriented: point
+# TRAJECTORY_VIZ_PROFILE=pflow (and PFLOW_HOME) or TRAJECTORY_VIZ_DB at a
+# taxi-ingested DuckDB before exporting. Prefer demo-paper / demo-deck for
+# out-of-box runs.
 #
 #   python scripts/fetch_vendor.py                 # once per machine
 #   viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
+#   viz-export --list-presets
 #
 # The export may exceed the app's ≤500-trajectory interactive cap: this is a
 # static file with no per-frame fetch, so ~2000 trails is the cinematic sweet
 # spot. See docs/EXPORT.md.
 
 title: "Tokyo Taxi — One Night"
+workflow: cinematic
+engine: deck
+use: "Lab cinematic night scene (buildings + pulse)"
 
 # Forms this preset bakes (Phase D — viz-export gates pulse/buildings/agents).
 forms:
