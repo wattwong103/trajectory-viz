@@ -144,6 +144,51 @@ def test_stats_filter_options(client):
     # Each entry has speed/dwell/detour booleans
     for src in ("truck", "taxi"):
         assert set(body["metrics_available"][src].keys()) == {"speed", "dwell", "detour"}
+    # Phase A — capabilities + labeled modes
+    assert "capabilities" in body
+    caps = body["capabilities"]
+    assert caps["has_trips"] is True
+    assert caps["has_trajectories"] is True  # fixture includes truck waypoints
+    assert caps["has_modes"] is True
+    assert caps["agent_key_column"] == "vehicle_key"
+    assert isinstance(caps["attr_keys"], list)
+    assert "modes" in body
+    assert len(body["modes"]) >= 1
+    for m in body["modes"]:
+        assert set(m.keys()) >= {"id", "label", "count"}
+        assert isinstance(m["label"], str) and m["label"]
+        assert isinstance(m["count"], int)
+    # Labels come from defaults (not bare "mode N") for known PFLOW ids.
+    by_id = {m["id"]: m for m in body["modes"]}
+    if 0 in by_id:
+        assert by_id[0]["label"] == "Walk"
+    if 8 in by_id:
+        assert by_id[8]["label"] == "Taxi"
+
+
+def test_source_id_alias_matches_vehicle_type(client):
+    """Phase A: source_id= is equivalent to vehicle_type= on shared filters."""
+    via_alias = client.get("/api/stats/insights", params={"vehicle_type": "taxi"})
+    via_canon = client.get("/api/stats/insights", params={"source_id": "taxi"})
+    assert via_alias.status_code == 200
+    assert via_canon.status_code == 200
+    assert via_alias.json()["core"] == via_canon.json()["core"]
+
+    # source_id wins when both are set (build_trip_filter preference).
+    both = client.get(
+        "/api/stats/insights",
+        params={"source_id": "taxi", "vehicle_type": "truck"},
+    )
+    assert both.status_code == 200
+    assert both.json()["core"] == via_canon.json()["core"]
+
+    # Sample trips also accept the alias.
+    trips_alias = client.get("/api/trips/sample", params={"vehicle_type": "truck", "n": 50})
+    trips_canon = client.get("/api/trips/sample", params={"source_id": "truck", "n": 50})
+    assert trips_alias.status_code == 200
+    assert trips_canon.status_code == 200
+    assert trips_alias.json()["count"] == trips_canon.json()["count"]
+    assert all(t["vehicle_type"] == "truck" for t in trips_canon.json()["trips"])
 
 
 def test_filter_options_warns_on_uncovered_source(client, capsys, monkeypatch):

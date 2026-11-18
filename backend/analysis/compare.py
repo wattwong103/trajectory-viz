@@ -412,8 +412,8 @@ def compute_comparison(conn, f_a: TripFilters, f_b: TripFilters, top_n: int = 10
             )
 
     return {
-        "source_a": f_a.vehicle_type,
-        "source_b": f_b.vehicle_type,
+        "source_a": f_a.effective_source_id(),
+        "source_b": f_b.effective_source_id(),
         "fleet_a": fleet_a,
         "fleet_b": fleet_b,
         "mode_shares": _mode_shares(
@@ -447,8 +447,8 @@ async def compare_fleets(
             status_code=422,
             detail="source_a and source_b must differ — comparing a fleet to itself is meaningless.",
         )
-    f_a = f.model_copy(update={"vehicle_type": source_a})
-    f_b = f.model_copy(update={"vehicle_type": source_b})
+    f_a = f.with_source(source_a)
+    f_b = f.with_source(source_b)
     return compute_comparison(get_connection(), f_a, f_b, top_n)
 
 
@@ -484,7 +484,7 @@ async def compare_multi_fleets(
     mode_counts: dict[str, dict[int, int]] = {}
     totals: dict[str, int] = {}
     for sid in ids:
-        fi = f.model_copy(update={"vehicle_type": sid})
+        fi = f.with_source(sid)
         where = fi.where()
         summary = _fleet_summary(conn, where)
         summary["source_id"] = sid
@@ -541,8 +541,8 @@ async def compare_grid(
             detail="source_a and source_b must differ.",
         )
     conn = get_connection()
-    where_a = f.model_copy(update={"vehicle_type": source_a}).where()
-    where_b = f.model_copy(update={"vehicle_type": source_b}).where()
+    where_a = f.with_source(source_a).where()
+    where_b = f.with_source(source_b).where()
     size = float(cell_deg)
     rows = conn.execute(f"""
         WITH pts AS (

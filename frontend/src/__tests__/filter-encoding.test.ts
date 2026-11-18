@@ -42,6 +42,7 @@ function numParam(params: URLSearchParams, key: string): number | undefined {
 
 function encodeHash(filter: FilterState): string {
   const parts: string[] = [];
+  // TEMP: keep hash key `vt=` (encodes source_id). Rename to `sid=` later.
   if (filter.vehicleType) parts.push(`vt=${filter.vehicleType}`);
   if (filter.city) parts.push(`city=${encodeURIComponent(filter.city)}`);
   if (filter.simulationDay !== undefined) parts.push(`day=${filter.simulationDay}`);

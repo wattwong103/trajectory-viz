@@ -75,8 +75,8 @@ async def od_flows_by_zone(
     conn = get_connection()
 
     # Pre-refactor this endpoint defaulted vehicle_type to 'truck' — preserved.
-    if f.vehicle_type is None:
-        f = f.model_copy(update={"vehicle_type": "truck"})
+    if f.effective_source_id() is None:
+        f = f.with_source("truck")
     where = f.where(extra=["origin_zone IS NOT NULL", "dest_zone IS NOT NULL"])
 
     rows = conn.execute(f"""

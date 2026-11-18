@@ -1,5 +1,5 @@
 /**
- * FilterPanel — vehicle type, time range, and attribute filters.
+ * FilterPanel — sources, time range, and attribute filters.
  *
  * Positioned top-left over the map. Controls which data is fetched and displayed.
  * Also hosts: drill status indicator, layer toggles, and screenshot export button.
@@ -213,28 +213,40 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         )}
       </div>
 
-      {/* Vehicle type toggle — populated from /api/stats/filter-options (sources.yaml) */}
+      {/* Sources toggle — populated from /api/stats/filter-options (sources.yaml).
+          Prefer sources[].source_id; vehicle_types is a back-compat mirror. */}
       <div style={styles.section}>
-        <label style={styles.sectionLabel}>Vehicle Type</label>
+        <label style={styles.sectionLabel}>Sources</label>
         <div style={styles.btnGroup}>
-          {['', ...(filterOptions?.vehicle_types ?? [])].map(vt => (
-            <button
-              key={vt || 'all'}
-              style={{
-                ...styles.toggleBtn,
-                ...(filter.vehicleType === vt ? styles.toggleActive : {}),
-              }}
-              onClick={() => onChange({
-                ...filter,
-                vehicleType: vt,
-                // Clear goods type when switching to a non-truck source (only
-                // truck-like sources currently declare goods_type in sources.yaml).
-                goodsType: vt && vt !== 'truck' ? undefined : filter.goodsType,
-              })}
-            >
-              {vt === '' ? 'All' : vt.charAt(0).toUpperCase() + vt.slice(1)}
-            </button>
-          ))}
+          {(() => {
+            const sourceIds = filterOptions?.sources?.length
+              ? [...new Set(filterOptions.sources.map(s => s.source_id))]
+              : (filterOptions?.vehicle_types ?? []);
+            return ['', ...sourceIds].map(vt => {
+              const label = vt === ''
+                ? 'All'
+                : (filterOptions?.sources?.find(s => s.source_id === vt)?.label
+                  ?? vt.charAt(0).toUpperCase() + vt.slice(1));
+              return (
+                <button
+                  key={vt || 'all'}
+                  style={{
+                    ...styles.toggleBtn,
+                    ...(filter.vehicleType === vt ? styles.toggleActive : {}),
+                  }}
+                  onClick={() => onChange({
+                    ...filter,
+                    vehicleType: vt,
+                    // Clear goods type when switching to a non-truck source (only
+                    // truck-like sources currently declare goods_type in sources.yaml).
+                    goodsType: vt && vt !== 'truck' ? undefined : filter.goodsType,
+                  })}
+                >
+                  {label}
+                </button>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -258,6 +270,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             {filterOptions.transport_modes.map(({ mode, count }) => {
               const active = filter.transportModes?.includes(mode) ?? false;
               const c = TRANSPORT_MODE_META[mode]?.color ?? [128, 128, 128];
+              const label = filterOptions.modes?.find(m => m.id === mode)?.label
+                ?? transportModeLabel(mode);
               return (
                 <button
                   key={mode}
@@ -275,7 +289,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                     onChange({ ...filter, transportModes: next.length ? next : undefined });
                   }}
                 >
-                  {transportModeLabel(mode)}
+                  {label}
                 </button>
               );
             })}

@@ -61,7 +61,7 @@ sources:
   # ─────────────────────────────────────────────────────────────────────────
   # MATSim public transit (PT) — separate source so the dashboard can filter
   # cars vs PT independently. source_id collides with the car block above on
-  # purpose? Actually NO — give it a different source_id so the Vehicle Type
+  # purpose? Actually NO — give it a different source_id so the Sources
   # buttons distinguish them in the UI.
   # ─────────────────────────────────────────────────────────────────────────
   matsim-pt:

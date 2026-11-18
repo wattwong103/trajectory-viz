@@ -45,6 +45,13 @@ function appendScenarioParams(params: URLSearchParams, scenario?: Scenario): voi
   params.set('sc_n', String(scenario.bbox.n));
 }
 
+
+/** Prefer canonical `source_id` (vehicle_type is a deprecated alias). */
+function appendSourceParam(params: URLSearchParams, vehicleType?: string): void {
+  if (vehicleType && vehicleType !== 'all') params.set('source_id', vehicleType);
+}
+
+
 function scenarioBody(scenario?: Scenario): Record<string, unknown> {
   if (!scenario) return {};
   return {
@@ -97,7 +104,7 @@ export async function fetchInsights(
   scenario?: Scenario,
 ): Promise<InsightsResponse> {
   const params = new URLSearchParams();
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -117,7 +124,7 @@ export async function fetchScenarioImpact(
   simulationDay?: number,
 ): Promise<{ excluded_trips: number; excluded_vkt_km: number }> {
   const params = new URLSearchParams();
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   appendScenarioParams(params, scenario);
@@ -138,7 +145,7 @@ export async function fetchTripSample(
   scenario?: Scenario,
 ): Promise<TripResponse> {
   const params = new URLSearchParams({ n: String(n) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -154,7 +161,7 @@ export async function queryTrips(filter: FilterState, limit: number = 2000): Pro
   return fetchJson('/api/trips/query', {
     method: 'POST',
     body: JSON.stringify({
-      vehicle_type: filter.vehicleType === 'all' ? null : filter.vehicleType,
+      source_id: filter.vehicleType === 'all' ? null : filter.vehicleType,
       min_hour: filter.minHour,
       max_hour: filter.maxHour,
       goods_type: filter.goodsType || null,
@@ -185,7 +192,7 @@ export async function fetchTrajectorySample(
   scenario?: Scenario,
 ): Promise<TrajectoryResponse> {
   const params = new URLSearchParams({ n: String(n) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (includeSegments) params.set('include_segments', 'true');
@@ -211,7 +218,7 @@ export async function queryTrajectoriesBBox(
     body: JSON.stringify({
       min_lon: minLon, min_lat: minLat,
       max_lon: maxLon, max_lat: maxLat,
-      vehicle_type: vehicleType === 'all' ? null : vehicleType,
+      source_id: vehicleType === 'all' ? null : vehicleType,
       city: city || null,
       simulation_day: simulationDay ?? null,
       transport_modes: transportModesParam(transportModes) ?? null,
@@ -238,7 +245,7 @@ export async function queryTrajectoriesPoint(
     body: JSON.stringify({
       lon, lat,
       radius_km: radiusKm,
-      vehicle_type: vehicleType === 'all' ? null : vehicleType,
+      source_id: vehicleType === 'all' ? null : vehicleType,
       city: city || null,
       simulation_day: simulationDay ?? null,
       transport_modes: transportModesParam(transportModes) ?? null,
@@ -261,7 +268,7 @@ export async function fetchVehicles(
 ): Promise<{ vehicles: AgentInfo[]; count: number }> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (q) params.set('q', q);
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   return fetchJson(`/api/trips/vehicles?${params}`);
@@ -302,7 +309,7 @@ export async function fetchHourlyDepartures(
   maxHour?: number,
 ): Promise<HourlyData[]> {
   const params = new URLSearchParams();
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -328,7 +335,7 @@ export async function fetchODFlows(
   maxHour?: number,
 ): Promise<{ flows: ODFlow[]; count: number }> {
   const params = new URLSearchParams({ top_n: String(topN) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -362,7 +369,7 @@ export async function fetchLinkDensity(
     top_n: String(topN),
     min_waypoints: String(minWaypoints),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -384,7 +391,7 @@ export async function fetchSpatialDensity(
     point_type: pointType,
     resolution: String(resolution),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -422,7 +429,7 @@ export async function fetchHourlyDensity(
     resolution: String(resolution),
     max_cells_per_hour: String(maxCellsPerHour),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   return fetchJson(`/api/analysis/spatial/density-hourly?${params}`);
 }
@@ -465,7 +472,7 @@ export async function runClustering(
   maxHour?: number,
 ): Promise<ClusterResult> {
   const params = new URLSearchParams({ sample_size: String(sampleSize) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -483,7 +490,7 @@ export async function fetchChainLengths(
   maxHour?: number,
 ): Promise<Array<{ chain_length: number; vehicle_count: number }>> {
   const params = new URLSearchParams();
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -503,7 +510,7 @@ export async function fetchTemporalPeaks(
   maxHour?: number,
 ): Promise<{ peaks: Array<{ hour: number; count: number }>; mean: number; std: number; threshold: number }> {
   const params = new URLSearchParams();
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -522,7 +529,7 @@ export async function fetchDurationDistribution(
   maxHour?: number,
 ): Promise<Array<{ distance_km: number; count: number; vehicle_type: string }>> {
   const params = new URLSearchParams({ bin_minutes: String(binMinutes) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -540,7 +547,7 @@ export async function fetchSpatialHotspots(
   goodsType?: string,
 ): Promise<Array<{ lon: number; lat: number; volume: number; unique_vehicles: number; rank: number }>> {
   const params = new URLSearchParams({ top_n: String(Math.max(5, topN)), point_type: pointType });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -559,7 +566,7 @@ export async function fetchWaypointDensity(
     resolution: String(resolution),
     limit: String(Math.max(100, limit)),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   const tm = transportModesParam(transportModes);
@@ -577,7 +584,7 @@ export async function fetchDwellTimes(
   maxHour?: number,
 ): Promise<Array<{ dwell_bin: string; count: number }>> {
   const params = new URLSearchParams({ sample_vehicles: String(sampleVehicles) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -596,7 +603,7 @@ export async function fetchRoundTrips(
   maxHour?: number,
 ): Promise<Array<{ trip_type: 'round_trip' | 'one_way'; vehicle_count: number; avg_trips_per_vehicle: number }>> {
   const params = new URLSearchParams({ threshold_km: String(thresholdKm) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -618,7 +625,7 @@ export async function fetchMetricsDistribution(
   maxHour?: number,
 ): Promise<MetricsDistribution> {
   const params = new URLSearchParams({ metric, bins: String(bins) });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -667,7 +674,7 @@ export async function runRouteSimilarity(
     eps: String(eps),
     min_samples: String(minSamples),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   return fetchJson(`/api/analysis/clustering/route-similarity?${params}`, { method: 'POST' });
@@ -688,7 +695,7 @@ export async function fetchTripsThroughZoneBBox(
     w: String(w), s: String(s), e: String(e), n: String(n),
     limit: String(limit),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   return fetchJson(`/api/analysis/trip-chains/through-zone-bbox?${params}`);
@@ -723,7 +730,7 @@ export async function fetchMultiStopChains(
     min_stops: String(minStops),
     limit: String(limit),
   });
-  if (vehicleType && vehicleType !== 'all') params.set('vehicle_type', vehicleType);
+  appendSourceParam(params, vehicleType);
   if (city) params.set('city', city);
   if (simulationDay !== undefined) params.set('simulation_day', String(simulationDay));
   if (goodsType) params.set('goods_type', goodsType);
@@ -832,8 +839,8 @@ export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
 
 // ─── Fleet comparison (fleet-comparison) ──────────────
 // GET /api/analysis/compare — two sources under otherwise-identical shared
-// filters. vehicle_type is deliberately NOT a parameter: the router ignores
-// it and overrides with source_a/source_b.
+// filters. source_id/vehicle_type are deliberately NOT parameters: the router
+// ignores them and overrides with source_a/source_b.
 
 export interface CompareFilters {
   city?: string;

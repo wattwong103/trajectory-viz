@@ -201,8 +201,8 @@ async def commodity_chain_patterns(
     conn = get_connection()
 
     # Pre-refactor this endpoint defaulted vehicle_type to 'truck' — preserved.
-    if f.vehicle_type is None:
-        f = f.model_copy(update={"vehicle_type": "truck"})
+    if f.effective_source_id() is None:
+        f = f.with_source("truck")
     where = f.where(extra=["goods_type IS NOT NULL"])
 
     rows = conn.execute(f"""

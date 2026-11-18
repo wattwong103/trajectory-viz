@@ -188,7 +188,9 @@ describe('CompareTab', () => {
     expect(url).toContain('min_hour=0');
     expect(url).toContain('max_hour=23');
     expect(url).toContain('transport_modes=3%2C4');
+    // Compare overrides fleets via source_a/source_b — never send source filter.
     expect(url).not.toContain('vehicle_type');
+    expect(url).not.toContain('source_id=');
     // Both fleet labels (option + card title + legend) and the B−A trips chip.
     expect(screen.getAllByText('GUFM').length).toBeGreaterThan(0);
     expect(screen.getAllByText('PFLOW').length).toBeGreaterThan(0);

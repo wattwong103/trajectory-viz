@@ -89,11 +89,27 @@ class ScenarioFields(BaseModel):
         return scenario_exclusion_clause(self.sc_w, self.sc_s, self.sc_e, self.sc_n)
 
 
+def resolve_source_id(
+    source_id: str | None = None,
+    vehicle_type: str | None = None,
+) -> str | None:
+    """Public contract: prefer `source_id`; `vehicle_type` is a deprecated alias.
+
+    Both filter the same physical column today (ingest dual-writes them).
+    When both are set, `source_id` wins — matches build_trip_filter.
+    """
+    return source_id if source_id is not None else vehicle_type
+
+
 class TripFilters(ScenarioFields):
     """Every shared trip-filter dimension, with the same validation patterns
     the individual routers used. Patterns are load-bearing: values are
     f-string'd into SQL by build_trip_filter."""
 
+    # Canonical public name is source_id. vehicle_type remains as a query/body
+    # alias for back-compat (same value at ingest); do not treat them as
+    # distinct concepts. See docs/ARCHITECTURE.md § Canonical vocabulary.
+    source_id: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     vehicle_type: str | None = Field(None, pattern="^[a-z][a-z0-9_]*$")
     city: str | None = Field(None, pattern="^[a-z_]+$")
     simulation_day: int | None = Field(None, ge=0)
@@ -114,6 +130,18 @@ class TripFilters(ScenarioFields):
     max_dwell_minutes: float | None = Field(None, ge=0, le=10080)
     min_detour_ratio: float | None = Field(None, ge=1.0, le=20.0)
     max_detour_ratio: float | None = Field(None, ge=1.0, le=20.0)
+
+    def effective_source_id(self) -> str | None:
+        """Resolved source filter (source_id preferred over vehicle_type)."""
+        return resolve_source_id(self.source_id, self.vehicle_type)
+
+    def with_source(self, source: str | None) -> "TripFilters":
+        """Override the source filter for A/B compare / defaults.
+
+        Clears the deprecated vehicle_type alias so source_id alone drives
+        build_trip_filter (avoids stale query-param source_id winning).
+        """
+        return self.model_copy(update={"source_id": source, "vehicle_type": None})
 
     def transport_mode_list(self) -> list[int] | None:
         """Parsed transport_modes, or None when unset. Pattern-validated ints."""
@@ -149,6 +177,7 @@ class TripFilters(ScenarioFields):
             self.city,
             self.simulation_day,
             extra=conds or None,
+            source_id=self.source_id,
             transport_modes=self.transport_mode_list(),
             min_speed=self.min_speed,
             max_speed=self.max_speed,
@@ -159,7 +188,12 @@ class TripFilters(ScenarioFields):
 
 
 def trip_filters(
-    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    source_id: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Canonical source filter (preferred). Alias of vehicle_type."),
+    vehicle_type: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Deprecated alias of source_id (same column at ingest)."),
     city: str | None = Query(None, pattern="^[a-z_]+$"),
     simulation_day: int | None = Query(None, ge=0),
     goods_type: str | None = Query(None, pattern="^[a-z_]+$"),
@@ -189,6 +223,7 @@ def trip_filters(
     A plain function dependency (not the 0.115+ Annotated-Query model form)
     so it behaves identically across FastAPI versions on all machines."""
     return TripFilters(
+        source_id=source_id,
         vehicle_type=vehicle_type,
         city=city,
         simulation_day=simulation_day,

@@ -147,7 +147,27 @@ export interface SourceStyle {
   has_waypoints: boolean;
 }
 
+/** Dataset form-contract flags from /api/stats/filter-options (Phase A). */
+export interface DatasetCapabilities {
+  has_trips: boolean;
+  has_trajectories: boolean;
+  has_density_hourly: boolean;
+  has_modes: boolean;
+  /** Lab columns with at least one non-null value (hide-when-empty). */
+  attr_keys: string[];
+  /** Public name is agent_key; physical column remains vehicle_key for now. */
+  agent_key_column: string;
+}
+
+/** Mode chip contract — labels from sources.yaml mode_map / PFLOW defaults. */
+export interface ModeOption {
+  id: number;       // transport_mode filter id (PFLOW int until v0.3 string modes)
+  label: string;
+  count: number;
+}
+
 export interface FilterOptions {
+  // Back-compat mirror of source ids — prefer sources[].source_id.
   vehicle_types: string[];
   cities: string[];
   city_centers: Record<string, [number, number]>; // [lon, lat]
@@ -160,6 +180,10 @@ export interface FilterOptions {
   // Phase 1 (transport mode) — modes present in trips + their counts, so the
   // FilterPanel chips + breakdown render without a second call.
   transport_modes?: Array<{ mode: number; count: number }>;
+  // Phase A — labeled modes (prefer over transport_modes for UI copy).
+  modes?: ModeOption[];
+  // Phase A — inferred dataset capabilities for form availability.
+  capabilities?: DatasetCapabilities;
 }
 
 // ─── Upload-and-go ingest (frontend half) ───────────────
@@ -288,7 +312,9 @@ export interface AgentInfo {
 // ─── Filter State ────────────────────────────────────────
 
 export interface FilterState {
-  vehicleType: string;            // source_id or '' for all
+  // Holds the selected source_id ('' = all). Field name kept for hash/state
+  // stability; UI copy says "Sources". URL hash key remains `vt=` temporarily.
+  vehicleType: string;
 
   minHour: number;
   maxHour: number;

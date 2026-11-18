@@ -65,7 +65,7 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
 │                   density, cluster arcs, F3 speed-gradient + dwell       │
 │                   markers, POIs (glyph sprites), zones, A/B grid-diff,   │
 │                   agents, drill + scenario/zone bboxes, buildings        │
-│    FilterPanel  — vehicle type, time, city, day, goods + F1 advanced     │
+│    FilterPanel  — Sources, time, city, day, goods + F1 advanced          │
 │    AnalysisPanel — 8 tabs incl. Σ Summary, ⏰ Temporal, ƒ Metrics, ↗ OD,  │
 │                    █ Density, ◎ Clusters, ⛓ Chains, ⊥ Links             │
 │    TimeSlider   — 24h animation scrubber, speed control, trail length    │
@@ -78,7 +78,8 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 
 | Field | Purpose |
 |---|---|
-| `source_id` | Short label (e.g. `truck`, `taxi`) that goes into `trips.source_id` and `trips.vehicle_type` (back-compat alias). Multiple source keys may share the same `source_id`. |
+| `source_id` | Canonical population / dataset id (e.g. `truck`, `taxi`, `courier`). Written to `trips.source_id` and mirrored into `trips.vehicle_type` for back-compat. Multiple source keys may share the same `source_id`. |
+| `mode_map` | Optional map of raw `transport_mode` codes → display labels (feeds `/api/stats/filter-options` `modes[]`). |
 | `discovery.trips_glob` | Glob pattern relative to `PFLOW_VIZ_OUTPUT_ROOT` matching this source's trip files. Optional for points-only sources (see `trips_synthesis`). |
 | `discovery.trajectories_glob` | Optional — matches waypoint files (any format). When absent, F3 segment features stay NULL. |
 | `discovery.format` (+ per-side overrides) | Optional ingest format (`csv`/`geojson`/`gpx`/`ndjson`/`parquet`); auto-detected from the extension when omitted. Non-CSV formats are normalized to a canonical staging shape (`_lon`/`_lat`/`_time_ms`/`_seq`/`_feature_id`/`_trk_name`/`_props_json`) — see [DATA_FORMATS.md](DATA_FORMATS.md). |
@@ -92,11 +93,33 @@ Each entry under `sources:` is one (ABM × scope) bundle. The full schema is def
 
 Required trip columns (validated): `starttime`, `start_lon`, `start_lat`, `end_lon`, `end_lat`. Required waypoint columns when trajectories_glob is set: `unix_time_ms`, `lon`, `lat`. Everything else is optional.
 
+## Canonical vocabulary (universal forms — Phase A)
+
+Public API and docs use these names. Physical DuckDB columns may still use
+legacy names during the transition — treat aliases as the *same concept*, not
+a second dimension.
+
+| Canonical | Physical today | Notes |
+|---|---|---|
+| **`source_id`** | `trips.source_id` (+ mirror `vehicle_type`) | Dataset / population. Query param `source_id=` preferred; `vehicle_type=` is a deprecated alias. UI label: **Sources**. |
+| **`agent_key`** | `vehicle_key` | Cross-source join identity (`(agent_key, trip_id)`). Column rename deferred; API/docs say agent_key. |
+| **`mode`** | `transport_mode` (int) + labels | Canonical language is the **string label** (`Walk`, `Bike`, …). PFLOW ints filter via `transport_modes=` / `mode_map` until v0.3. |
+| **`agent_id`** | `vehicle_id` (int + hash) | String widen planned for schema v0.3 — not widened in Phase A. |
+
+`/api/stats/filter-options` exposes `capabilities` (form contract) and
+`modes: [{id, label, count}]` (labels from `mode_map` / PFLOW defaults).
+See the project plan *Universal trajectory forms* for the full form taxonomy
+and later phases (capability UI, schema v0.3, demo-first shell).
+
+**Deprecation:** do not treat `vehicle_type` as a concept distinct from
+`source_id`. Ingest still dual-writes the mirror column; the public contract
+is Sources / `source_id` only.
+
 ## DuckDB schema highlights
 
 - **Indexes (12)** on every hot filter column. Without them, the 4.43M-trip × 233M-waypoint PFLOW scale would blow past the p99 budgets (200ms/1s/500ms for stats/trips/trajectories).
-- **`source_id`** is the v0.2 canonical ABM identifier; `vehicle_type` is a back-compat alias filled with the same value at ingest. v0.3 will drop the alias.
-- **`vehicle_key`** is the cross-source-unique vehicle identifier (built from each source's `vehicle_key_template`). All grouping, distinct counts, and waypoint-to-trips joins MUST use `vehicle_key` — `vehicle_id` collides across taxi cities.
+- **`source_id`** is the canonical population identifier; `vehicle_type` is a back-compat mirror filled with the same value at ingest (kept for now — not a distinct filter dimension).
+- **`vehicle_key`** (= public **`agent_key`**) is the cross-source-unique agent identifier (built from each source's `vehicle_key_template`). All grouping, distinct counts, and waypoint-to-trips joins MUST use `vehicle_key` — `vehicle_id` collides across taxi cities.
 - **F1 derived columns** (`speed_avg_kmh`, `dwell_minutes`, `detour_ratio`) are computed in a post-ingest pass over the trips table. NULL when not computable (no waypoints → NULL speed; vehicle's last trip → NULL dwell; tiny haversine distance → NULL detour).
 
 ## Performance budgets (HARD)
@@ -120,7 +143,7 @@ When designing new endpoints: profile against these budgets; add indexes for fil
 | F1 trip metrics | none | speed_avg_kmh, dwell_minutes, detour_ratio |
 | F2 trip-chain | length, dwell, round-trip, commodity | **+ through-zone-bbox, multi-stop, min_chain_length** |
 | F3 trajectory detail | trip-level metadata | **+ per-segment link_id, speed_kmh, dwell_sec (opt-in)** |
-| Frontend vehicle types | `'truck' \| 'taxi'` hardcoded | `string`, populated from `/api/stats/filter-options` |
+| Frontend Sources filter | `'truck' \| 'taxi'` hardcoded | `string` source_id, populated from `/api/stats/filter-options` |
 | Filter UI | basic | + "Advanced filters" disclosure (F1 sliders) |
 | Map overlays | 9 layers | core trails/OD/heatmaps + F3 speed-gradient + dwell markers + POIs + zones + A/B grid-diff + agents + drill (~25 layers total) |
 | Deployment | dev-only (two processes) | + Docker (single port, single container) |

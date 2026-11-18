@@ -19,7 +19,12 @@ router = APIRouter()
 
 @router.get("/analysis/spatial/density-hourly")
 async def density_hourly(
-    vehicle_type: str | None = Query(None, pattern="^[a-z][a-z0-9_]*$"),
+    source_id: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Canonical source filter (preferred). Alias of vehicle_type."),
+    vehicle_type: str | None = Query(
+        None, pattern="^[a-z][a-z0-9_]*$",
+        description="Deprecated alias of source_id."),
     city: str | None = Query(None, pattern="^[a-z_]+$"),
     resolution: float = Query(0.005, ge=0.001, le=0.1,
                               description="Grid resolution in degrees (must match a built aggregate)"),
@@ -36,6 +41,8 @@ async def density_hourly(
     GROUP-BYing the 233M-row waypoints table at request time — that would
     blow the 1s analysis budget — so an empty aggregate is a 409 with the fix.
     """
+    from ..filters import resolve_source_id
+    effective = resolve_source_id(source_id, vehicle_type)
     conn = get_connection()
 
     built = conn.execute(
@@ -52,9 +59,9 @@ async def density_hourly(
 
     conds = ["resolution = ?"]
     params: list = [float(resolution)]
-    if vehicle_type:
+    if effective:
         conds.append("source_id = ?")
-        params.append(vehicle_type)
+        params.append(effective)
     if city:
         conds.append("city = ?")
         params.append(city)
