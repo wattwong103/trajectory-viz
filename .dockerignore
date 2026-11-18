@@ -98,7 +98,8 @@ H[:]Dropbox*
 !Dockerfile
 !docker-compose.yml
 !pyproject.toml
-!sources.yaml
+!demo/sources.demo.yaml
+!profiles/
 !README.md
 !LICENSE
 !CITATION.cff

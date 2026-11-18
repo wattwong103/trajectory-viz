@@ -178,8 +178,16 @@ jobs:
 
       - run: pip install -e .
 
-      - name: Validate canonical sources.yaml
-        run: python -m backend.sources_schema --validate sources.yaml
+      - name: Validate demo + profile registries
+        run: |
+          for f in demo/sources.demo.yaml \
+                   profiles/pflow/sources.yaml \
+                   profiles/pflow/sources.kichijoji.yaml \
+                   profiles/gufm/sources.yaml; do
+            echo "::group::$f"
+            python -m backend.sources_schema --validate "$f"
+            echo "::endgroup::"
+          done
 
       - name: Validate docs/examples/*.yaml
         run: |
