@@ -116,7 +116,7 @@ If the YAML is invalid, discovery matches nothing on an empty DB, or ingested fl
 ### TypeScript (frontend)
 
 - **No new dependencies** without justification — the pinned set is Vite + React + DeckGL + recharts + maplibre. Adding a new charting lib duplicates recharts.
-- **Filter state** lives in URL hash for shareability; codec in `frontend/src/filterHash.ts` (see [`docs/EXPORT.md` → Shareable dashboard URLs](EXPORT.md#shareable-dashboard-urls)).
+- **Filter state** lives in URL hash for shareability; codec in `frontend/src/filterHash.ts`. The FilterPanel **Share link** button copies that URL. Offline HTML is a separate CLI path (`viz-export --list-presets` / [`docs/EXPORT.md`](EXPORT.md)).
 - **DeckGL layer ordering** matters for z-fighting — see `MapView.tsx` for the established stack (heatmap → density → trips → origins → destinations → ...).
 - **No DOM globals** — use React refs / state. DeckGL has its own picking system; route map clicks through it, not through `document.addEventListener`.
 

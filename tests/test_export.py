@@ -419,3 +419,94 @@ def test_escape_html_text_and_json_for_script_unit():
     assert "</" not in raw
     assert "<" not in raw
     assert json.loads(raw)["x"] == "</script><img src=x onerror=1>"
+
+
+# ── TV-25 — paper/share discoverability ──────────────────────────────────────
+
+
+def test_resolve_engine_cli_overrides_preset():
+    assert export.resolve_engine("deck", "minimal") == "deck"
+    assert export.resolve_engine("minimal", "deck") == "minimal"
+    assert export.resolve_engine(None, "minimal") == "minimal"
+    assert export.resolve_engine(None, None) == "deck"
+
+
+def test_gallery_presets_declare_workflow_and_engine():
+    """Paper → minimal; deck/cinematic → deck (CLI can still override)."""
+    import yaml
+    paper = yaml.safe_load(
+        (PROJECT_ROOT / "presets" / "demo-paper.yaml").read_text(encoding="utf-8")
+    )
+    deck = yaml.safe_load(
+        (PROJECT_ROOT / "presets" / "demo-deck.yaml").read_text(encoding="utf-8")
+    )
+    night = yaml.safe_load(
+        (PROJECT_ROOT / "presets" / "tokyo-night.yaml").read_text(encoding="utf-8")
+    )
+    assert paper.get("workflow") == "paper"
+    assert paper.get("engine") == "minimal"
+    assert export.resolve_engine(None, paper.get("engine")) == "minimal"
+    assert deck.get("workflow") == "deck"
+    assert deck.get("engine") == "deck"
+    assert night.get("workflow") == "cinematic"
+    assert night.get("engine") == "deck"
+
+
+def test_list_presets_prints_gallery(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["viz-export", "--list-presets"])
+    export.main()
+    out = capsys.readouterr().out
+    assert "demo-paper.yaml" in out
+    assert "demo-deck.yaml" in out
+    assert "tokyo-night.yaml" in out
+    assert "minimal" in out
+    assert "workflow" in out.lower() or "paper" in out
+
+
+def test_cli_paper_preset_defaults_to_minimal(conn, tmp_path, monkeypatch):
+    """demo-paper.yaml engine:minimal — no vendor required without --engine."""
+    import json
+
+    import yaml
+
+    out = tmp_path / "paper.html"
+    missing_vendor = tmp_path / "no-vendor.js"
+    preset = tmp_path / "paper.yaml"
+    preset.write_text(
+        yaml.dump({
+            "title": "Paper",
+            "workflow": "paper",
+            "engine": "minimal",
+            "forms": ["trail"],
+            "filters": {"vehicle_type": "truck"},
+            "sample_n": 10,
+            "include": {"pulse": False},
+        }),
+        encoding="utf-8",
+    )
+
+    db_file = tmp_path / "t.duckdb"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    disk = duckdb.connect(str(db_file))
+    from tests.test_endpoints import _populate_db
+    _populate_db(disk, data_dir)
+    disk.close()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "viz-export",
+            "--preset", str(preset),
+            "--vendor", str(missing_vendor),
+            "--db", str(db_file),
+            "--no-pulse",
+            "--out", str(out),
+        ],
+    )
+    export.main()
+    html = out.read_text(encoding="utf-8")
+    assert 'data-engine="minimal"' in html
+    payload = json.loads(re.search(
+        r'id="payload"[^>]*>(.*?)</script>', html, re.S).group(1))
+    assert payload["meta"]["engine"] == "minimal"

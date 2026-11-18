@@ -1,21 +1,34 @@
 # Single-HTML Cinematic Export
 
 `viz-export` packs a filtered sample of trajectories — plus optional animated
-pulse heatmap, 3D buildings, and followed agents — with an inlined deck.gl
-bundle into **one self-contained HTML file**. It uses a dark ground plane
-instead of a basemap, so it makes **zero network requests at runtime** and can
-be mailed to anyone or dropped into a slide deck.
+pulse heatmap, 3D buildings, and followed agents — into **one self-contained
+HTML file**. It uses a dark ground plane instead of a basemap, so it makes
+**zero network requests at runtime** and can be mailed to anyone or dropped
+into a slide deck.
 
 This is the article's "night grid" idea applied to trajectory data: send a
 collaborator a single file, no server, no install.
 
-Live dashboard share links (URL hash) are a separate path — see
-[Shareable dashboard URLs](#shareable-dashboard-urls) below.
+## Choose a share path
 
-## One-time setup (vendor fetch)
+| Goal | Path | Needs server? |
+|------|------|---------------|
+| Bookmark / paste the live view | **Share link** in the UI (URL hash) — [table below](#shareable-dashboard-urls) | Yes (same DuckDB) |
+| Mail a small offline HTML | `presets/demo-paper.yaml` (`engine: minimal`) | No |
+| Offline scene closer to the app | `presets/demo-deck.yaml` or `--engine deck` | No |
+| Full cinematic (lab) | `presets/tokyo-night.yaml` + taxi/PFLOW DuckDB | No |
 
-The export **never** downloads at runtime. Fetch the deck.gl UMD bundle once
-per machine before the first `viz-export`:
+```bash
+viz-export --list-presets          # gallery: workflow · engine · forms · use
+```
+
+Preset gallery details: [`presets/README.md`](../presets/README.md).
+
+## One-time setup (vendor fetch — deck engine only)
+
+`--engine deck` (default when no preset `engine:` is set) inlines deck.gl.
+Fetch the UMD bundle once per machine; the export **never** downloads at
+runtime:
 
 ```bash
 python scripts/fetch_vendor.py        # downloads + verifies the pinned SHA-256
@@ -26,40 +39,41 @@ To bump deck.gl: edit the URL in `scripts/fetch_vendor.py`, run with
 `--update`, paste the printed hash into `SHA256`, then re-run without
 `--update`.
 
-If `viz-export` exits with “vendor bundle not found”, run
-`python scripts/fetch_vendor.py` — that is the only prerequisite beyond an
-ingested DuckDB.
+Paper presets set `engine: minimal` and **skip** the vendor. If `viz-export`
+exits with “vendor bundle not found”, either run `fetch_vendor.py` or use
+`--engine minimal` / `presets/demo-paper.yaml`.
 
 ## Quick path (demo → paper HTML)
 
-Default product path — no PFLOW / lab DB required:
+Default product path — no PFLOW / lab DB, no vendor fetch:
 
 ```bash
 pip install -e .
 trajectory-viz-demo --ensure
-python scripts/fetch_vendor.py
 
 viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
            --out exports/demo-paper.html
+# → engine=minimal from the preset (override with --engine deck)
 ```
-
-Preset gallery (paper / deck / lab cinematic): [`presets/README.md`](../presets/README.md).
 
 ## Export
 
 ```bash
-# recommended — pick a gallery preset
+viz-export --list-presets
+
+# paper (minimal) · deck (deck.gl) — demo DB
 viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
            --out exports/demo-paper.html
 viz-export --preset presets/demo-deck.yaml  --db demo/demo.duckdb \
            --out exports/demo-deck.html
 
-# lab cinematic (needs a taxi-ingested / PFLOW DuckDB)
+# lab cinematic (needs a taxi-ingested / PFLOW DuckDB + vendor for deck)
+python scripts/fetch_vendor.py
 viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
 
-# ad-hoc
+# ad-hoc (engine defaults to deck without a preset)
 viz-export --vehicle-type taxi --city tokyo --simulation-day 0 \
-           --n 2000 --agents taxi:tokyo:47 --out exports/taxi.html
+           --n 2000 --agents taxi:tokyo:47 --engine minimal --out exports/taxi.html
 ```
 
 Open the resulting HTML in any browser — play/pause, scrub the 24h clock,
@@ -69,6 +83,9 @@ change speed, toggle pulse and buildings (when baked). No server needed.
 
 ```yaml
 title: "Tokyo Taxi — One Night"
+workflow: cinematic            # cue: paper | deck | cinematic
+engine: deck                   # default render engine (CLI --engine overrides)
+use: "Lab cinematic night scene (buildings + pulse)"
 forms: [trail, agents, pulse, buildings]   # Phase D — gates what gets baked
 filters: { vehicle_type: taxi, city: tokyo, simulation_day: 0 }
 sample_n: 2000                 # export exceeds the app's 500 cap on purpose:
@@ -77,6 +94,12 @@ include: { buildings: tokyo, pulse: true }
 camera: { longitude: 139.76, latitude: 35.68, zoom: 11.5, pitch: 55, bearing: -15 }
 loop: { speed: 120, trail_seconds: 1500 }
 ```
+
+| Key | Role |
+|-----|------|
+| `workflow:` | Gallery cue (`paper` / `deck` / `cinematic`) — printed by `--list-presets` |
+| `engine:` | Default `--engine` for this preset (`minimal` or `deck`) |
+| `use:` | One-line gallery blurb |
 
 ### `forms:` (Phase D — respected by viz-export)
 
@@ -142,20 +165,26 @@ options:
 | `minimal` | ~0 (Canvas 2D) | Trails + agents + flat buildings + pulse dots; drag-pan / scroll-zoom | **Not required** |
 
 ```bash
-# same preset, smaller file — no vendor fetch
+# demo-paper already defaults to minimal; this is explicit:
 viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
-           --engine minimal --out exports/demo-paper-minimal.html
+           --engine minimal --out exports/demo-paper.html
+
+# force deck.gl visuals on a paper-sized sample
+viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+           --engine deck --out exports/demo-paper-deck.html
 ```
 
 Use `minimal` when you need the HTML under the size gate (or mailed as a
 lighter attachment) and can accept a simpler night-grid scene. Same packed
 payload / Int16 encoding as `deck`; only the HTML shell changes. Size gate
 still warns at 4 MB data and fails above 8 MB total unless `--force`.
+CLI resolution: **`--engine` flag > preset `engine:` > `deck`**.
 
 ## Shareable dashboard URLs
 
 The **live** UI (not the offline HTML) persists view state in the URL hash so
-you can bookmark or paste a link. Encoding lives in
+you can bookmark or paste a link. Use **Share link** in the filter panel
+(copies the current URL) or copy the address bar. Encoding lives in
 `frontend/src/filterHash.ts` (round-trip tests under
 `frontend/src/__tests__/filter-encoding.test.ts`).
 

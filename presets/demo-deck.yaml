@@ -1,14 +1,18 @@
-# Slide-deck export — demo DB with trails + followed agents + pulse.
+# Slide-deck / collaborator hand-off — demo DB with trails + agents + pulse.
 #
-# Still no buildings (keeps size modest). Requires density_hourly (built by
-# trajectory-viz-demo / ingest). Vendor fetch is a one-time prerequisite.
+# workflow: deck → engine: deck (inlined deck.gl; fetch vendor once).
+# For a lighter attachment use demo-paper.yaml or pass --engine minimal.
 #
 #   trajectory-viz-demo --ensure
 #   python scripts/fetch_vendor.py
 #   viz-export --preset presets/demo-deck.yaml --db demo/demo.duckdb \
 #              --out exports/demo-deck.html
+#   viz-export --list-presets
 
 title: "Kichijōji Day — Deck"
+workflow: deck
+engine: deck
+use: "Richer slide / collaborator hand-off (agents + pulse)"
 
 forms:
   - trail

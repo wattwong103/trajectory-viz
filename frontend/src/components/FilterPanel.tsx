@@ -2,7 +2,8 @@
  * FilterPanel — sources, time range, and attribute filters.
  *
  * Positioned top-left over the map. Controls which data is fetched and displayed.
- * Also hosts: drill status indicator, layer toggles, and screenshot export button.
+ * Also hosts: drill status indicator, layer toggles, screenshot export, and
+ * Share link (copies the live URL hash for bookmarking).
  */
 
 import React, { useState, useRef } from 'react';
@@ -59,6 +60,8 @@ interface FilterPanelProps {
   onApplyPreset?: (visibility: Record<string, boolean>) => void;
   onBuildingExaggeration: (v: number) => void;
   onScreenshot: () => void;
+  /** Optional override for tests; defaults to copying window.location.href. */
+  onCopyShareLink?: () => void | Promise<void>;
 }
 
 /** Relabel EMPTY goods type for display; sort EMPTY last */
@@ -72,6 +75,16 @@ function sortGoodsTypes(types: string[]): string[] {
     if (b === 'EMPTY') return -1;
     return a.localeCompare(b);
   });
+}
+
+async function copyShareLinkDefault(): Promise<void> {
+  const url = window.location.href;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(url);
+    return;
+  }
+  // Fallback for older browsers / insecure contexts.
+  window.prompt('Copy share link', url);
 }
 
 export const FilterPanel: React.FC<FilterPanelProps> = ({
@@ -90,11 +103,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onUploadFiles,
   onReloadFilterOptions,
   onChange, onRefetch, onClearDrill, onLayerToggle, onApplyPreset,
-  onBuildingExaggeration, onScreenshot,
+  onBuildingExaggeration, onScreenshot, onCopyShareLink,
 }) => {
   const narrow = useNarrowViewport();
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Per-group expansion inside the Layers section (core/scene open first).
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>(
@@ -219,13 +233,37 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           <h2 style={styles.title}>Trajectory Viz</h2>
           <div style={styles.subtitle}>Mobility · trajectories</div>
         </div>
-        <button
-          onClick={onScreenshot}
-          style={styles.screenshotBtn}
-          title="Export PNG screenshot"
-        >
-          Export PNG
-        </button>
+        <div style={styles.shareActions}>
+          <button
+            type="button"
+            onClick={() => {
+              void (async () => {
+                try {
+                  await (onCopyShareLink ?? copyShareLinkDefault)();
+                  setShareCopied(true);
+                  window.setTimeout(() => setShareCopied(false), 1600);
+                } catch {
+                  setShareCopied(false);
+                }
+              })();
+            }}
+            style={styles.screenshotBtn}
+            title={
+              'Copy the live dashboard URL (filters + agents in the hash). '
+              + 'For offline HTML mail: viz-export — see docs/EXPORT.md'
+            }
+          >
+            {shareCopied ? 'Copied' : 'Share link'}
+          </button>
+          <button
+            type="button"
+            onClick={onScreenshot}
+            style={styles.screenshotBtn}
+            title="Export PNG screenshot"
+          >
+            Export PNG
+          </button>
+        </div>
       </div>
 
       {/* Dataset stats */}
@@ -928,6 +966,13 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#6a7a8a',
     letterSpacing: 0.3,
     marginTop: 2,
+  },
+  shareActions: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: 4,
+    alignItems: 'stretch',
+    flexShrink: 0,
   },
   screenshotBtn: {
     padding: '3px 8px',

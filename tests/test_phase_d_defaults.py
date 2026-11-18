@@ -161,3 +161,18 @@ def test_export_preset_declares_forms():
     assert "forms" in cfg
     assert isinstance(cfg["forms"], list)
     assert "trail" in cfg["forms"] or "trails" in cfg["forms"]
+
+
+def test_export_gallery_presets_have_workflow_engine():
+    """TV-25 — gallery cues for paper/share discoverability."""
+    for name, workflow, engine in (
+        ("demo-paper.yaml", "paper", "minimal"),
+        ("demo-deck.yaml", "deck", "deck"),
+        ("tokyo-night.yaml", "cinematic", "deck"),
+    ):
+        cfg = yaml.safe_load(
+            (PROJECT_ROOT / "presets" / name).read_text(encoding="utf-8")
+        )
+        assert cfg.get("workflow") == workflow, name
+        assert cfg.get("engine") == engine, name
+        assert "forms" in cfg, name

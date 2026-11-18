@@ -227,28 +227,33 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 
 ## Offline HTML export (paper / deck)
 
-Mail a self-contained scene (no server) with `viz-export`. For the default
-`--engine deck`, fetch the vendor once; `--engine minimal` needs no vendor:
+Mail a self-contained scene (no server) with `viz-export`. Paper presets
+default to `--engine minimal` (no vendor). Deck / cinematic presets need a
+one-time vendor fetch for `--engine deck`:
 
 ```bash
 trajectory-viz-demo --ensure
-python scripts/fetch_vendor.py            # once; verifies pinned deck.gl SHA-256
+viz-export --list-presets                 # paper · deck · cinematic gallery
 
+# paper path (engine:minimal from the preset — no vendor)
 viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
            --out exports/demo-paper.html
 
-# lighter Canvas shell (no vendor fetch)
-viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
-           --engine minimal --out exports/demo-paper-minimal.html
+# deck visuals (fetch vendor once)
+python scripts/fetch_vendor.py
+viz-export --preset presets/demo-deck.yaml --db demo/demo.duckdb \
+           --out exports/demo-deck.html
 ```
 
-Gallery + size tips: [`presets/README.md`](../presets/README.md), [`EXPORT.md`](EXPORT.md).
+Gallery + choose-a-path: [`presets/README.md`](../presets/README.md),
+[`EXPORT.md`](EXPORT.md).
 
 ## Shareable live URLs
 
 The running dashboard writes filters / agents / legend toggles into the URL
-hash (e.g. `#vt=courier&ag=courier%3Acourier-01`). Copy the address bar to
-share a view — same DuckDB + server required. Hash key table:
+hash (e.g. `#vt=courier&ag=courier%3Acourier-01`). Click **Share link** in the
+filter panel (or copy the address bar) — same DuckDB + server required. Hash
+key table:
 [`EXPORT.md` → Shareable dashboard URLs](EXPORT.md#shareable-dashboard-urls).
 For an offline file, use export above instead.
 

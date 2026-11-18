@@ -6,6 +6,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **Paper / share export discoverability (TV-25).** Preset `workflow:` / `engine:` / `use:` cues; `demo-paper` defaults to `engine: minimal` (no vendor). `viz-export --list-presets` prints the gallery. Docs choose-a-path (Share link · paper · deck · cinematic). Filter panel **Share link** copies the live URL hash. Tests: preset engine resolution + list-presets + Share link.
+
 - **`viz-export --engine minimal` (TV-20).** Canvas 2D offline HTML shell that reuses the same Int16/base64 payload as the deck.gl exporter but skips the ~1.2 MB vendor bundle (no `fetch_vendor.py` required). Trails, agents, flat buildings, and pulse dots; size gate unchanged (4 MB warn / 8 MB fail). Template: `backend/export_template_minimal.html`. Docs: EXPORT / presets README. Tests: minimal self-contained + size delta in `tests/test_export.py`.
 
 - **MATSim / SUMO adapter fixtures + CI wiring (TV-18).** Golden adapter outputs under `tests/fixtures/adapters/output_root/` with globs matching `docs/examples/sources-matsim.yaml` / `sources-sumo-fcd.yaml`; fixture-local `sources.matsim.yaml` / `sources.sumo.yaml` for discovery + ingest CI. SUMO XML adapter defaults to **CSV** (`--format ndjson` optional); example YAML leads with the tabular FCD path. No new `FormatType`.

@@ -7,10 +7,13 @@ self-contained HTML file — dark ground plane instead of a basemap, so the
 result makes zero network requests at runtime and can be mailed to anyone.
 
 Usage:
+    viz-export --list-presets
+    viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+               --out exports/demo-paper.html
     viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
-    viz-export --vehicle-type taxi --city tokyo --n 2000 --out taxi.html
 
-The deck.gl vendor bundle must be fetched once first:
+Paper presets default to ``engine: minimal`` (no vendor). Deck / cinematic
+presets default to ``engine: deck`` — fetch the vendor once first:
     python scripts/fetch_vendor.py
 
 Data encoding mirrors the Phase 2C buildings format: coordinates quantized to
@@ -42,6 +45,7 @@ from backend.trajectory_queries import (  # noqa: E402
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PRESETS_DIR = PROJECT_ROOT / "presets"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "export_template.html"
 MINIMAL_TEMPLATE_PATH = Path(__file__).resolve().parent / "export_template_minimal.html"
 DEFAULT_VENDOR = PROJECT_ROOT / "scripts" / "vendor" / "deck.gl.min.js"
@@ -50,10 +54,20 @@ SCALE_DEG = 1e-5
 DATA_BUDGET_WARN_MB = 4.0
 TOTAL_BUDGET_FAIL_MB = 8.0
 SUPPORTED_ENGINES = frozenset({"deck", "minimal"})
+# Gallery workflow labels (preset YAML `workflow:`) — cues only, not engines.
+SUPPORTED_WORKFLOWS = frozenset({"paper", "deck", "cinematic", "share"})
 
 # Phase D form ids the cinematic exporter can bake today.
 # Aliases: trail ↔ trails. Other viz forms (od-arcs, heatmap, …) are noted.
 EXPORT_FORM_IDS = frozenset({"trail", "trails", "agents", "pulse", "buildings"})
+
+# Human cues for --list-presets / gallery docs when YAML omits `use:`.
+_WORKFLOW_USE_FALLBACK = {
+    "paper": "Paper figures, email, light attachment",
+    "deck": "Richer slide / collaborator hand-off",
+    "cinematic": "Lab night scene (buildings + pulse)",
+    "share": "Live dashboard URL hash (see docs/EXPORT.md)",
+}
 
 # Fallback source colors when sources.yaml is unavailable (standalone DB).
 DEFAULT_COLORS: dict[str, tuple[int, int, int]] = {
@@ -159,9 +173,100 @@ def validate_engine(engine: str | None) -> str:
     )
 
 
+def resolve_engine(
+    cli_engine: str | None,
+    preset_engine: str | None = None,
+) -> str:
+    """CLI ``--engine`` wins; else preset ``engine:``; else ``deck``."""
+    if cli_engine is not None:
+        return validate_engine(cli_engine)
+    if preset_engine is not None:
+        return validate_engine(str(preset_engine).strip() or None)
+    return "deck"
+
+
 # Back-compat alias for older call sites / notebooks.
 def reject_unimplemented_engine(engine: str | None) -> None:
     validate_engine(engine)
+
+
+@dataclass
+class PresetSummary:
+    """One gallery preset for ``--list-presets`` / docs cues."""
+
+    path: Path
+    title: str
+    workflow: str | None
+    engine: str
+    forms: list[str]
+    use: str
+    sample_n: int | None
+
+
+def load_preset_summaries(presets_dir: Path | None = None) -> list[PresetSummary]:
+    """Scan ``presets/*.yaml`` (skip README) into gallery rows."""
+    import yaml
+
+    root = presets_dir or PRESETS_DIR
+    rows: list[PresetSummary] = []
+    if not root.is_dir():
+        return rows
+    for path in sorted(root.glob("*.yaml")):
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        workflow = cfg.get("workflow")
+        workflow_s = str(workflow).strip() if workflow else None
+        if workflow_s and workflow_s not in SUPPORTED_WORKFLOWS:
+            # Soft: still list; cue notes unknown workflow for operators.
+            pass
+        engine = resolve_engine(None, cfg.get("engine"))
+        forms = [str(f) for f in (cfg.get("forms") or [])]
+        use = str(cfg.get("use") or "").strip()
+        if not use and workflow_s:
+            use = _WORKFLOW_USE_FALLBACK.get(workflow_s, "")
+        sample_n = cfg.get("sample_n")
+        rows.append(
+            PresetSummary(
+                path=path,
+                title=str(cfg.get("title") or path.stem),
+                workflow=workflow_s,
+                engine=engine,
+                forms=forms,
+                use=use or "—",
+                sample_n=int(sample_n) if sample_n is not None else None,
+            )
+        )
+    return rows
+
+
+def format_preset_gallery(rows: list[PresetSummary] | None = None) -> str:
+    """Plain-text gallery table for CLI / help."""
+    rows = rows if rows is not None else load_preset_summaries()
+    if not rows:
+        return "(no presets/*.yaml found)"
+    lines = [
+        "Export preset gallery (see presets/README.md · docs/EXPORT.md)",
+        "",
+        f"{'preset':<22} {'engine':<8} {'workflow':<11} {'forms':<28} use",
+        f"{'-'*22} {'-'*8} {'-'*11} {'-'*28} {'-'*24}",
+    ]
+    for r in rows:
+        rel = r.path.name if r.path.parent == PRESETS_DIR else str(r.path)
+        forms = ",".join(r.forms) if r.forms else "(legacy)"
+        wf = r.workflow or "—"
+        lines.append(
+            f"{rel:<22} {r.engine:<8} {wf:<11} {forms:<28} {r.use}"
+        )
+    lines.extend(
+        [
+            "",
+            "Paper → mail a small HTML  ·  Deck → richer offline scene  ·  "
+            "Share → copy the live URL hash (not this CLI).",
+            "Override engine: viz-export --engine deck|minimal …",
+            "Example: viz-export --preset presets/demo-paper.yaml "
+            "--db demo/demo.duckdb --out exports/demo-paper.html",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _b64(fmt: str, values: list) -> str:
@@ -534,13 +639,29 @@ def html_size_check(
 def main() -> None:
     global _FORCE
     ap = argparse.ArgumentParser(
-        description="Export a self-contained cinematic HTML",
-        epilog=(
-            "Prerequisite for --engine deck (default): "
-            "python scripts/fetch_vendor.py (pinned deck.gl SHA-256). "
-            "--engine minimal needs no vendor. "
-            "See docs/EXPORT.md and presets/README.md."
+        description=(
+            "Export a self-contained offline HTML (paper / deck / cinematic). "
+            "For live dashboard share links, copy the URL hash instead — "
+            "see docs/EXPORT.md."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Choose a path:\n"
+            "  paper      presets/demo-paper.yaml  (engine:minimal by default)\n"
+            "  deck       presets/demo-deck.yaml   (engine:deck)\n"
+            "  cinematic  presets/tokyo-night.yaml (lab DB + buildings)\n"
+            "  share      copy the live UI URL hash (not this CLI)\n"
+            "\n"
+            "List gallery:  viz-export --list-presets\n"
+            "Deck vendor:   python scripts/fetch_vendor.py  "
+            "(only needed for --engine deck)\n"
+            "Docs:          docs/EXPORT.md · presets/README.md"
+        ),
+    )
+    ap.add_argument(
+        "--list-presets",
+        action="store_true",
+        help="Print the export preset gallery and exit",
     )
     ap.add_argument("--preset", type=str, default=None, help="Preset YAML path")
     ap.add_argument("--db", type=str, default=None, help="DuckDB path (default: viz DB)")
@@ -557,22 +678,45 @@ def main() -> None:
     ap.add_argument(
         "--engine",
         choices=("deck", "minimal"),
-        default="deck",
+        default=None,
         help=(
-            "Render engine (default: deck = inlined deck.gl). "
-            "'minimal' = Canvas 2D shell without the deck.gl vendor (~1 MB smaller)."
+            "Render engine. Default: preset engine: when --preset is set, "
+            "else deck. 'minimal' = Canvas 2D shell without the deck.gl vendor."
         ),
     )
     ap.add_argument("--force", action="store_true", help="Ignore the size budget")
-    ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--out",
+        required=False,
+        default=None,
+        help="Output HTML path (required unless --list-presets)",
+    )
     args = ap.parse_args()
+    if args.list_presets:
+        print(format_preset_gallery())
+        return
+    if not args.out:
+        raise SystemExit(
+            "[ERROR] --out is required (or pass --list-presets).\n"
+            "  Try: viz-export --list-presets\n"
+            "  Or:  viz-export --preset presets/demo-paper.yaml "
+            "--db demo/demo.duckdb --out exports/demo-paper.html"
+        )
     _FORCE = args.force
-    engine = validate_engine(args.engine)
 
     cfg: dict = {}
     if args.preset:
         import yaml
         cfg = yaml.safe_load(Path(args.preset).read_text(encoding="utf-8")) or {}
+    engine = resolve_engine(args.engine, cfg.get("engine"))
+    workflow = cfg.get("workflow")
+    if workflow:
+        print(f"[workflow] {workflow}")
+    print(f"[engine] {engine}" + (
+        " (from --engine)" if args.engine is not None
+        else (" (from preset)" if cfg.get("engine") else " (default)")
+    ))
+
     filters = cfg.get("filters", {})
     vehicle_type = args.vehicle_type or filters.get("vehicle_type")
     city = args.city or filters.get("city")
@@ -620,11 +764,13 @@ def main() -> None:
                 f"  One-time setup:\n"
                 f"    python scripts/fetch_vendor.py   # download + verify pinned SHA-256\n"
                 f"  Or use --engine minimal (no vendor required).\n"
-                f"  See docs/EXPORT.md."
+                f"  Paper path: viz-export --preset presets/demo-paper.yaml "
+                f"--db demo/demo.duckdb --out exports/demo-paper.html\n"
+                f"  See docs/EXPORT.md · viz-export --list-presets."
             )
         vendor_js = vendor_path.read_text(encoding="utf-8")
     else:
-        print("[engine] minimal — skipping deck.gl vendor fetch")
+        print("[note] no deck.gl vendor needed for engine=minimal")
 
     buildings_bin = None
     if buildings_key:
@@ -653,7 +799,10 @@ def main() -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
-    print(f"[done] {out} in {time.time()-t0:.1f}s — open it in any browser, no server needed")
+    print(
+        f"[done] {out} in {time.time()-t0:.1f}s — open it in any browser, "
+        f"no server needed (engine={engine})"
+    )
 
 
 if __name__ == "__main__":

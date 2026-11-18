@@ -1,15 +1,20 @@
-# Paper / slide-deck export — small, demo-DB friendly (Phase D default path).
+# Paper / email export — small, demo-DB friendly (default product path).
 #
-# No lab/PFLOW DuckDB required. Bake the bundled demo first if needed:
+# workflow: paper → engine: minimal by default (no vendor fetch).
+# Override with --engine deck if you want app-matching WebGL visuals.
+#
 #   trajectory-viz-demo --ensure
-#   python scripts/fetch_vendor.py          # once per machine (see docs/EXPORT.md)
 #   viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
 #              --out exports/demo-paper.html
+#   viz-export --list-presets
 #
-# forms: gates baking (TV-8): trails only — no pulse / buildings / agents →
-# keeps the HTML well under the 8 MB size gate for paper & deck embeds.
+# forms: gates baking — trails only (no pulse / buildings / agents) keeps
+# the HTML tiny for paper figures & light attachments. See docs/EXPORT.md.
 
 title: "Kichijōji Couriers — Paper"
+workflow: paper
+engine: minimal
+use: "Paper figures, email, light offline attachment"
 
 forms:
   - trail
