@@ -12,6 +12,8 @@ Produces a small (< 2 MB) synthetic day of movement around Kichijōji, Tokyo
                                 'Z' (UTC) and '+09:00' across files.
     demo/transit/buses.geojson  6 bus LineStrings with a per-coordinate
                                 'coordTimes' ISO property + 'bus_id'.
+    demo/od/trips_od.csv        Trips-only OD CSV with string `mode` labels
+                                (walk/bike/bus) → render.mode: arcs.
     demo/pois/stations.geojson  40 Point POIs in 3 categories
                                 (station / mall / park) with name + category.
 
@@ -170,6 +172,37 @@ def _poi(rng: random.Random, name: str, category: str) -> dict:
     }
 
 
+_OD_MODES = ("walk", "bike", "bus")
+N_OD_TRIPS = 48
+
+
+def _od_rows(rng: random.Random) -> list[dict]:
+    """Trips-only OD sample with canonical string modes (Phase D universal demo)."""
+    rows = []
+    for i in range(N_OD_TRIPS):
+        start_lon = rng.uniform(LON_MIN, LON_MAX)
+        start_lat = rng.uniform(LAT_MIN, LAT_MAX)
+        end_lon = rng.uniform(LON_MIN, LON_MAX)
+        end_lat = rng.uniform(LAT_MIN, LAT_MAX)
+        starttime = int(rng.uniform(7 * 3600, 21 * 3600))
+        mode = _OD_MODES[i % len(_OD_MODES)]
+        # Rough haversine-ish km for the tiny bbox (~0.5–3 km).
+        dist = ((end_lon - start_lon) ** 2 + (end_lat - start_lat) ** 2) ** 0.5 * 111
+        rows.append({
+            "trip_id": i + 1,
+            "agent_id": f"od-{i // 3 + 1:02d}",
+            "starttime": starttime,
+            "start_lon": round(start_lon, 6),
+            "start_lat": round(start_lat, 6),
+            "end_lon": round(end_lon, 6),
+            "end_lat": round(end_lat, 6),
+            "mode": mode,
+            "distance_km": round(max(dist, 0.2), 3),
+            "sim_day": 0,
+        })
+    return rows
+
+
 def generate(out_dir: Path) -> dict[str, int]:
     rng = random.Random(SEED)
     stats: dict[str, int] = {}
@@ -195,6 +228,25 @@ def generate(out_dir: Path) -> dict[str, int]:
         json.dumps(buses, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
     )
     stats["bus_coords"] = sum(len(f["geometry"]["coordinates"]) for f in buses["features"])
+
+    od_dir = out_dir / "od"
+    od_dir.mkdir(parents=True, exist_ok=True)
+    od_rows = _od_rows(rng)
+    header = (
+        "trip_id,agent_id,starttime,start_lon,start_lat,end_lon,end_lat,"
+        "mode,distance_km,sim_day"
+    )
+    lines = [header]
+    for r in od_rows:
+        lines.append(
+            f"{r['trip_id']},{r['agent_id']},{r['starttime']},"
+            f"{r['start_lon']},{r['start_lat']},{r['end_lon']},{r['end_lat']},"
+            f"{r['mode']},{r['distance_km']},{r['sim_day']}"
+        )
+    (od_dir / "trips_od.csv").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+    )
+    stats["od_trips"] = len(od_rows)
 
     poi_dir = out_dir / "pois"
     poi_dir.mkdir(parents=True, exist_ok=True)
@@ -227,6 +279,7 @@ def main() -> None:
     print(f"Demo dataset written to {args.out}")
     print(f"  Couriers:  {N_COURIERS} GPX tracks, {stats['courier_trkpts']} trkpts")
     print(f"  Buses:     {N_BUSES} LineStrings, {stats['bus_coords']} coords")
+    print(f"  OD arcs:   {stats['od_trips']} trips-only CSV rows (string modes)")
     print(f"  POIs:      {stats['pois']} points "
           f"({', '.join(f'{k}={v}' for k, v in POI_COUNTS.items())})")
     print(f"  Total size: {total / 1024:.0f} KB (budget: 2048 KB)")

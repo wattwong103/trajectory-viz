@@ -109,7 +109,7 @@ def test_matsim_example_declares_string_mode():
 
 def test_repo_sources_yaml_declares_render_for_all_sources():
     """The shipped sources.yaml carries render hints on every source (2A)."""
-    sources = load_sources(PROJECT_ROOT / "sources.yaml")
+    sources = load_sources(PROJECT_ROOT / "profiles" / "pflow" / "sources.yaml")
     for key, src in sources.sources.items():
         assert src.render is not None, f"{key} is missing a render block"
         assert src.render.color is not None, f"{key} render.color unset"
@@ -298,7 +298,7 @@ def test_poi_block_requires_lon_lat():
 
 def test_existing_repo_yamls_validate_unchanged():
     """Back-compat: the shipped v1 files must validate with no changes."""
-    for name in ("sources.yaml", "sources.kichijoji.yaml"):
+    for name in ("profiles/pflow/sources.yaml", "profiles/pflow/sources.kichijoji.yaml"):
         path = PROJECT_ROOT / name
         if path.is_file():
             sources = load_sources(path)

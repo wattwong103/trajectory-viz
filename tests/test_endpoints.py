@@ -44,7 +44,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection, tmp_path: Path) -> None:
     (so speed_avg_kmh populates for one truck row), plus 4 taxi trips in Tokyo.
     """
     _init_schema(conn)
-    sources = load_sources(PROJECT_ROOT / "sources.yaml")
+    sources = load_sources(PROJECT_ROOT / "profiles" / "pflow" / "sources.yaml")
 
     # Truck trips — varied dep_hours so /temporal/* has data across hours
     truck_csv = tmp_path / "truck.csv"
@@ -109,8 +109,16 @@ def _populated_db(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _patch_singleton(_populated_db, monkeypatch):
     """Replace the module-global DuckDB singleton with our populated in-memory DB
-    for the duration of each test."""
+    for the duration of each test.
+
+    Phase D: point the sources registry at the PFLOW lab profile so style
+    hints for the truck/taxi fixture still resolve (default is demo).
+    """
     monkeypatch.setattr(backend.db, "_connection", _populated_db)
+    monkeypatch.setenv(
+        "TRAJECTORY_VIZ_SOURCES",
+        str(PROJECT_ROOT / "profiles" / "pflow" / "sources.yaml"),
+    )
 
 
 @pytest.fixture

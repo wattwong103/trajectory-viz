@@ -1,11 +1,16 @@
 """
-PFLOW_HOME resolution — mirrors Java's PathResolver.java logic.
+Path resolution for trajectory-viz (Phase D: demo/universal defaults).
 
-Auto-detects the PFLOW project root based on OS conventions,
-with PFLOW_HOME env var override.
+Out of the box the product points at the committed demo dataset under
+``demo/`` — no Dropbox / PFLOW_HOME surprise. Lab workflows opt in via:
 
-Standalone mode: set PFLOW_VIZ_DB (and optionally PFLOW_VIZ_OUTPUT_ROOT)
-to run without the PFLOW monorepo. PFLOW_HOME is never touched in that case.
+  - ``TRAJECTORY_VIZ_PROFILE=pflow`` (or ``kichijoji`` / ``gufm``), and/or
+  - ``PFLOW_HOME`` / ``--pflow-home`` when using the PFLOW profile, and/or
+  - explicit ``TRAJECTORY_VIZ_DB`` / ``PFLOW_VIZ_DB`` / ``*_SOURCES`` /
+    ``*_OUTPUT_ROOT`` overrides (aliases kept for back-compat).
+
+Standalone mode: set TRAJECTORY_VIZ_DB (or PFLOW_VIZ_DB) and the backend
+never touches PFLOW_HOME.
 """
 
 import os
@@ -14,8 +19,8 @@ from pathlib import Path
 # This repo's root (backend/config.py -> repo). Tests point it into tmp_path.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 # A folder holding output/viz/ (where pflow.duckdb lives) is taken as the PFLOW
-# workspace. output/ is local-only, so a fresh machine is found only after its
-# first ingest; run that one with --pflow-home or PFLOW_HOME.
+# workspace. Only consulted when the PFLOW profile (or explicit PFLOW_HOME)
+# is opted in — never on the default demo path.
 _WORKSPACE_MARKER = Path("output") / "viz"
 
 # Lazy-resolved. Raises only if code actually needs PFLOW_HOME.
@@ -38,16 +43,37 @@ def _find_enclosing_workspace(repo_root: Path) -> Path | None:
     return None
 
 
+def _wants_pflow_paths() -> bool:
+    """True when path defaults should use the PFLOW monorepo layout.
+
+    Opt-in signals (any one is enough):
+      - TRAJECTORY_VIZ_PROFILE / PFLOW_VIZ_PROFILE in {pflow, kichijoji}
+      - PFLOW_HOME set (lab shell already exports it)
+    Explicit DB / OUTPUT_ROOT env vars short-circuit before this is consulted.
+    """
+    profile = (
+        os.environ.get("TRAJECTORY_VIZ_PROFILE")
+        or os.environ.get("PFLOW_VIZ_PROFILE")
+        or ""
+    ).strip().lower()
+    if profile in ("pflow", "kichijoji"):
+        return True
+    if os.environ.get("PFLOW_HOME"):
+        return True
+    return False
+
+
 def get_pflow_home() -> Path:
     """Resolve PFLOW project root directory (lazy + cached).
 
     Priority:
         1. PFLOW_HOME environment variable
         2. The nearest folder above this repo that holds output/viz/
-        3. ~/Dropbox/PFLOW (default for the reference setup)
+        3. ~/Dropbox/PFLOW (default for the reference lab setup)
 
     Raises FileNotFoundError if none of the candidates exist.
-    Only called when PFLOW_VIZ_DB / PFLOW_VIZ_OUTPUT_ROOT are not set.
+    Only called when a PFLOW-shaped path is opted in (profile / PFLOW_HOME)
+    and TRAJECTORY_VIZ_DB / PFLOW_VIZ_DB / OUTPUT_ROOT are not set.
     """
     global _pflow_home, _pflow_home_env_warned
     if _pflow_home is not None:
@@ -81,7 +107,9 @@ def get_pflow_home() -> Path:
     raise FileNotFoundError(
         "Cannot locate PFLOW project root. "
         "Set PFLOW_HOME environment variable or ensure Dropbox is synced. "
-        "For standalone mode, set PFLOW_VIZ_DB instead."
+        "For the default demo path, unset TRAJECTORY_VIZ_PROFILE / PFLOW_HOME "
+        "and run `trajectory-viz-demo`. For standalone mode, set "
+        "TRAJECTORY_VIZ_DB (or PFLOW_VIZ_DB) instead."
     )
 
 
@@ -89,9 +117,10 @@ def get_viz_db_path() -> Path:
     """Return the DuckDB database file path.
 
     Priority:
-      1. TRAJECTORY_VIZ_DB env var (canonical standalone alias, Phase C)
+      1. TRAJECTORY_VIZ_DB env var (canonical standalone alias)
       2. PFLOW_VIZ_DB env var (legacy standalone alias — same semantics)
-      3. PFLOW_HOME/output/viz/pflow.duckdb (monorepo mode)
+      3. PFLOW profile / PFLOW_HOME opted in → PFLOW_HOME/output/viz/pflow.duckdb
+      4. Default (Phase D): <repo>/demo/demo.duckdb
 
     In standalone mode (either DB env set), the backend serves from
     wherever that path points and never touches PFLOW_HOME.
@@ -101,23 +130,34 @@ def get_viz_db_path() -> Path:
         p = Path(env)
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
-    # Fall through to monorepo mode
-    db_dir = get_pflow_home() / "output" / "viz"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    return db_dir / "pflow.duckdb"
+    if _wants_pflow_paths():
+        db_dir = get_pflow_home() / "output" / "viz"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return db_dir / "pflow.duckdb"
+    # Phase D default — committed demo dataset path (created on first ingest).
+    demo_db = _REPO_ROOT / "demo" / "demo.duckdb"
+    demo_db.parent.mkdir(parents=True, exist_ok=True)
+    return demo_db
 
 
 def get_output_root() -> Path:
     """Return the output root — where ingest scans for trips/ and trajectory/.
 
     Priority:
-      1. PFLOW_VIZ_OUTPUT_ROOT env var
-      2. PFLOW_HOME/output (monorepo mode)
+      1. TRAJECTORY_VIZ_OUTPUT_ROOT env var (canonical)
+      2. PFLOW_VIZ_OUTPUT_ROOT env var (legacy alias)
+      3. PFLOW profile / PFLOW_HOME opted in → PFLOW_HOME/output
+      4. Default (Phase D): <repo>/demo
     """
-    env = os.environ.get("PFLOW_VIZ_OUTPUT_ROOT")
+    env = (
+        os.environ.get("TRAJECTORY_VIZ_OUTPUT_ROOT")
+        or os.environ.get("PFLOW_VIZ_OUTPUT_ROOT")
+    )
     if env:
         return Path(env)
-    return get_pflow_home() / "output"
+    if _wants_pflow_paths():
+        return get_pflow_home() / "output"
+    return _REPO_ROOT / "demo"
 
 
 def get_output_dir() -> Path:

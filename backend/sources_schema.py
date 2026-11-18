@@ -22,6 +22,19 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+# Phase D — product profile. Demo/universal is the out-of-box default; lab
+# packs (PFLOW goods/fare/pedestrianize, GUFM, …) are opt-in.
+DEFAULT_PROFILE = "demo"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# name → sources.yaml path relative to repo root
+PROFILE_SOURCES: dict[str, str] = {
+    "demo": "demo/sources.demo.yaml",
+    "pflow": "profiles/pflow/sources.yaml",
+    "kichijoji": "profiles/pflow/sources.kichijoji.yaml",
+    "gufm": "profiles/gufm/sources.yaml",
+}
+
 # DuckDB types we accept in column specs.
 ColumnType = Literal["int", "bigint", "double", "varchar", "bool"]
 
@@ -347,6 +360,14 @@ class SourceConfig(BaseModel):
     time: TimeConfig | None = Field(
         default=None,
         description="Optional absolute-time handling (epoch anchor, coord-times prop).",
+    )
+    forms: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional viz-form ids this source is meant to enable "
+            "(e.g. trail, od-arcs, heatmap). Declarative hint for docs/export; "
+            "runtime availability still comes from dataset capabilities."
+        ),
     )
 
     @model_validator(mode="after")
@@ -680,17 +701,44 @@ def load_sources_merged(
     )
 
 
+def resolve_profile(name: str | None = None) -> str:
+    """Return a known profile name (default: demo).
+
+    Looks at ``name``, then ``TRAJECTORY_VIZ_PROFILE`` / ``PFLOW_VIZ_PROFILE``.
+    """
+    raw = (name or os.environ.get("TRAJECTORY_VIZ_PROFILE")
+           or os.environ.get("PFLOW_VIZ_PROFILE") or DEFAULT_PROFILE)
+    key = raw.strip().lower()
+    if key not in PROFILE_SOURCES:
+        known = ", ".join(sorted(PROFILE_SOURCES))
+        raise ValueError(f"unknown profile {raw!r}; known: {known}")
+    return key
+
+
+def profile_sources_path(name: str | None = None) -> Path:
+    """Absolute path of the sources registry for a profile."""
+    key = resolve_profile(name)
+    return _REPO_ROOT / PROFILE_SOURCES[key]
+
+
+def active_profile() -> str:
+    """Profile in effect for path defaults (ignores explicit SOURCES env)."""
+    return resolve_profile(None)
+
+
 def default_sources_path() -> Path:
-    """Default location of sources.yaml.
+    """Default location of the sources registry (Phase D: demo-first).
 
     Priority:
-      1. PFLOW_VIZ_SOURCES env var (absolute path)
-      2. ./sources.yaml relative to the project root (one level above backend/)
+      1. TRAJECTORY_VIZ_SOURCES env var (canonical absolute path)
+      2. PFLOW_VIZ_SOURCES env var (legacy alias — same semantics)
+      3. Profile from TRAJECTORY_VIZ_PROFILE / PFLOW_VIZ_PROFILE (default: demo)
+         → demo/sources.demo.yaml or profiles/<name>/…
     """
-    env = os.environ.get("PFLOW_VIZ_SOURCES")
+    env = os.environ.get("TRAJECTORY_VIZ_SOURCES") or os.environ.get("PFLOW_VIZ_SOURCES")
     if env:
         return Path(env)
-    return Path(__file__).resolve().parent.parent / "sources.yaml"
+    return profile_sources_path()
 
 
 def dryrun_discovery(sources: SourcesFile, output_root: Path) -> dict[str, int]:

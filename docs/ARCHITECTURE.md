@@ -116,7 +116,11 @@ layer groups follow the form taxonomy (core / analysis / scene / lab plugins);
 goods / footfall / pedestrianize hide when attrs or modes are absent; pulse
 disable reasons cite `has_density_hourly` + the ingest fix-it command.
 **Phase C:** string `mode` + string `agent_id` storage; no JSON `attrs`
-migration (lab columns stay sparse/nullable). Demo-as-default is Phase D.
+migration (lab columns stay sparse/nullable).
+**Phase D:** demo/universal is the default product profile
+(`demo/sources.demo.yaml` → `demo/demo.duckdb`); PFLOW lives under
+`profiles/pflow/` and is opted in via `TRAJECTORY_VIZ_PROFILE=pflow` /
+`PFLOW_HOME` / `--profile pflow`. No silent Dropbox/PFLOW_HOME path hijack.
 
 **Deprecation:** do not treat `vehicle_type` as a concept distinct from
 `source_id`. Ingest still dual-writes the mirror column; the public contract
@@ -186,14 +190,14 @@ See [DATA_FORMATS.md → Mega-sim ingest](DATA_FORMATS.md#11-mega-sim-ingest-tri
 trajectory-viz/
 ├── backend/
 │   ├── app.py              FastAPI app + router registration
-│   ├── config.py           PFLOW_HOME / PFLOW_VIZ_DB resolution
+│   ├── config.py           demo-default paths; PFLOW_HOME only when opted in
 │   ├── db.py               DuckDB schema + connection + build_trip_filter
 │   ├── demo.py             trajectory-viz-demo: bundled demo ingest + serve
 │   ├── formats.py          geojson/gpx/ndjson normalizers (staging shape)
-│   ├── ingest.py           sources.yaml → staging → DuckDB INSERT...SELECT
+│   ├── ingest.py           sources registry → staging → DuckDB INSERT...SELECT
 │   ├── lod.py              Mega-sim scale thresholds + sample/ingest caps
 │   ├── models.py           Pydantic request/response models
-│   ├── sources_schema.py   Pydantic models + loader for sources.yaml
+│   ├── sources_schema.py   Pydantic models + profile loader (demo|pflow|…)
 │   ├── routers/            stats.py, trips.py, trajectories.py, pois.py
 │   └── analysis/           temporal, spatial, trip_chains, od_flows, clustering
 ├── frontend/
@@ -215,8 +219,9 @@ trajectory-viz/
 │   ├── CONTRIBUTING.md     Adding a new ABM source, code style
 │   └── examples/
 │       └── sources-matsim.yaml  Example schema-driven config
-├── demo/                   Committed synthetic demo dataset + sources.demo.yaml
-├── sources.yaml            Live source registry
+├── demo/                   Default universal dataset + sources.demo.yaml
+├── profiles/               Opt-in lab packs (pflow, gufm, …)
+├── presets/                Cinematic export presets (forms declared)
 ├── pyproject.toml          Project metadata + deps + entry points
 ├── Dockerfile              Multi-stage Docker build
 ├── docker-compose.yml      One-command deploy

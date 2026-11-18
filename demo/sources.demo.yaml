@@ -1,12 +1,20 @@
-# Demo sources file for the committed synthetic dataset (see
-# demo/generate_demo_data.py). Globs resolve relative to PFLOW_VIZ_OUTPUT_ROOT,
-# which backend/demo.py sets to this demo/ directory.
+# Universal reference registry (Phase D default product profile).
 #
-# One simulated day around Kichijoji, Tokyo, anchored at 2024-03-01 JST.
+# Multi-format / multi-mode demo around Kichijōji, Tokyo — the out-of-box
+# discovery path when TRAJECTORY_VIZ_PROFILE is unset. Lab packs live under
+# profiles/pflow/ (opt-in: TRAJECTORY_VIZ_PROFILE=pflow).
+#
+# Globs resolve relative to PFLOW_VIZ_OUTPUT_ROOT / TRAJECTORY_VIZ_OUTPUT_ROOT,
+# which backend/demo.py (and Phase D defaults) set to this demo/ directory.
+#
+# Validate:
+#   python -m backend.sources_schema --validate demo/sources.demo.yaml
+
 version: 1
 
 # Per-DB absolute-time anchor (stored in viz_meta on first ingest). Both
-# sources map their ISO timestamps against this anchor.
+# waypoint sources map their ISO timestamps against this anchor; OD trips use
+# starttime seconds-from-midnight on the same day.
 time:
   epoch_anchor: "2024-03-01T00:00:00+09:00"
 
@@ -21,6 +29,7 @@ sources:
       latest_only: false
     vehicle_key_template: "courier:{vehicle_id}"
     trips_synthesis: { strategy: gap_split, gap_minutes: 20 }
+    forms: [trail, agents, heatmap, temporal]
     render:
       mode: trails
       color: [255, 200, 60]
@@ -41,6 +50,7 @@ sources:
       latest_only: false
     vehicle_key_template: "bus:{vehicle_id}"
     trips_synthesis: { strategy: gap_split, gap_minutes: 20 }
+    forms: [trail, agents, heatmap, temporal]
     time:
       coord_times_prop: coordTimes
     render:
@@ -52,6 +62,32 @@ sources:
         unix_time_ms: { csv: _time_ms, type: bigint }
         lon:          { csv: _lon,     type: double }
         lat:          { csv: _lat,     type: double }
+
+  # Trips-only OD CSV — string mode labels, no waypoints → OD arcs.
+  od-flows:
+    label: "Local OD Arcs (CSV)"
+    source_id: od
+    discovery:
+      trips_glob: "od/trips_od.csv"
+      latest_only: false
+    vehicle_key_template: "od:{vehicle_id}"
+    forms: [od-arcs, od-endpoints, temporal, heatmap]
+    render:
+      mode: arcs
+      color: [255, 140, 90]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: agent_id
+      trips:
+        starttime:      { csv: starttime,   type: int }
+        start_lon:      { csv: start_lon,   type: double }
+        start_lat:      { csv: start_lat,   type: double }
+        end_lon:        { csv: end_lon,     type: double }
+        end_lat:        { csv: end_lat,     type: double }
+        mode:           { csv: mode,        type: varchar }
+        distance_km:    { csv: distance_km, type: double }
+        dep_hour:       { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day: { csv: sim_day,     type: int }
 
 # Static POI layer — stations / malls / parks around Kichijoji.
 pois:

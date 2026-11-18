@@ -27,7 +27,11 @@ from backend.app import app  # noqa: E402
 
 pytestmark = pytest.mark.slow
 
-_DEMO_ENV_KEYS = ("PFLOW_VIZ_DB", "PFLOW_VIZ_SOURCES", "PFLOW_VIZ_OUTPUT_ROOT")
+_DEMO_ENV_KEYS = (
+    "PFLOW_VIZ_DB", "PFLOW_VIZ_SOURCES", "PFLOW_VIZ_OUTPUT_ROOT",
+    "TRAJECTORY_VIZ_DB", "TRAJECTORY_VIZ_SOURCES", "TRAJECTORY_VIZ_OUTPUT_ROOT",
+    "TRAJECTORY_VIZ_PROFILE",
+)
 
 
 @pytest.fixture(scope="module")
@@ -71,6 +75,11 @@ def test_demo_both_sources_ingested(demo_run):
     ).fetchall())
     assert by_source.get("courier", 0) > 0
     assert by_source.get("bus", 0) > 0
+    # Phase D — trips-only OD CSV (string modes, arcs) has trips but no waypoints.
+    od_trips = conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE source_id = 'od'"
+    ).fetchone()[0]
+    assert od_trips > 0
 
 
 def test_demo_pois_three_categories(demo_run):

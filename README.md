@@ -7,7 +7,7 @@
 [![Node 20+](https://img.shields.io/badge/node-20+-green.svg)](https://nodejs.org/)
 [![Status: alpha](https://img.shields.io/badge/status-v0.2.0a1-orange.svg)](#whats-new-in-v02)
 
-Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the University of Tokyo Sekimoto Lab / CSIS, the dashboard now visualizes **any trajectory dataset** — GPX tracks, GeoJSON lines/points, NDJSON pings, Parquet extracts, or ABM trip CSVs — plus static **POI layers**. New sources are added by writing a `sources.yaml` config block, not by editing backend code; raw timestamped pings get trips synthesized at ingest. A committed demo dataset makes it runnable in minutes with no data of your own.
+Originally built against PFLOW (Pseudo-PFLOW Truck + Taxi ABMs) at the University of Tokyo Sekimoto Lab / CSIS, the dashboard now visualizes **any trajectory dataset** — GPX tracks, GeoJSON lines/points, NDJSON pings, Parquet extracts, or ABM trip CSVs — plus static **POI layers**. **Out-of-box default is the demo/universal profile** (`demo/sources.demo.yaml`); PFLOW lab packs (goods, fare, pedestrianize, PLATEAU) are an **opt-in** profile under `profiles/pflow/`. New sources are added by writing a sources registry block, not by editing backend code.
 
 ---
 
@@ -58,8 +58,12 @@ docker compose up --build
 ./setup.sh        # macOS / Linux
 setup.bat         # Windows
 
-# Ingest (reads sources.yaml; populates pflow.duckdb)
+# Ingest — demo/universal is the default (demo/demo.duckdb)
 trajectory-viz-ingest --reset
+
+# Opt-in PFLOW lab pack (goods / fare / person / PLATEAU context)
+# TRAJECTORY_VIZ_PROFILE=pflow PFLOW_HOME=/path/to/PFLOW \
+#   trajectory-viz-ingest --profile pflow --reset
 
 # Run — two terminals
 trajectory-viz-serve              # backend, port 9999
@@ -68,13 +72,13 @@ cd frontend && npm run dev        # frontend dev server, port 5173
 
 Visit **<http://localhost:5173>**.
 
-See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for prereqs, troubleshooting, and standalone-mode setup.
+See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for prereqs, troubleshooting, PFLOW profile, and standalone-mode setup.
 
 ---
 
 ## Architecture (one paragraph)
 
-A declarative source registry (`sources.yaml`) drives ingest from trajectory files in five formats (CSV, GeoJSON, GPX, NDJSON, Parquet) plus static POI layers. Points-only sources get trips synthesized at ingest; absolute time is anchored per-DB via `viz_meta`. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~30 endpoints under `/api/*`. The React frontend dynamically discovers **Sources** from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
+A declarative source registry (default: `demo/sources.demo.yaml`; lab: `profiles/pflow/sources.yaml`) drives ingest from trajectory files in five formats (CSV, GeoJSON, GPX, NDJSON, Parquet) plus static POI layers. Points-only sources get trips synthesized at ingest; absolute time is anchored per-DB via `viz_meta`. Trips and waypoints land in DuckDB (12 indexes on hot filter columns). FastAPI exposes ~30 endpoints under `/api/*`. The React frontend dynamically discovers **Sources** from `/api/stats/filter-options` — so new ABMs appear as new buttons without frontend code changes. F1/F2/F3 features (multi-dim filters, trip-chain queries, per-segment trajectory attrs) are surfaced through filter sliders, dedicated AnalysisPanel tabs, and toggleable DeckGL layers.
 
 Full diagram: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -101,9 +105,10 @@ trajectory-viz/
 ├── backend/             FastAPI + DuckDB
 ├── frontend/            React + DeckGL + MapLibre
 ├── tests/               pytest unit tests
-├── demo/                Committed synthetic demo dataset + sources.demo.yaml
+├── demo/                Default universal dataset + sources.demo.yaml
+├── profiles/            Opt-in lab packs (pflow, gufm, …)
 ├── docs/                QUICKSTART, DATA_FORMATS, ARCHITECTURE, CONTRIBUTING, examples/
-├── sources.yaml         Declarative source registry
+├── presets/             Cinematic export presets (forms: declared)
 ├── pyproject.toml       Project metadata + deps + entry points
 ├── Dockerfile           Multi-stage build
 ├── docker-compose.yml   One-command deploy

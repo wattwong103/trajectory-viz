@@ -41,6 +41,7 @@ change speed, toggle pulse and buildings. No server needed.
 
 ```yaml
 title: "Tokyo Taxi — One Night"
+forms: [trail, agents, pulse, buildings]   # Phase D — declarative form ids
 filters: { vehicle_type: taxi, city: tokyo, simulation_day: 0 }
 sample_n: 2000                 # export exceeds the app's 500 cap on purpose:
 agents: ["taxi:tokyo:47"]      #   static file, no per-frame fetch
@@ -49,11 +50,17 @@ camera: { longitude: 139.76, latitude: 35.68, zoom: 11.5, pitch: 55, bearing: -1
 loop: { speed: 120, trail_seconds: 1500 }
 ```
 
+- `forms:` lists viz-form ids the preset intends to bake (trail / agents /
+  pulse / buildings today). Unknown ids print a note; full engine gating is
+  reserved for TV-8 export polish.
 - `include.buildings: <city>` embeds `output/viz/buildings/<city>.bin` if it
   exists (bake it first with `scripts/build_buildings.py`; skipped with a note
   otherwise).
 - `include.pulse: true` embeds the `density_hourly` aggregate if built
   (`python -m backend.ingest --aggregates-only`; skipped with a note otherwise).
+
+> Tokyo-night is a **PFLOW/lab** preset — point `TRAJECTORY_VIZ_PROFILE=pflow`
+> (and `PFLOW_HOME`) or `TRAJECTORY_VIZ_DB` at a taxi-ingested DuckDB first.
 
 ## Size budget
 

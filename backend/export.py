@@ -396,6 +396,24 @@ def main() -> None:
     include_pulse = (not args.no_pulse) and include.get("pulse", True)
     buildings_key = args.buildings or include.get("buildings")
     title = args.title or cfg.get("title") or "trajectory-viz export"
+    # Phase D — presets may declare form ids. Full engine gating is TV-8;
+    # here we only surface the declaration and note unknowns.
+    forms = [str(f) for f in (cfg.get("forms") or [])]
+    if forms:
+        baked = {"trail", "trails"}
+        if include_pulse:
+            baked.add("pulse")
+        if buildings_key:
+            baked.add("buildings")
+        if agents:
+            baked.add("agents")
+        print(f"[forms] preset declares: {', '.join(forms)}")
+        pending = [f for f in forms if f not in baked]
+        if pending:
+            print(
+                f"[forms] note: {', '.join(pending)} not a dedicated export "
+                f"engine yet (TV-8); continuing with include.* / filters"
+            )
 
     vendor_path = Path(args.vendor)
     if not vendor_path.is_file():

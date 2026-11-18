@@ -39,16 +39,19 @@ if not exist "data" (
 echo.
 echo Bootstrap complete.
 echo.
-echo Start the backend (monorepo mode):
-echo   .venv-viz\Scripts\trajectory-viz-serve.exe
-echo   (or: .venv-viz\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 9999)
+echo Default path is demo/universal (no PFLOW_HOME required):
+echo   .venv-viz\Scripts\trajectory-viz-demo.exe --serve
+echo   rem or: .venv-viz\Scripts\trajectory-viz-ingest.exe --reset
+echo   rem     .venv-viz\Scripts\trajectory-viz-serve.exe
 echo.
-echo Start the backend (standalone mode):
-echo   set PFLOW_VIZ_DB=C:\path\to\pflow.duckdb
-echo   .venv-viz\Scripts\trajectory-viz-serve.exe
+echo Opt-in PFLOW lab profile:
+echo   set TRAJECTORY_VIZ_PROFILE=pflow
+echo   set PFLOW_HOME=C:\path\to\PFLOW
+echo   .venv-viz\Scripts\trajectory-viz-ingest.exe --profile pflow --reset
 echo.
-echo Ingest data:
-echo   .venv-viz\Scripts\trajectory-viz-ingest.exe --reset
+echo Standalone DB:
+echo   set TRAJECTORY_VIZ_DB=C:\path\to\viz.duckdb
+echo   .venv-viz\Scripts\trajectory-viz-serve.exe
 echo.
 echo Start the frontend (from trajectory-viz\frontend\):
 echo   npm run dev

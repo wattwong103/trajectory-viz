@@ -1136,7 +1136,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--sources", type=str, default=None,
-        help="Path to sources.yaml (default: <project root>/sources.yaml or $PFLOW_VIZ_SOURCES).",
+        help=(
+            "Path to sources registry (default: demo/sources.demo.yaml, or "
+            "$TRAJECTORY_VIZ_SOURCES / $PFLOW_VIZ_SOURCES)."
+        ),
+    )
+    parser.add_argument(
+        "--profile", type=str, default=None,
+        help=(
+            "Product profile: demo (default), pflow, kichijoji, gufm. "
+            "Sets TRAJECTORY_VIZ_PROFILE; ignored when --sources / "
+            "$TRAJECTORY_VIZ_SOURCES is set."
+        ),
     )
     parser.add_argument(
         "--reset", action="store_true",
@@ -1182,6 +1193,8 @@ def main() -> None:
     # Apply CLI overrides to env before config functions are called.
     if args.pflow_home:
         os.environ["PFLOW_HOME"] = args.pflow_home
+    if args.profile:
+        os.environ["TRAJECTORY_VIZ_PROFILE"] = args.profile
     if args.db_path:
         os.environ["PFLOW_VIZ_DB"] = args.db_path
     if args.output_root:
@@ -1204,19 +1217,26 @@ def main() -> None:
     db_path = get_viz_db_path()
     output_dir = get_output_root()
 
+    from backend.config import _wants_pflow_paths
+    from backend.sources_schema import active_profile
+
     print("=" * 64)
     print("  trajectory-viz — Data Ingestion")
     print("=" * 64)
-    if os.environ.get("PFLOW_VIZ_DB") or args.db_path:
+    print(f"  Profile:     {active_profile()}")
+    if os.environ.get("TRAJECTORY_VIZ_DB") or os.environ.get("PFLOW_VIZ_DB") or args.db_path:
+        print(f"  DB path:     {db_path}")
+        print(f"  Output root: {output_dir}")
+    elif _wants_pflow_paths():
+        try:
+            pflow_home = get_pflow_home()
+            print(f"  (PFLOW profile) PFLOW_HOME: {pflow_home}")
+        except FileNotFoundError as e:
+            print(f"  (PFLOW profile) PFLOW_HOME: NOT FOUND — {e}")
         print(f"  DB path:     {db_path}")
         print(f"  Output root: {output_dir}")
     else:
-        try:
-            pflow_home = get_pflow_home()
-            print(f"  (monorepo mode) PFLOW_HOME: {pflow_home}")
-        except FileNotFoundError as e:
-            print(f"  (monorepo mode) PFLOW_HOME: NOT FOUND — {e}")
-        print(f"  DB path:     {db_path}")
+        print(f"  DB path:     {db_path}  (demo/universal default)")
         print(f"  Output root: {output_dir}")
     print(f"  Sources:     {sources_path} ({len(sources.sources)} entries)")
 

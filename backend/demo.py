@@ -54,6 +54,11 @@ def demo_env(db_path: Path, demo_dir: Path | None = None) -> dict[str, str]:
     demo_dir = demo_dir or resolve_demo_dir()
     db_path = Path(db_path)
     return {
+        # Canonical aliases first; legacy PFLOW_* kept for older tooling.
+        "TRAJECTORY_VIZ_DB": str(db_path),
+        "TRAJECTORY_VIZ_SOURCES": str(demo_dir / SOURCES_NAME),
+        "TRAJECTORY_VIZ_OUTPUT_ROOT": str(demo_dir),
+        "TRAJECTORY_VIZ_PROFILE": "demo",
         "PFLOW_VIZ_DB": str(db_path),
         "PFLOW_VIZ_SOURCES": str(demo_dir / SOURCES_NAME),
         "PFLOW_VIZ_OUTPUT_ROOT": str(demo_dir),

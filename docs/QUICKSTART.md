@@ -1,24 +1,34 @@
 # QUICKSTART — trajectory-viz
 
+**Default product path is demo/universal** (Phase D) — no Dropbox or
+`PFLOW_HOME` required. PFLOW lab packs are an **opt-in profile** under
+[`profiles/`](../profiles/README.md).
+
 The fastest way to see the dashboard is the **2-minute demo** below — no data
 of your own required. Then: **Docker** (one command), **native** (Mac/Windows
-dev with Vite HMR), or **standalone** (serve an existing DuckDB file).
+dev with Vite HMR), **PFLOW profile** (lab), or **standalone** (existing DuckDB).
 
 ---
 
-## Path 0: 2-minute demo (no data needed)
+## Path 0: 2-minute demo (default — no data needed)
 
-A small synthetic day of bike couriers, city buses, and POIs around Kichijōji,
-Tokyo is committed under [`demo/`](../demo) — GPX tracks, a GeoJSON bus
-LineString file, and a GeoJSON POI layer, wired by `demo/sources.demo.yaml`.
+A small synthetic day around Kichijōji, Tokyo is committed under
+[`demo/`](../demo) and wired by the reference universal registry
+[`demo/sources.demo.yaml`](../demo/sources.demo.yaml):
+
+- bike couriers — GPX tracks (gap-split trips)
+- city buses — GeoJSON LineStrings + `coordTimes`
+- local OD arcs — trips-only CSV with string `mode` labels (`walk`/`bike`/`bus`)
+- POIs — GeoJSON stations / malls / parks
 
 ```bash
 pip install -e .
 trajectory-viz-demo --serve
+# equivalent defaults: trajectory-viz-ingest && trajectory-viz-serve
 ```
 
-The first run ingests the demo dataset into `demo/demo.duckdb` (subsequent
-runs reuse it; `--reset` forces a fresh ingest; `--db-path` redirects it).
+The first run ingests into `demo/demo.duckdb` (subsequent runs reuse it;
+`--reset` forces a fresh ingest; `--db-path` redirects it).
 Then open **<http://127.0.0.1:9999>**.
 
 > The API is fully functional on :9999 immediately (`/api/stats`, `/docs`).
@@ -107,7 +117,8 @@ vim .env       # uncomment + edit the variables you need
 docker compose up --build
 ```
 
-Native dev users typically `export PFLOW_HOME=…` in their shell instead.
+Native demo users need no env vars. Lab users opt in with
+`export TRAJECTORY_VIZ_PROFILE=pflow` and `export PFLOW_HOME=…`.
 
 ### One-time setup
 
@@ -128,14 +139,19 @@ Each script creates `.venv-viz/`, installs the project in editable mode (`pip in
 ### Ingest data
 
 ```bash
-# macOS / Linux
+# Default (demo/universal registry → demo/demo.duckdb)
 ./.venv-viz/bin/trajectory-viz-ingest --reset
 
-# Windows
-.venv-viz\Scripts\trajectory-viz-ingest --reset
+# Opt-in PFLOW lab profile (goods / fare / person packs)
+export TRAJECTORY_VIZ_PROFILE=pflow
+export PFLOW_HOME=/path/to/PFLOW
+./.venv-viz/bin/trajectory-viz-ingest --profile pflow --reset
 ```
 
-What it does: reads `sources.yaml`, discovers matching CSVs under `$PFLOW_VIZ_OUTPUT_ROOT` (default: `$PFLOW_HOME/output`), and ingests into `pflow.duckdb`. Computes F1 derived metrics (`speed_avg_kmh`, `dwell_minutes`, `detour_ratio`) at the end.
+Default ingest reads `demo/sources.demo.yaml` under `demo/`. The PFLOW profile
+reads [`profiles/pflow/sources.yaml`](../profiles/pflow/sources.yaml) and scans
+`$PFLOW_HOME/output` into `pflow.duckdb`. Both paths compute F1 derived metrics
+(`speed_avg_kmh`, `dwell_minutes`, `detour_ratio`) at the end.
 
 ### Run
 
@@ -208,6 +224,6 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 | Map shows fleets without labels/colors, Compare tab lists cryptic ids | `PFLOW_VIZ_SOURCES` points at the wrong registry for the DB (e.g. demo registry while serving `gufm.duckdb`). The backend also prints a `[WARN] ... have no entry in the sources registry` line naming the culprits. For GUFM data use `./start-gufm-viz.sh` (or the `.bat`). |
 | `npm run dev` errors with `'vite' is not recognized` | `node_modules/` was synced from a different OS. `rm -rf frontend/node_modules && cd frontend && npm install`. |
 | Backend starts but `/api/stats/filter-options` returns empty arrays | DuckDB exists but no data ingested. Run `trajectory-viz-ingest --reset` (see *Ingest data* above). |
-| `Cannot locate PFLOW project root` error | Either set `PFLOW_HOME=/path/to/PFLOW`, or use standalone mode (`PFLOW_VIZ_DB=...`). |
+| `Cannot locate PFLOW project root` error | Only happens on the PFLOW profile. Set `PFLOW_HOME=/path/to/PFLOW`, switch back to demo (`unset TRAJECTORY_VIZ_PROFILE PFLOW_HOME`), or use standalone mode (`TRAJECTORY_VIZ_DB=...`). |
 | Docker build fails on `npm ci` | Stale `package-lock.json` vs. registry. `npm install` (not ci) once locally to refresh, then re-build. |
 | Dashboard shows "No data — run simulation then ingest" but ingest completed | Check `simulation_day` filter — it might be filtering to a day with no data. Click "All days" in the dropdown. |
