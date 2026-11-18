@@ -12,6 +12,8 @@ import {
   decodeHash,
   encodeHiddenSources,
   decodeHiddenSources,
+  encodeDisabledZoneSources,
+  decodeDisabledZoneSources,
   encodeAgents,
   decodeAgents,
 } from '../filterHash';
@@ -121,6 +123,14 @@ describe('filter hash encoding', () => {
     expect(encodeHash({ ...DEFAULT_FILTER, colorBy: 'source' })).toBe('');
   });
 
+  it('round-trips attr colorBy as cb=a.key', () => {
+    expect(encodeHash({ ...DEFAULT_FILTER, colorBy: 'goods_type' })).toBe('cb=a.goods_type');
+    expect(decodeHash('#cb=a.goods_type').colorBy).toBe('goods_type');
+    expect(decodeHash('#cb=a.purpose').colorBy).toBe('purpose');
+    expect(decodeHash('#cb=a.BAD').colorBy).toBeUndefined();
+    expect(decodeHash('#cb=goods_type').colorBy).toBeUndefined();
+  });
+
   it('rejects malformed tm values', () => {
     expect(decodeHash('#tm=abc').transportModes).toBeUndefined();
     expect(decodeHash('#tm=0,x,3').transportModes).toBeUndefined();
@@ -219,5 +229,25 @@ describe('agent-selection hash encoding (Phase 2A)', () => {
   it('decodes empty for hashes without ag=', () => {
     expect(decodeAgents('#vt=truck')).toEqual([]);
     expect(decodeAgents('')).toEqual([]);
+  });
+});
+
+// ── Disabled zone sources (TV-30 S6) ───────────────────────────────────────
+
+describe('hz= disabled-zone-sources hash encoding', () => {
+  it('round-trips disabled zone source_keys', () => {
+    const disabled = ['study_area', 'evac_zone'];
+    expect(decodeDisabledZoneSources('#' + encodeDisabledZoneSources(disabled)))
+      .toEqual(disabled);
+  });
+
+  it('encodes nothing when all zones enabled', () => {
+    expect(encodeDisabledZoneSources([])).toBe('');
+    expect(decodeDisabledZoneSources('#vt=truck')).toEqual([]);
+  });
+
+  it('drops malformed source_keys', () => {
+    expect(decodeDisabledZoneSources('#hz=ok_zone,Bad,also-bad,zone2'))
+      .toEqual(['ok_zone', 'zone2']);
   });
 });

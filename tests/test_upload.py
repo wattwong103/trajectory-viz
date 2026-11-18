@@ -579,3 +579,42 @@ def test_upload_tracks_still_works_beside_od(env, client):
     assert job["status"] == "done", job["error"]
     assert job["result"]["waypoints"] == 5
     assert job["result"]["trips"] == 2
+
+
+# --- (TV-30) Upload source style PATCH -----------------------------------------
+
+
+def test_patch_upload_source_style(env, client):
+    r = _upload(client, "fleet.csv", _CSV.encode())
+    assert r.status_code == 202, r.text
+    job = client.get(f"/api/ingest/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+
+    patch = client.patch(
+        "/api/ingest/sources/fleet/style",
+        json={"mode": "arcs", "color": [10, 20, 30]},
+    )
+    assert patch.status_code == 200, patch.text
+    body = patch.json()
+    assert body["mode"] == "arcs"
+    assert body["color"] == [10, 20, 30]
+
+    reg = yaml.safe_load((env.tmp / "sources.uploads.yaml").read_text())
+    assert reg["sources"]["fleet"]["render"]["mode"] == "arcs"
+    assert reg["sources"]["fleet"]["render"]["color"] == [10, 20, 30]
+
+    opts = client.get("/api/stats/filter-options").json()
+    sources = {s["source_id"]: s for s in opts["sources"]}
+    assert sources["fleet"]["mode"] == "arcs"
+    assert sources["fleet"]["color"] == [10, 20, 30]
+    assert sources["fleet"]["editable"] is True
+
+
+def test_patch_non_upload_source_422(env, client):
+    r = client.patch(
+        "/api/ingest/sources/not_an_upload/style",
+        json={"mode": "points"},
+    )
+    assert r.status_code == 422
+    reasons = " ".join(r.json()["detail"]["reasons"])
+    assert "uploads registry" in reasons.lower() or "not in the uploads" in reasons.lower()

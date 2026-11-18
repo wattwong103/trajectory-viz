@@ -6,6 +6,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **Useful customization controls (TV-30).** Color-by lab attrs from `capabilities.attr_keys` (`goods_type`, `purpose`, …) with share hash `cb=a.*` + legend; upload-source style PATCH (`render.mode`/`color`) via legend ✎; basemap picker (Dark Matter / Positron / Voyager + custom style URL, `bm=` hash + localStorage); per-zone-layer chips (`hz=`) + overlay legend. Continuous attrs / satellite tiles / origins-destinations color-by deferred. Tests: attrColors / basemap / filter-encoding vitest + style PATCH pytest.
+
 - **Trips-only / OD arcs upload (TV-29 S3 / TV-33).** Tabular OD CSVs (`start_lon`/`end_lon`/… + `starttime` + agent + trip id) auto-ingest via `trips_glob` with `render.mode: arcs` and no waypoints (`has_waypoints=false`). Mapping sheet gains GPS tracks vs OD/trips toggle; confirm accepts `kind=trips`. Fresh-DB trips-only pins the historical epoch (day-seconds starttime). Docs: DATA_FORMATS §7 + QUICKSTART. Tests: OD upload/confirm pytest + ColumnMappingSheet vitest.
 
 - **BYO GeoJSON overlay upload for POIs and zones (TV-29 S2 / TV-32).** Polygon GeoJSON auto-ingests as zones; timeless Point GeoJSON as POIs; Point+time stays trajectories (override via `roles` form / UI chooser). Optional `labels` / `colors` form fields; `POST /upload/confirm-overlay` for staged role choice. Overlay configs merge into `sources.uploads.yaml` `pois:`/`zones:`; post-upload reloads zones + POI chips. Docs: DATA_FORMATS §7 + QUICKSTART. Tests: upload overlay pytest + OverlayRoleSheet / geojson-role vitest.

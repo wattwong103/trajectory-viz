@@ -31,7 +31,7 @@ interface AgentTabProps {
   onAddAgent: (key: string) => void;
   onRemoveAgent: (key: string) => void;
   onClearAgents: () => void;
-  colorBy?: 'source' | 'transportMode';
+  colorBy?: 'source' | 'transportMode' | string;
 }
 
 export const AgentTab: React.FC<AgentTabProps> = ({

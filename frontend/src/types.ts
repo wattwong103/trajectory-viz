@@ -145,6 +145,8 @@ export interface SourceStyle {
   mode: 'trails' | 'points' | 'arcs';
   color: [number, number, number] | null;  // null → hash-palette fallback
   has_waypoints: boolean;
+  /** True when style is editable via uploads registry PATCH (TV-30). */
+  editable?: boolean;
 }
 
 /** Canonical simulation-scale engine modes (TV-16). */
@@ -503,7 +505,9 @@ export interface FilterState {
   transportModes?: number[];
   // Canonical string mode labels (trips.mode); hash key ml=.
   modeLabels?: string[];
-  colorBy?: 'source' | 'transportMode';
+  // Color scheme: 'source' (default) | 'transportMode' | lab attr key
+  // (e.g. 'goods_type') when present in capabilities.attr_keys.
+  colorBy?: 'source' | 'transportMode' | string;
   // Pedestrianization scenario (Phase 4): query-time exclusion of car trips
   // whose trajectories enter the bbox. Every fetch carrying the filter
   // reflects it — that IS the before/after toggle.

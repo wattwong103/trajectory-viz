@@ -46,7 +46,14 @@ export function encodeHash(filter: FilterState): string {
   } else if (filter.transportModes?.length) {
     parts.push(`tm=${filter.transportModes.join(',')}`);
   }
-  if (filter.colorBy === 'transportMode') parts.push('cb=tm');
+  if (filter.colorBy === 'transportMode') {
+    parts.push('cb=tm');
+  } else if (filter.colorBy && filter.colorBy !== 'source') {
+    // Lab attr color-by: cb=a.goods_type (snake_case keys only).
+    if (/^[a-z][a-z0-9_]*$/.test(filter.colorBy)) {
+      parts.push(`cb=a.${filter.colorBy}`);
+    }
+  }
   // Phase 4 — scenario: sc=p:{w},{s},{e},{n}
   if (filter.scenario) {
     const b = filter.scenario.bbox;
@@ -109,9 +116,19 @@ export function decodeHash(hash: string): FilterState {
     maxDetourRatio: numParam(params, 'xr'),
     transportModes: decodeTransportModes(params),
     modeLabels: decodeModeLabels(params),
-    colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
+    colorBy: decodeColorBy(params),
     scenario: decodeScenario(params),
   };
+}
+
+function decodeColorBy(params: URLSearchParams): FilterState['colorBy'] {
+  const cb = params.get('cb');
+  if (!cb) return undefined;
+  if (cb === 'tm') return 'transportMode';
+  if (cb.startsWith('a.') && /^a\.[a-z][a-z0-9_]*$/.test(cb)) {
+    return cb.slice(2);
+  }
+  return undefined;
 }
 
 // ─── Hidden-sources hash encoding (Phase 1 legend toggles) ────────────────
@@ -144,6 +161,22 @@ export function decodeDisabledPoiCategories(hash: string): string[] {
   const pc = new URLSearchParams(raw).get('pc');
   if (!pc) return [];
   return pc.split(',').map(s => s.trim()).filter(s => POI_CATEGORY_RE.test(s));
+}
+
+// ─── Disabled zone source_keys hash encoding (TV-30 S6) ───────────────────
+// Same semantics as pc=: empty = all on; hz= lists DISABLED zone source_keys.
+
+export function encodeDisabledZoneSources(disabled: string[]): string {
+  if (disabled.length === 0) return '';
+  return `hz=${disabled.join(',')}`;
+}
+
+export function decodeDisabledZoneSources(hash: string): string[] {
+  if (!hash || hash === '#') return [];
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  const hz = new URLSearchParams(raw).get('hz');
+  if (!hz) return [];
+  return hz.split(',').map(s => s.trim()).filter(s => SOURCE_ID_RE.test(s));
 }
 
 // ─── Agent-selection hash encoding (Phase 2A) ─────────────────────────────

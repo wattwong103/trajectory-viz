@@ -11,7 +11,7 @@ export interface LinksTabProps {
   loadLinkDensity: () => void;
   onClear: () => void;
   linkData: { links: LinkDensityItem[]; count: number; total_links: number } | null;
-  colorBy: 'source' | 'transportMode';
+  colorBy: 'source' | 'transportMode' | string;
 }
 
 export const LinksTab: React.FC<LinksTabProps> = ({

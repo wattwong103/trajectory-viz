@@ -10,7 +10,7 @@ import type { SourceStyle } from '../../types';
 export interface BuildLinkLayersArgs {
   layerVisibility: { linkDensity?: boolean };
   linkDensityPoints?: LinkDensityItem[];
-  colorBy: 'source' | 'transportMode';
+  colorBy: 'source' | 'transportMode' | string;
   hidden: Set<string>;
   sourceStyles: SourceStyle[];
   colorFor: (vehicleType: string) => [number, number, number];

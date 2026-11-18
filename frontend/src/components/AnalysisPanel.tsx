@@ -140,7 +140,7 @@ interface AnalysisPanelProps {
   modeLabels?: string[];
   /** Mode ids present in the dataset (not the active filter selection). */
   datasetTransportModes?: number[];
-  colorBy?: 'source' | 'transportMode';
+  colorBy?: 'source' | 'transportMode' | string;
   /** Increment to force a link-density fetch (Network preset). */
   linkLoadNonce?: number;
 }

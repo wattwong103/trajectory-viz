@@ -32,7 +32,10 @@ import { poiColor } from './poiColors';
 import { buildPoiIconAtlas } from './poiSprites';
 import { unionBboxes, type Bbox } from './utils/bbox';
 import { UploadDropzone } from './components/UploadDropzone';
-import { fetchFilterOptions, queryTrajectoriesPoint, queryTrajectoriesBBox, fetchTrajectoriesByVehicle, fetchHourlyDensity } from './api';
+import {
+  fetchFilterOptions, queryTrajectoriesPoint, queryTrajectoriesBBox,
+  fetchTrajectoriesByVehicle, fetchHourlyDensity, patchSourceStyle,
+} from './api';
 import { exportCompositePng } from './utils/exportPng';
 import { friendlyFetchError } from './friendlyError';
 import type { LayerAvailabilityContext } from './layerCatalog';
@@ -45,7 +48,7 @@ import {
   resolveSimScale,
 } from './lodPolicy';
 import { MAX_AGENTS } from './components/AgentTab';
-import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
+import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse, SourceStyle } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
 import {
   DEFAULT_FILTER,
@@ -55,9 +58,17 @@ import {
   decodeHiddenSources,
   encodeDisabledPoiCategories,
   decodeDisabledPoiCategories,
+  encodeDisabledZoneSources,
+  decodeDisabledZoneSources,
   encodeAgents,
   decodeAgents,
 } from './filterHash';
+import {
+  resolveInitialBasemap, encodeBasemap, styleUrlFor, saveBasemapToStorage,
+  type BasemapSelection,
+} from './basemap';
+import { buildAttrLegend, attrValueOf, isColorableAttr } from './attrColors';
+import { sourceFallbackColor } from './sourceColors';
 import { DEFAULT_LAYER_VIS, type LayerVisibility } from './layerVisibility';
 
 // Re-export for any legacy importers; prefer ./layerVisibility going forward.
@@ -114,6 +125,29 @@ export default function App() {
     () => decodeDisabledPoiCategories(window.location.hash),
   );
 
+  // TV-30 S6 — disabled zone source_keys (empty = all on).
+  const [disabledZoneSources, setDisabledZoneSources] = useState<string[]>(
+    () => decodeDisabledZoneSources(window.location.hash),
+  );
+  const toggleZoneSource = useCallback((sourceKey: string) => {
+    setDisabledZoneSources(prev =>
+      prev.includes(sourceKey)
+        ? prev.filter(s => s !== sourceKey)
+        : [...prev, sourceKey],
+    );
+  }, []);
+
+  // TV-30 S5 — basemap (hash wins, then localStorage, then Dark Matter).
+  const [basemap, setBasemap] = useState<BasemapSelection>(
+    () => resolveInitialBasemap(window.location.hash),
+  );
+  const [basemapToast, setBasemapToast] = useState<string | null>(null);
+  const handleBasemapChange = useCallback((sel: BasemapSelection) => {
+    setBasemap(sel);
+    saveBasemapToStorage(sel);
+    setBasemapToast(null);
+  }, []);
+
   // Through-zone bbox state (Sprint A1b — F2 endpoint UI).
   // Once a query fires, App holds the bbox (rendered as yellow PolygonLayer
   // on the map) and the returned trip list (displayed in the Zone tab).
@@ -165,19 +199,21 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Sync filter + agent-selection + hidden-source + POI-category changes to URL hash
+  // Sync filter + agent-selection + hidden-source + POI/zone + basemap to URL hash
   useEffect(() => {
     const encoded = [
       encodeHash(filter),
       encodeAgents(selectedAgents),
       encodeHiddenSources(hiddenSources),
       encodeDisabledPoiCategories(disabledPoiCategories),
+      encodeDisabledZoneSources(disabledZoneSources),
+      encodeBasemap(basemap),
     ]
       .filter(Boolean)
       .join('&');
     const newHash = encoded ? '#' + encoded : ' ';
     window.history.replaceState(null, '', newHash || window.location.pathname);
-  }, [filter, selectedAgents, hiddenSources, disabledPoiCategories]);
+  }, [filter, selectedAgents, hiddenSources, disabledPoiCategories, disabledZoneSources, basemap]);
 
   // Fetch full-day trajectory chains for followed agents (Phase 2A).
   useEffect(() => {
@@ -262,6 +298,32 @@ export default function App() {
   // here (above handleUploaded) so the upload-completion refetch can reload.
   const { zones, styles: zoneStyles, reload: reloadZones } = useZones();
 
+  const setAllZoneSources = useCallback((enabled: boolean) => {
+    if (enabled) setDisabledZoneSources([]);
+    else setDisabledZoneSources(Object.keys(zoneStyles));
+  }, [zoneStyles]);
+
+  const visibleZones = useMemo(() => {
+    if (disabledZoneSources.length === 0) return zones;
+    const hidden = new Set(disabledZoneSources);
+    return zones.filter(z => !hidden.has(z.source_key));
+  }, [zones, disabledZoneSources]);
+
+  const zoneLayerChips = useMemo(() => (
+    Object.entries(zoneStyles).map(([source_key, style]) => ({
+      source_key,
+      label: style.label || source_key,
+      color: (style.color ?? sourceFallbackColor(source_key)) as [number, number, number],
+    }))
+  ), [zoneStyles]);
+
+  const zoneLegend = useMemo(() => (
+    zoneLayerChips.map(z => ({
+      ...z,
+      hidden: disabledZoneSources.includes(z.source_key),
+    }))
+  ), [zoneLayerChips, disabledZoneSources]);
+
   // POI catalogue — also above handleUploaded so overlay uploads can reload
   // category chips after BYO GeoJSON POI ingest (TV-29 S2).
   const poi = usePois({
@@ -280,6 +342,30 @@ export default function App() {
     void reloadZones();
     void reloadPois();
   }, [refetch, reloadFilterOptions, reloadZones, reloadPois]);
+
+  const handlePatchSourceStyle = useCallback(async (
+    sourceId: string,
+    patch: { mode?: SourceStyle['mode']; color?: [number, number, number] },
+  ) => {
+    await patchSourceStyle(sourceId, patch);
+    reloadFilterOptions();
+  }, [reloadFilterOptions]);
+
+  const attrLegendEntries = useMemo(() => {
+    const key = filter.colorBy;
+    if (!key || key === 'source' || key === 'transportMode' || !isColorableAttr(key)) {
+      return [];
+    }
+    const values: string[] = [];
+    for (const t of displayedTrajectories) {
+      const v = attrValueOf(t.metadata as unknown as Record<string, unknown>, key);
+      if (v) values.push(v);
+    }
+    for (const t of trips) {
+      if (key === 'goods_type' && t.goods_type) values.push(t.goods_type);
+    }
+    return buildAttrLegend(values);
+  }, [filter.colorBy, displayedTrajectories, trips]);
 
   const uploader = useUpload({ onDone: handleUploaded });
 
@@ -542,10 +628,11 @@ export default function App() {
         buildingExaggeration={buildingExaggeration}
         colorBy={filter.colorBy ?? 'source'}
         hiddenSources={hiddenSources}
+        mapStyle={styleUrlFor(basemap)}
         pois={poi.pois}
         poiColorByCategory={poiColorByCategory}
         poiIconAtlas={poiIconAtlas}
-        zones={zones}
+        zones={visibleZones}
         zoneStyleBySource={zoneStyles}
         poiSourceLabels={poiSourceLabels}
         onMapClick={handleMapClick}
@@ -558,8 +645,12 @@ export default function App() {
         attribution={layerVisibility.buildings ? PLATEAU_ATTRIBUTION : undefined}
         colorBy={filter.colorBy ?? 'source'}
         transportModes={filterOptions?.transport_modes ?? []}
+        attrLegend={attrLegendEntries}
+        zoneLegend={zoneLegend}
         hiddenSources={hiddenSources}
         onToggleSource={toggleSource}
+        onToggleZone={toggleZoneSource}
+        onPatchSourceStyle={handlePatchSourceStyle}
       />
 
       {/* Universal-trajectory Phase 2 — only when loading FINISHED with zero
@@ -703,6 +794,12 @@ export default function App() {
         enabledPoiCategories={poi.enabledCategories}
         onTogglePoiCategory={poi.toggleCategory}
         onSetAllPoiCategories={poi.setAll}
+        zoneLayers={zoneLayerChips}
+        disabledZoneSources={disabledZoneSources}
+        onToggleZoneSource={toggleZoneSource}
+        onSetAllZoneSources={setAllZoneSources}
+        basemap={basemap}
+        onBasemapChange={handleBasemapChange}
         onUploadFiles={uploader.upload}
         onReloadFilterOptions={reloadFilterOptions}
         onChange={setFilter}

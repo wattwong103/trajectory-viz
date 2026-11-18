@@ -1057,6 +1057,31 @@ export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
   return fetchJson(`/api/ingest/jobs/${jobId}`);
 }
 
+/** PATCH render.mode / color for an upload-and-go source (TV-30). */
+export async function patchSourceStyle(
+  sourceId: string,
+  patch: { mode?: 'trails' | 'points' | 'arcs'; color?: [number, number, number] },
+): Promise<{ source_id: string; mode: string; color: number[] | null }> {
+  const res = await fetch(
+    `${API_BASE}/api/ingest/sources/${encodeURIComponent(sourceId)}/style`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail?.reasons) detail = body.detail.reasons.join('; ');
+      else if (typeof body?.detail === 'string') detail = body.detail;
+    } catch { /* keep status text */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // ─── Fleet comparison (fleet-comparison) ──────────────
 // GET /api/analysis/compare — two sources under otherwise-identical shared
 // filters. source_id/vehicle_type are deliberately NOT parameters: the router

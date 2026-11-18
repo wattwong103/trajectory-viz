@@ -32,7 +32,7 @@ export const INITIAL_VIEW = {
   bearing: 0,
 };
 
-// Free tile server (no API key required)
+// Default basemap (TV-30 S5 — picker can override via MapView mapStyle prop).
 export const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 // Color palette

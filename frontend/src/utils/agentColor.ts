@@ -20,10 +20,11 @@ export function agentHighlightColor(
   key: string,
   selectedAgents: readonly string[],
   meta: { vehicle_type: string; transport_mode?: number | null },
-  colorBy: 'source' | 'transportMode',
+  colorBy: 'source' | 'transportMode' | string,
   colorFor: (sourceId: string) => [number, number, number] = sourceFallbackColor,
 ): [number, number, number] {
   if (selectedAgents.length > FOLLOW_ORDER_CAP) {
+    // Attr color-by needs per-trip attrs; fall back to source for cohorts.
     return colorBy === 'transportMode'
       ? transportModeColor(meta.transport_mode)
       : colorFor(meta.vehicle_type);
@@ -37,7 +38,7 @@ export function agentChipColor(
   key: string,
   index: number,
   selectedCount: number,
-  colorBy: 'source' | 'transportMode' = 'source',
+  colorBy: 'source' | 'transportMode' | string = 'source',
 ): [number, number, number] {
   if (selectedCount > FOLLOW_ORDER_CAP) {
     const source = key.split(':')[0] ?? key;
