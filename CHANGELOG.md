@@ -6,11 +6,13 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **`viz-export --engine minimal` (TV-20).** Canvas 2D offline HTML shell that reuses the same Int16/base64 payload as the deck.gl exporter but skips the ~1.2 MB vendor bundle (no `fetch_vendor.py` required). Trails, agents, flat buildings, and pulse dots; size gate unchanged (4 MB warn / 8 MB fail). Template: `backend/export_template_minimal.html`. Docs: EXPORT / presets README. Tests: minimal self-contained + size delta in `tests/test_export.py`.
+
 - **MATSim / SUMO adapter fixtures + CI wiring (TV-18).** Golden adapter outputs under `tests/fixtures/adapters/output_root/` with globs matching `docs/examples/sources-matsim.yaml` / `sources-sumo-fcd.yaml`; fixture-local `sources.matsim.yaml` / `sources.sumo.yaml` for discovery + ingest CI. SUMO XML adapter defaults to **CSV** (`--format ndjson` optional); example YAML leads with the tabular FCD path. No new `FormatType`.
 
 ### Changed
 
-- **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` exits with an honest “not implemented” message (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.
+- **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` was reserved then implemented in TV-20 (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.
 
 - **Docs/reality sync (TV-4).** README / QUICKSTART / ARCHITECTURE / DATA_FORMATS / CONTRIBUTING aligned with shipped main after #12–#20: accurate ~320 pytest + ~150 vitest counts; demo/universal + Docker one-URL as the default path (no PFLOW-first surprise); DuckDB documented as a module-level singleton with performance budgets living in ARCHITECTURE + CONTRIBUTING (no cite of absent `.claude/rules`); `modes=` preferred over int `transport_modes=`; `TRAJECTORY_VIZ_DB` / `TRAJECTORY_VIZ_OUTPUT_ROOT` as canonical env names; GUFM path points at `profiles/gufm/sources.yaml`; universal-forms vocabulary + profile links surfaced from README / DATA_FORMATS / CONTRIBUTING.
 
