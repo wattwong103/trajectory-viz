@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -97,9 +98,7 @@ def test_source_mode_map_optional():
 
 def test_matsim_example_declares_string_mode():
     """Phase C — MATSim example maps canonical mode varchar, not int transport_mode."""
-    from pathlib import Path
-    import yaml
-    path = Path(__file__).resolve().parent.parent / "docs" / "examples" / "sources-matsim.yaml"
+    path = PROJECT_ROOT / "docs" / "examples" / "sources-matsim.yaml"
     data = yaml.safe_load(path.read_text())
     for key in ("matsim-car", "matsim-pt"):
         trips = data["sources"][key]["columns"]["trips"]

@@ -633,8 +633,10 @@ export default function App() {
   const layerAvailability = useMemo<LayerAvailabilityContext>(() => {
     const caps = filterOptions?.capabilities;
     const labeled = filterOptions?.modes ?? [];
+    // Phase C: modes[].id may be null for string-only datasets — drop nulls
+    // for LayerAvailabilityContext.transportModes (number[] / PFLOW codes).
     const modeIds = labeled.length > 0
-      ? labeled.map(m => m.id)
+      ? labeled.map(m => m.id).filter((id): id is number => id != null)
       : (filterOptions?.transport_modes ?? []).map(m => m.mode);
     const hasDensityHourly = caps?.has_density_hourly ?? null;
     // Capabilities win when known; probe still supplies 409 fix-it detail.
@@ -873,9 +875,14 @@ export default function App() {
         attrKeys={filterOptions?.capabilities?.attr_keys ?? []}
         modeLabels={(filterOptions?.modes ?? []).map(m => m.label)}
         datasetTransportModes={
-          (filterOptions?.modes ?? []).map(m => m.id).length > 0
-            ? (filterOptions?.modes ?? []).map(m => m.id)
-            : (filterOptions?.transport_modes ?? []).map(m => m.mode)
+          (() => {
+            const fromModes = (filterOptions?.modes ?? [])
+              .map(m => m.id)
+              .filter((id): id is number => id != null);
+            return fromModes.length > 0
+              ? fromModes
+              : (filterOptions?.transport_modes ?? []).map(m => m.mode);
+          })()
         }
         colorBy={filter.colorBy ?? 'source'}
         linkLoadNonce={linkLoadNonce}
