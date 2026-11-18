@@ -1,0 +1,70 @@
+# Tiny dual-fleet pack for scale/correctness CI (TV-6).
+# Auto-detect would already be micro; scale: micro pins the contract.
+#
+# fleet_a and fleet_b both use agent_id=1 / trip_id=1 — bare vehicle_id
+# collides; vehicle_key (agent_key) must stay the join identity.
+version: 1
+scale: micro
+
+sources:
+  scale-fleet-a:
+    label: "Scale fixture fleet A (car)"
+    source_id: fleet_a
+    discovery:
+      trips_glob: "fleet_a/trips.csv"
+      trajectories_glob: "fleet_a/waypoints.csv"
+      latest_only: false
+    vehicle_key_template: "fleet_a:{vehicle_id}"
+    render:
+      mode: trails
+      color: [220, 80, 60]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: agent_id
+      trips:
+        starttime:      { csv: starttime,      type: int }
+        start_lon:      { csv: start_lon,      type: double }
+        start_lat:      { csv: start_lat,      type: double }
+        end_lon:        { csv: end_lon,        type: double }
+        end_lat:        { csv: end_lat,        type: double }
+        transport_mode: { csv: transport_mode, type: int }
+        mode:           { csv: mode,           type: varchar }
+        distance_km:    { csv: distance_km,    type: double }
+        dep_hour:       { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day: { csv: sim_day,        type: int }
+      waypoints:
+        unix_time_ms:   { csv: unix_time_ms,   type: bigint }
+        lon:            { csv: lon,            type: double }
+        lat:            { csv: lat,            type: double }
+        link_id:        { csv: link_id,        type: varchar }
+
+  scale-fleet-b:
+    label: "Scale fixture fleet B (walk)"
+    source_id: fleet_b
+    discovery:
+      trips_glob: "fleet_b/trips.csv"
+      trajectories_glob: "fleet_b/waypoints.csv"
+      latest_only: false
+    vehicle_key_template: "fleet_b:{vehicle_id}"
+    render:
+      mode: trails
+      color: [60, 140, 220]
+    columns:
+      trip_id_col: trip_id
+      vehicle_id_col: agent_id
+      trips:
+        starttime:      { csv: starttime,      type: int }
+        start_lon:      { csv: start_lon,      type: double }
+        start_lat:      { csv: start_lat,      type: double }
+        end_lon:        { csv: end_lon,        type: double }
+        end_lat:        { csv: end_lat,        type: double }
+        transport_mode: { csv: transport_mode, type: int }
+        mode:           { csv: mode,           type: varchar }
+        distance_km:    { csv: distance_km,    type: double }
+        dep_hour:       { derived: "CAST(starttime / 3600 AS INTEGER)" }
+        simulation_day: { csv: sim_day,        type: int }
+      waypoints:
+        unix_time_ms:   { csv: unix_time_ms,   type: bigint }
+        lon:            { csv: lon,            type: double }
+        lat:            { csv: lat,            type: double }
+        link_id:        { csv: link_id,        type: varchar }

@@ -1,0 +1,2 @@
+trip_id,agent_id,starttime,start_lon,start_lat,end_lon,end_lat,transport_mode,mode,distance_km,sim_day
+1,1,32400,139.800,35.700,139.810,35.710,0,walk,0.8,0

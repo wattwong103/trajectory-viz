@@ -10,6 +10,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **Scale & correctness CI fixtures (TV-6).** Tiny dual-fleet CSV pack under `tests/fixtures/scale/` (colliding bare `vehicle_id`, micro + macro `sources.yaml`) plus `tests/test_scale_correctness.py` locking `capabilities.scale` defaults, `vehicle_key`/`agent_key` joins, `density_hourly`/pulse gating, documented LOD thresholds + sample clamp, and cheap pedestrianize scenario-impact. Dedicated GitHub Actions job **Scale & correctness fixtures** (no live PFLOW).
+
 - **Simulation scale modes — micro / meso / macro (TV-16).** First-class `capabilities.scale` for any sim type (evacuation, events, local agents, city/region ABM), not only mid-scale PFLOW. Auto-detect from agent/waypoint estimates (micro &lt;10k agents &amp; &lt;1M waypoints; macro = existing mega thresholds ≥1M agents / ≥10M waypoints; else meso); optional top-level `sources.yaml` `scale:` override (`mega`→macro, `standard`→meso aliases). Macro keeps aggregate-first arcs+pulse + sample caps (`mega_sim` remains a boolean alias); micro defaults to trails+agents and never forces arcs+pulse. Form defaults / `form_disable_reasons` / fix-its per scale; FE Micro + Macro presets; recipes `docs/examples/sources-evacuation-micro.yaml` + `scale: macro` on OD arcs. Docs: ARCHITECTURE / DATA_FORMATS §11 / QUICKSTART. Tests: `tests/test_lod.py`, schema scale field, lodPolicy / layerCatalog.
 
 
