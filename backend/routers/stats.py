@@ -12,7 +12,11 @@ from ..filters import (
     trip_filters,
 )
 from ..models import StatsResponse
-from ..sources_schema import default_sources_path, load_sources_merged
+from ..sources_schema import (
+    default_sources_path,
+    inspect_registry,
+    load_sources_merged,
+)
 
 router = APIRouter()
 
@@ -368,6 +372,8 @@ async def filter_options():
 
     sources = _source_styles(conn)
     capabilities = _dataset_capabilities(conn, transport_modes, goods_types)
+    # TV-19 — schema/discovery/ingest problems for the UI (not console-only).
+    registry = inspect_registry(conn)
 
     return {
         "vehicle_types": vtypes,
@@ -380,6 +386,7 @@ async def filter_options():
         "capabilities": capabilities,
         "metrics_available": metrics_available,
         "sources": sources,
+        "registry": registry,
     }
 
 

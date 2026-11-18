@@ -774,6 +774,283 @@ def dryrun_discovery(sources: SourcesFile, output_root: Path) -> dict[str, int]:
     return counts
 
 
+# --- Registry health (API / UI) ---------------------------------------------
+
+
+def _format_validation_error(exc: ValidationError, *, limit: int = 6) -> str:
+    """Collapse a Pydantic ValidationError into one actionable line for the UI."""
+    parts: list[str] = []
+    for err in exc.errors()[:limit]:
+        loc = ".".join(str(x) for x in err.get("loc", ()) if x != "body")
+        msg = err.get("msg", "invalid")
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    extra = len(exc.errors()) - limit
+    if extra > 0:
+        parts.append(f"(+{extra} more)")
+    return "; ".join(parts) if parts else str(exc)
+
+
+def _registry_issue(
+    *,
+    severity: Literal["error", "warning"],
+    code: str,
+    message: str,
+    fix_it: str | None = None,
+    source_key: str | None = None,
+) -> dict:
+    issue: dict = {
+        "severity": severity,
+        "code": code,
+        "message": message,
+    }
+    if fix_it:
+        issue["fix_it"] = fix_it
+    if source_key:
+        issue["source_key"] = source_key
+    return issue
+
+
+def inspect_registry(conn=None) -> dict:
+    """Validate the active sources registry and return UI-ready status.
+
+    Surfaced on ``/api/stats/filter-options`` as ``registry`` so the map can
+    show schema / discovery / ingest problems instead of only logging them.
+
+    Demo/universal stays the default: a healthy demo registry with a seeded
+    DB yields ``ok: true`` and an empty ``issues`` list. Discovery empty-glob
+    warnings only fire when the DB has no trips (baked DBs without source
+    files on disk are not treated as broken).
+    """
+    from backend.config import get_output_root
+
+    issues: list[dict] = []
+    profile: str | None = None
+    path: Path | None = None
+    output_root: Path | None = None
+    source_count = 0
+    trip_count = 0
+
+    if conn is not None:
+        try:
+            trip_count = int(conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0])
+        except Exception:
+            trip_count = 0
+
+    try:
+        profile = active_profile()
+    except ValueError as e:
+        issues.append(_registry_issue(
+            severity="error",
+            code="unknown_profile",
+            message=str(e),
+            fix_it=(
+                "Unset TRAJECTORY_VIZ_PROFILE for the demo default, or set it to "
+                "one of: demo, pflow, kichijoji, gufm."
+            ),
+        ))
+
+    try:
+        path = default_sources_path()
+    except ValueError as e:
+        # active_profile already recorded unknown_profile; path unavailable.
+        if not any(i["code"] == "unknown_profile" for i in issues):
+            issues.append(_registry_issue(
+                severity="error",
+                code="unknown_profile",
+                message=str(e),
+            ))
+        path = None
+
+    sources: SourcesFile | None = None
+    if path is not None:
+        validate_cmd = f"python -m backend.sources_schema --validate {path}"
+        try:
+            sources = load_sources(path)
+        except FileNotFoundError:
+            issues.append(_registry_issue(
+                severity="error",
+                code="sources_missing",
+                message=f"sources.yaml not found: {path}",
+                fix_it=(
+                    "Point TRAJECTORY_VIZ_SOURCES at a valid registry, or unset "
+                    "it to use demo/sources.demo.yaml. Then re-run ingest."
+                ),
+            ))
+        except yaml.YAMLError as e:
+            issues.append(_registry_issue(
+                severity="error",
+                code="yaml_parse",
+                message=f"YAML parse error in {path}: {e}",
+                fix_it=validate_cmd,
+            ))
+        except ValidationError as e:
+            issues.append(_registry_issue(
+                severity="error",
+                code="schema_invalid",
+                message=(
+                    f"sources.yaml schema invalid ({path}): "
+                    f"{_format_validation_error(e)}"
+                ),
+                fix_it=validate_cmd,
+            ))
+        except Exception as e:  # pragma: no cover — defensive
+            issues.append(_registry_issue(
+                severity="error",
+                code="sources_load_failed",
+                message=f"Failed to load sources registry ({path}): {e}",
+                fix_it=validate_cmd,
+            ))
+
+    # Uploads registry is merged for style/POI lookups — surface its own
+    # validation failures without masking a healthy primary registry.
+    if sources is not None:
+        try:
+            from backend.config import uploads_registry_path
+
+            uploads = uploads_registry_path()
+            if uploads.is_file():
+                try:
+                    load_sources(uploads)
+                except (ValidationError, yaml.YAMLError, FileNotFoundError) as e:
+                    detail = (
+                        _format_validation_error(e)
+                        if isinstance(e, ValidationError)
+                        else str(e)
+                    )
+                    issues.append(_registry_issue(
+                        severity="warning",
+                        code="uploads_invalid",
+                        message=(
+                            f"uploads registry invalid ({uploads}): {detail}"
+                        ),
+                        fix_it=(
+                            "Fix or remove sources.uploads.yaml next to the DB, "
+                            "then re-upload or re-ingest."
+                        ),
+                    ))
+        except Exception:
+            pass
+
+        source_count = len(sources.sources)
+
+        # Discovery dry-run only when the DB is empty — otherwise a standalone
+        # baked DuckDB without source files on disk would false-alarm.
+        if trip_count == 0:
+            try:
+                output_root = get_output_root()
+            except Exception as e:
+                issues.append(_registry_issue(
+                    severity="warning",
+                    code="output_root_unavailable",
+                    message=f"Cannot resolve OUTPUT_ROOT for discovery: {e}",
+                    fix_it=(
+                        "Set TRAJECTORY_VIZ_OUTPUT_ROOT (or use the demo profile) "
+                        "so ingest can find trip/trajectory files."
+                    ),
+                ))
+                output_root = None
+            if output_root is not None:
+                counts = dryrun_discovery(sources, output_root)
+                zeros = [k for k, n in counts.items() if n == 0]
+                if zeros and all(n == 0 for n in counts.values()):
+                    issues.append(_registry_issue(
+                        severity="warning",
+                        code="discovery_empty",
+                        message=(
+                            f"No files matched under {output_root} for "
+                            f"{len(zeros)} source/POI/zone glob(s)."
+                        ),
+                        fix_it=(
+                            f"python -m backend.sources_schema --discovery {path} "
+                            f"--output-root {output_root}"
+                        ),
+                    ))
+                elif zeros:
+                    # Partial: some sources match, some don't — name a few.
+                    sample = ", ".join(zeros[:4])
+                    more = f" (+{len(zeros) - 4} more)" if len(zeros) > 4 else ""
+                    issues.append(_registry_issue(
+                        severity="warning",
+                        code="discovery_partial",
+                        message=(
+                            f"No files matched for: {sample}{more} "
+                            f"(under {output_root})."
+                        ),
+                        fix_it=(
+                            f"python -m backend.sources_schema --discovery {path} "
+                            f"--output-root {output_root}"
+                        ),
+                    ))
+
+        # Ingested fleets missing from the registry → wrong labels/colors.
+        if conn is not None:
+            try:
+                ingested = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT source_id FROM trips "
+                        "WHERE source_id IS NOT NULL"
+                    ).fetchall()
+                }
+                covered = {src.source_id for src in sources.sources.values()}
+                uncovered = sorted(ingested - covered)
+                if uncovered:
+                    issues.append(_registry_issue(
+                        severity="warning",
+                        code="uncovered_sources",
+                        message=(
+                            f"Ingested source_id(s) {uncovered} have no entry in "
+                            f"the sources registry ({path}). Labels/colors/modes "
+                            f"will be missing."
+                        ),
+                        fix_it=(
+                            "Point TRAJECTORY_VIZ_SOURCES at the registry that "
+                            "matches this DuckDB (e.g. profiles/gufm for GUFM), "
+                            "or add matching source blocks."
+                        ),
+                    ))
+            except Exception:
+                pass
+
+    # Recent ingest failures (row_count < 0), independent of registry load.
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                """
+                SELECT file_path, table_name
+                FROM ingest_log
+                WHERE row_count < 0
+                ORDER BY ingested_at DESC
+                LIMIT 5
+                """
+            ).fetchall()
+            if rows:
+                sample = "; ".join(f"{t}:{p}" for p, t in rows[:3])
+                extra = f" (+{len(rows) - 3} more)" if len(rows) > 3 else ""
+                issues.append(_registry_issue(
+                    severity="warning",
+                    code="ingest_failed",
+                    message=f"Recent ingest failures — {sample}{extra}",
+                    fix_it=(
+                        "Inspect ingest_log (row_count < 0), fix the CSV/YAML, "
+                        "then re-run trajectory-viz-ingest (without --reset if "
+                        "other files are fine)."
+                    ),
+                ))
+        except Exception:
+            pass
+
+    has_errors = any(i["severity"] == "error" for i in issues)
+    return {
+        "ok": not has_errors,
+        "profile": profile,
+        "path": str(path) if path is not None else None,
+        "output_root": str(output_root) if output_root is not None else None,
+        "source_count": source_count,
+        "issues": issues,
+    }
+
+
 # --- CLI ----------------------------------------------------------------
 
 

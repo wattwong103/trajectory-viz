@@ -15,10 +15,15 @@
  * App (via onUploadFiles), because drag-and-drop alone is undiscoverable.
  * After a successful ingest, App's refetch swaps this overlay out as soon as
  * trips exist — no EmptyState-specific follow-up needed.
+ *
+ * TV-19: when filter-options.registry has issues, show actionable
+ * RegistryIssues above the upload affordance (demo secondary path kept).
  */
 
 import React, { useRef } from 'react';
 import { ACCEPT_ATTR } from '../uploadUtils';
+import type { RegistryStatus } from '../types';
+import { RegistryIssues } from './RegistryIssues';
 
 const DOCS_URL =
   'https://github.com/wattwong103/trajectory-viz/blob/main/docs/DATA_FORMATS.md';
@@ -28,10 +33,18 @@ interface EmptyStateProps {
   // button and the global dropzone). Optional so the overlay still renders
   // as a pure hint when no uploader is wired.
   onUploadFiles?: (files: File[]) => void;
+  /** TV-19 — sources.yaml / discovery issues when the DB is empty. */
+  registry?: RegistryStatus | null;
+  onReloadRegistry?: () => void;
 }
 
-export const EmptyState: React.FC<EmptyStateProps> = ({ onUploadFiles }) => {
+export const EmptyState: React.FC<EmptyStateProps> = ({
+  onUploadFiles,
+  registry,
+  onReloadRegistry,
+}) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasRegistryIssues = (registry?.issues?.length ?? 0) > 0;
 
   const dropHint = (
     <>
@@ -45,12 +58,24 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ onUploadFiles }) => {
   return (
     <div style={styles.overlay}>
       <div style={styles.card}>
-        <div style={styles.eyebrow}>First run</div>
-        <div style={styles.heading}>No data yet</div>
-        <div style={styles.body}>
-          Upload a trajectory file to explore immediately, or load the seeded
-          Kichijōji demo (couriers / buses / POIs).
+        <div style={styles.eyebrow}>
+          {hasRegistryIssues ? 'Source setup' : 'First run'}
         </div>
+        <div style={styles.heading}>
+          {hasRegistryIssues ? 'Source setup needs attention' : 'No data yet'}
+        </div>
+        {hasRegistryIssues ? (
+          <RegistryIssues
+            registry={registry}
+            variant="card"
+            onRetry={onReloadRegistry}
+          />
+        ) : (
+          <div style={styles.body}>
+            Upload a trajectory file to explore immediately, or load the seeded
+            Kichijōji demo (couriers / buses / POIs).
+          </div>
+        )}
 
         {onUploadFiles ? (
           <>
@@ -80,7 +105,9 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ onUploadFiles }) => {
         )}
 
         <div style={styles.secondary}>
-          <div style={styles.secondaryLabel}>Or seed the demo</div>
+          <div style={styles.secondaryLabel}>
+            {hasRegistryIssues ? 'Or seed the demo after fixing' : 'Or seed the demo'}
+          </div>
           <pre style={styles.command}>docker compose up --build</pre>
           <div style={styles.bodyTight}>
             Native:{' '}

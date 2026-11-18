@@ -29,6 +29,34 @@ describe('EmptyState', () => {
     expect(upload.compareDocumentPosition(seed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('surfaces registry validation issues instead of only the demo CTA', () => {
+    render(
+      <EmptyState
+        registry={{
+          ok: false,
+          profile: 'demo',
+          path: '/tmp/sources.yaml',
+          output_root: null,
+          source_count: 0,
+          issues: [{
+            severity: 'error',
+            code: 'schema_invalid',
+            message: 'sources.yaml schema invalid: Field required',
+            fix_it: 'python -m backend.sources_schema --validate /tmp/sources.yaml',
+          }],
+        }}
+      />,
+    );
+    expect(screen.getByText('Source setup needs attention')).toBeInTheDocument();
+    expect(screen.getByTestId('registry-issues')).toBeInTheDocument();
+    expect(screen.getByText(/schema invalid/)).toBeInTheDocument();
+    expect(screen.getByText(/--validate/)).toBeInTheDocument();
+    // Upload-first hierarchy preserved even when registry errors show.
+    const upload = screen.getByText(/Drop a trajectory file here/);
+    const seed = screen.getByText(/Or seed the demo after fixing/);
+    expect(upload.compareDocumentPosition(seed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('renders the drop hint with the friendly extension list', () => {
     render(<EmptyState />);
     expect(screen.getByText(/Drop a trajectory file here/)).toBeInTheDocument();

@@ -18,6 +18,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **Source discovery / ingest validation in the UI (TV-19).** `/api/stats/filter-options` gains a `registry` block (`ok`, `profile`, `path`, `issues[]` with `severity` / `code` / `message` / `fix_it`) from `inspect_registry`: schema/YAML/missing-file errors, empty-DB discovery misses, uncovered ingested `source_id`s, and recent `ingest_log` failures. FilterPanel + EmptyState render actionable banners (demo/universal default unchanged; PFLOW still opt-in). Tests: `tests/test_registry_status.py`, `RegistryIssues.test.tsx`.
+
 - **Export preset gallery.** `presets/demo-paper.yaml` (trails-only, demo DB, paper/deck) + `presets/demo-deck.yaml` (trails + agents + pulse) + `presets/README.md`. Lab cinematic remains `presets/tokyo-night.yaml`. Tests: forms gating + engine rejection + size-gate copy in `tests/test_export.py`.
 
 - **Scale & correctness CI fixtures (TV-6).** Tiny dual-fleet CSV pack under `tests/fixtures/scale/` (colliding bare `vehicle_id`, micro + macro `sources.yaml`) plus `tests/test_scale_correctness.py` locking `capabilities.scale` defaults, `vehicle_key`/`agent_key` joins, `density_hourly`/pulse gating, documented LOD thresholds + sample clamp, and cheap pedestrianize scenario-impact. Dedicated GitHub Actions job **Scale & correctness fixtures** (no live PFLOW).

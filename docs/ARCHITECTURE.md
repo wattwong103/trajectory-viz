@@ -39,7 +39,8 @@ trajectory-viz is a four-layer system: declarative source registry → DuckDB �
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  FastAPI  (backend/app.py, uvicorn on :9999 native or :8080 Docker)      │
-│    /api/stats/*            row counts, filter options, fare insights     │
+│    /api/stats/*            row counts, filter options (+ registry        │
+│                            health), fare insights                        │
 │    /api/trips/*            sample, query (with F1 + zone filters)        │
 │    /api/trajectories/*     sample, bbox, point, +include_segments=true   │
 │    /api/analysis/temporal/*       hourly, peaks, duration, metrics-dist  │
