@@ -99,6 +99,8 @@ If your source adds columns that aren't in the existing DB schema (`backend/db.p
 
 Start the backend and open `/api/stats/filter-options`. Your new `source_id` should appear in `sources[]` (and the back-compat `vehicle_types` mirror). The frontend **Sources** buttons populate from this list — so the dashboard shows a new button for your ABM without frontend code changes.
 
+If the YAML is invalid, discovery matches nothing on an empty DB, or ingested fleets are missing from the registry, `filter-options.registry.issues[]` carries actionable `message` + `fix_it` strings and the UI shows them (FilterPanel / EmptyState) — not only the console.
+
 ---
 
 ## Coding style

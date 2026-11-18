@@ -20,6 +20,7 @@ import { DEFAULT_FILTER } from '../filterHash';
 import { ACCEPT_ATTR } from '../uploadUtils';
 import type { ScenarioImpact } from '../hooks/useScenarioImpact';
 import { useNarrowViewport } from '../hooks/useNarrowViewport';
+import { RegistryIssues } from './RegistryIssues';
 
 interface FilterPanelProps {
   filter: FilterState;
@@ -49,6 +50,8 @@ interface FilterPanelProps {
   // Upload-and-go — shared uploader owned by App; the button opens a hidden
   // file input (drag-and-drop alone is undiscoverable).
   onUploadFiles?: (files: File[]) => void;
+  // TV-19 — re-check sources.yaml / discovery after the user fixes config.
+  onReloadFilterOptions?: () => void;
   onChange: (f: FilterState) => void;
   onRefetch: () => void;
   onClearDrill: () => void;
@@ -85,6 +88,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onTogglePoiCategory,
   onSetAllPoiCategories,
   onUploadFiles,
+  onReloadFilterOptions,
   onChange, onRefetch, onClearDrill, onLayerToggle, onApplyPreset,
   onBuildingExaggeration, onScreenshot,
 }) => {
@@ -245,6 +249,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           </>
         )}
       </div>
+
+      {/* TV-19 — sources.yaml / discovery / ingest validation (not console-only).
+          When the DB is empty, EmptyState owns the banner so we don't double up. */}
+      {!noData && (
+        <RegistryIssues
+          registry={filterOptions?.registry}
+          onRetry={onReloadFilterOptions}
+        />
+      )}
 
       {/* Sources toggle — populated from /api/stats/filter-options (sources.yaml).
           Prefer sources[].source_id; vehicle_types is a back-compat mirror. */}

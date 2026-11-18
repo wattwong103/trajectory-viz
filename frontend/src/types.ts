@@ -211,6 +211,25 @@ export interface ModeOption {
   count: number;
 }
 
+/** One actionable sources.yaml / discovery / ingest problem (TV-19). */
+export interface RegistryIssue {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  fix_it?: string;
+  source_key?: string;
+}
+
+/** Active sources registry health from /api/stats/filter-options. */
+export interface RegistryStatus {
+  ok: boolean;
+  profile: string | null;
+  path: string | null;
+  output_root: string | null;
+  source_count: number;
+  issues: RegistryIssue[];
+}
+
 export interface FilterOptions {
   // Back-compat mirror of source ids — prefer sources[].source_id.
   vehicle_types: string[];
@@ -229,6 +248,8 @@ export interface FilterOptions {
   modes?: ModeOption[];
   // Phase A — inferred dataset capabilities for form availability.
   capabilities?: DatasetCapabilities;
+  // TV-19 — sources.yaml / discovery / ingest validation for the UI.
+  registry?: RegistryStatus;
 }
 
 // ─── Upload-and-go ingest (frontend half) ───────────────

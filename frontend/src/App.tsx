@@ -565,7 +565,11 @@ export default function App() {
           area shares App's uploader; a successful ingest refetches stats and
           this overlay swaps itself out as soon as trips exist. */}
       {!loading && stats !== null && (stats.trips?.row_count ?? 0) === 0 && (
-        <EmptyState onUploadFiles={uploader.upload} />
+        <EmptyState
+          onUploadFiles={uploader.upload}
+          registry={filterOptions?.registry}
+          onReloadRegistry={reloadFilterOptions}
+        />
       )}
 
       {/* Backend unreachable (or DB missing) — filter-options failed, so no
@@ -652,6 +656,7 @@ export default function App() {
         onTogglePoiCategory={poi.toggleCategory}
         onSetAllPoiCategories={poi.setAll}
         onUploadFiles={uploader.upload}
+        onReloadFilterOptions={reloadFilterOptions}
         onChange={setFilter}
         onRefetch={refetch}
         onClearDrill={clearDrill}
