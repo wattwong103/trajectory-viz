@@ -28,6 +28,7 @@ import json
 import struct
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,12 +48,119 @@ SCALE_DEG = 1e-5
 DATA_BUDGET_WARN_MB = 4.0
 TOTAL_BUDGET_FAIL_MB = 8.0
 
+# Phase D form ids the cinematic exporter can bake today.
+# Aliases: trail ↔ trails. Other viz forms (od-arcs, heatmap, …) are noted.
+EXPORT_FORM_IDS = frozenset({"trail", "trails", "agents", "pulse", "buildings"})
+
 # Fallback source colors when sources.yaml is unavailable (standalone DB).
 DEFAULT_COLORS: dict[str, tuple[int, int, int]] = {
     "truck": (253, 128, 93),
     "taxi": (23, 184, 190),
     "person": (43, 200, 80),
 }
+
+
+@dataclass
+class FormDecision:
+    """Resolved bake flags after applying optional preset `forms:`."""
+
+    include_pulse: bool
+    buildings_key: str | None
+    agents: list[str]
+    known: set[str] = field(default_factory=set)
+    unknown: list[str] = field(default_factory=list)
+    skipped: set[str] = field(default_factory=set)
+    notes: list[str] = field(default_factory=list)
+
+
+def apply_preset_forms(
+    forms: list[str] | None,
+    *,
+    include_pulse: bool,
+    buildings_key: str | None,
+    agents: list[str],
+    buildings_from_forms_key: str | None = None,
+) -> FormDecision:
+    """Respect Phase D `forms:` on presets.
+
+    When `forms:` is absent, include.* / CLI flags pass through unchanged.
+    When present, only declared bakeable forms are enabled (pulse / buildings /
+    agents); trail(s) is always implied for the HTML exporter. Unknown ids are
+    collected for an honest note — they do not crash the export.
+    """
+    if not forms:
+        return FormDecision(
+            include_pulse=include_pulse,
+            buildings_key=buildings_key,
+            agents=list(agents),
+        )
+
+    known: set[str] = set()
+    unknown: list[str] = []
+    for raw in forms:
+        fid = str(raw).strip()
+        if not fid:
+            continue
+        if fid in ("trail", "trails"):
+            known.add("trail")
+        elif fid in EXPORT_FORM_IDS:
+            known.add(fid)
+        else:
+            unknown.append(fid)
+
+    want_pulse = "pulse" in known
+    want_buildings = "buildings" in known
+    want_agents = "agents" in known
+
+    skipped: set[str] = set()
+    notes: list[str] = []
+    if include_pulse and not want_pulse:
+        skipped.add("pulse")
+        notes.append("forms: omits pulse — skipping density heatmap")
+    if buildings_key and not want_buildings:
+        skipped.add("buildings")
+        notes.append("forms: omits buildings — skipping baked .bin embed")
+    if agents and not want_agents:
+        skipped.add("agents")
+        notes.append("forms: omits agents — skipping followed-agent highlights")
+
+    resolved_buildings = None
+    if want_buildings:
+        resolved_buildings = buildings_key or buildings_from_forms_key
+        if not resolved_buildings:
+            notes.append(
+                "forms: includes buildings but no city/bin set "
+                "(include.buildings or --buildings)"
+            )
+
+    return FormDecision(
+        include_pulse=want_pulse,
+        buildings_key=resolved_buildings,
+        agents=list(agents) if want_agents else [],
+        known=known,
+        unknown=unknown,
+        skipped=skipped,
+        notes=notes,
+    )
+
+
+def reject_unimplemented_engine(engine: str | None) -> None:
+    """Fail fast on reserved engines so callers aren't left with empty HTML."""
+    if engine is None or engine == "deck":
+        return
+    if engine == "minimal":
+        raise SystemExit(
+            "[ERROR] --engine minimal is not implemented yet "
+            "(reserved for a future hand-rolled WebGL path under ~5 MB).\n"
+            "  Use the default deck.gl engine: omit --engine, or pass --engine deck.\n"
+            "  For smaller paper/deck files today, try presets/demo-paper.yaml "
+            "(lower sample_n, no buildings).\n"
+            "  See docs/EXPORT.md."
+        )
+    raise SystemExit(
+        f"[ERROR] Unknown --engine {engine!r}. Supported: deck "
+        f"(minimal is reserved/unimplemented). See docs/EXPORT.md."
+    )
 
 
 def _b64(fmt: str, values: list) -> str:
@@ -340,21 +448,36 @@ def export_html(
     print(f"[size] data {data_mb:.2f} MB · total {total_mb:.2f} MB "
           f"({traj_meta['nTraj']:,} trajectories)")
     if data_mb > DATA_BUDGET_WARN_MB:
-        print(f"[warn] data block exceeds {DATA_BUDGET_WARN_MB} MB — consider a smaller --n")
+        print(
+            f"[warn] data block exceeds {DATA_BUDGET_WARN_MB} MB — "
+            f"lower --n / sample_n, drop buildings, or use presets/demo-paper.yaml"
+        )
     for n in notes:
         print(f"[note] {n}")
-    html_size_check(total_mb)
+    html_size_check(total_mb, data_mb=data_mb, n_traj=traj_meta["nTraj"])
     return html
 
 
 _FORCE = False
 
 
-def html_size_check(total_mb: float) -> None:
+def html_size_check(
+    total_mb: float,
+    *,
+    data_mb: float = 0.0,
+    n_traj: int = 0,
+) -> None:
     if total_mb > TOTAL_BUDGET_FAIL_MB and not _FORCE:
         raise SystemExit(
-            f"[ERROR] Export is {total_mb:.1f} MB > {TOTAL_BUDGET_FAIL_MB} MB budget. "
-            f"Reduce --n / drop --include-buildings, or pass --force."
+            f"[ERROR] Export is {total_mb:.1f} MB > {TOTAL_BUDGET_FAIL_MB} MB budget "
+            f"(data {data_mb:.1f} MB, {n_traj:,} trajectories).\n"
+            f"  Shrink options:\n"
+            f"    • lower --n / sample_n (try 200–500 for paper/deck)\n"
+            f"    • use presets/demo-paper.yaml (demo DB, trails-only, small)\n"
+            f"    • drop buildings (omit from forms: / no --buildings)\n"
+            f"    • skip pulse (--no-pulse or omit pulse from forms:)\n"
+            f"    • pass --force to write anyway (may be slow to open)\n"
+            f"  See docs/EXPORT.md."
         )
 
 
@@ -363,7 +486,14 @@ def html_size_check(total_mb: float) -> None:
 
 def main() -> None:
     global _FORCE
-    ap = argparse.ArgumentParser(description="Export a self-contained cinematic HTML")
+    ap = argparse.ArgumentParser(
+        description="Export a self-contained cinematic HTML (requires vendor fetch first)",
+        epilog=(
+            "Prerequisite: python scripts/fetch_vendor.py "
+            "(downloads + verifies the pinned deck.gl SHA-256). "
+            "See docs/EXPORT.md and presets/README.md."
+        ),
+    )
     ap.add_argument("--preset", type=str, default=None, help="Preset YAML path")
     ap.add_argument("--db", type=str, default=None, help="DuckDB path (default: viz DB)")
     ap.add_argument("--vendor", type=str, default=str(DEFAULT_VENDOR))
@@ -376,10 +506,17 @@ def main() -> None:
     ap.add_argument("--no-pulse", action="store_true")
     ap.add_argument("--buildings", type=str, default=None,
                     help="City key of a baked .bin to embed (looked up in the buildings dir), or a .bin path")
+    ap.add_argument(
+        "--engine",
+        choices=("deck", "minimal"),
+        default="deck",
+        help="Render engine (default: deck). 'minimal' is reserved/unimplemented.",
+    )
     ap.add_argument("--force", action="store_true", help="Ignore the size budget")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     _FORCE = args.force
+    reject_unimplemented_engine(args.engine)
 
     cfg: dict = {}
     if args.preset:
@@ -396,30 +533,40 @@ def main() -> None:
     include_pulse = (not args.no_pulse) and include.get("pulse", True)
     buildings_key = args.buildings or include.get("buildings")
     title = args.title or cfg.get("title") or "trajectory-viz export"
-    # Phase D — presets may declare form ids. Full engine gating is TV-8;
-    # here we only surface the declaration and note unknowns.
+
     forms = [str(f) for f in (cfg.get("forms") or [])]
+    decided = apply_preset_forms(
+        forms or None,
+        include_pulse=include_pulse,
+        buildings_key=buildings_key,
+        agents=agents,
+        buildings_from_forms_key=(
+            None if args.buildings else include.get("buildings")
+        ),
+    )
+    # --no-pulse always wins over forms:/include.
+    include_pulse = False if args.no_pulse else decided.include_pulse
+    buildings_key = decided.buildings_key
+    agents = decided.agents
     if forms:
-        baked = {"trail", "trails"}
-        if include_pulse:
-            baked.add("pulse")
-        if buildings_key:
-            baked.add("buildings")
-        if agents:
-            baked.add("agents")
         print(f"[forms] preset declares: {', '.join(forms)}")
-        pending = [f for f in forms if f not in baked]
-        if pending:
+        if decided.known:
+            print(f"[forms] baking: {', '.join(sorted(decided.known))}")
+        for note in decided.notes:
+            print(f"[forms] {note}")
+        if decided.unknown:
             print(
-                f"[forms] note: {', '.join(pending)} not a dedicated export "
-                f"engine yet (TV-8); continuing with include.* / filters"
+                f"[forms] note: {', '.join(decided.unknown)} not baked by "
+                f"viz-export (live-dashboard forms only); continuing"
             )
 
     vendor_path = Path(args.vendor)
     if not vendor_path.is_file():
         raise SystemExit(
             f"[ERROR] deck.gl vendor bundle not found at {vendor_path}.\n"
-            f"Fetch it once with: python scripts/fetch_vendor.py"
+            f"  One-time setup:\n"
+            f"    python scripts/fetch_vendor.py   # download + verify pinned SHA-256\n"
+            f"  See docs/EXPORT.md."
         )
     vendor_js = vendor_path.read_text(encoding="utf-8")
 

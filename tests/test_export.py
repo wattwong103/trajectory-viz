@@ -124,10 +124,94 @@ def test_export_pulse_graceful_skip_when_not_built(conn, capsys):
 def test_export_size_gate(conn, monkeypatch):
     monkeypatch.setattr(export, "TOTAL_BUDGET_FAIL_MB", 0.0001)
     monkeypatch.setattr(export, "_FORCE", False)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         export.export_html(conn, STUB_VENDOR, vehicle_type="truck", sample_n=10)
+    msg = str(exc.value)
+    assert "MB budget" in msg
+    assert "--n" in msg or "sample_n" in msg
+    assert "--force" in msg
+    assert "demo-paper" in msg or "EXPORT.md" in msg
 
 
 def test_export_raises_on_empty(conn):
     with pytest.raises(ValueError):
         export.export_html(conn, STUB_VENDOR, vehicle_type="nonexistent", sample_n=10)
+
+
+# ── TV-8 — forms gating, engine honesty, size-gate copy ─────────────────────
+
+
+def test_apply_preset_forms_gates_include_flags():
+    """Phase D forms: drives pulse/buildings/agents when declared."""
+    decided = export.apply_preset_forms(
+        ["trail", "agents"],
+        include_pulse=True,
+        buildings_key="tokyo",
+        agents=["taxi:tokyo:47"],
+    )
+    assert decided.include_pulse is False
+    assert decided.buildings_key is None
+    assert decided.agents == ["taxi:tokyo:47"]
+    assert "pulse" in " ".join(decided.notes).lower() or decided.skipped == {"pulse", "buildings"}
+
+
+def test_apply_preset_forms_enables_declared_scene_forms():
+    decided = export.apply_preset_forms(
+        ["trails", "pulse", "buildings"],
+        include_pulse=False,  # forms win over a stale include.pulse=false
+        buildings_key=None,
+        agents=["x:1"],
+        buildings_from_forms_key="tokyo",
+    )
+    assert decided.include_pulse is True
+    assert decided.buildings_key == "tokyo"
+    assert decided.agents == []  # agents not in forms:
+
+
+def test_apply_preset_forms_legacy_when_absent():
+    """No forms: → include.* / CLI flags pass through unchanged."""
+    decided = export.apply_preset_forms(
+        None,
+        include_pulse=True,
+        buildings_key="tokyo",
+        agents=["a:1"],
+    )
+    assert decided.include_pulse is True
+    assert decided.buildings_key == "tokyo"
+    assert decided.agents == ["a:1"]
+    assert decided.unknown == []
+
+
+def test_apply_preset_forms_notes_unknown_ids():
+    decided = export.apply_preset_forms(
+        ["trail", "od-arcs", "heatmap"],
+        include_pulse=False,
+        buildings_key=None,
+        agents=[],
+    )
+    assert "od-arcs" in decided.unknown
+    assert "heatmap" in decided.unknown
+
+
+def test_engine_minimal_is_rejected():
+    with pytest.raises(SystemExit) as exc:
+        export.reject_unimplemented_engine("minimal")
+    msg = str(exc.value).lower()
+    assert "minimal" in msg
+    assert "not implemented" in msg or "unimplemented" in msg
+
+
+def test_engine_deck_is_allowed():
+    export.reject_unimplemented_engine("deck")  # no raise
+    export.reject_unimplemented_engine(None)
+
+
+def test_size_gate_message_is_actionable(monkeypatch):
+    monkeypatch.setattr(export, "_FORCE", False)
+    with pytest.raises(SystemExit) as exc:
+        export.html_size_check(9.5, data_mb=5.0, n_traj=2000)
+    msg = str(exc.value)
+    assert "9.5" in msg
+    assert "8" in msg
+    assert any(tok in msg for tok in ("--n", "sample_n", "demo-paper", "--no-pulse", "buildings"))
+    assert "--force" in msg

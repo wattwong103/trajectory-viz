@@ -225,10 +225,37 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 
 ---
 
+## Offline HTML export (paper / deck)
+
+Mail a self-contained scene (no server) with `viz-export`. **One-time vendor fetch** is required; then use a demo preset:
+
+```bash
+trajectory-viz-demo --ensure
+python scripts/fetch_vendor.py            # once; verifies pinned deck.gl SHA-256
+
+viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+           --out exports/demo-paper.html
+```
+
+Gallery + size tips: [`presets/README.md`](../presets/README.md), [`EXPORT.md`](EXPORT.md).
+`--engine minimal` is reserved/unimplemented — use `demo-paper` for smaller files.
+
+## Shareable live URLs
+
+The running dashboard writes filters / agents / legend toggles into the URL
+hash (e.g. `#vt=courier&ag=courier%3Acourier-01`). Copy the address bar to
+share a view — same DuckDB + server required. Hash key table:
+[`EXPORT.md` → Shareable dashboard URLs](EXPORT.md#shareable-dashboard-urls).
+For an offline file, use export above instead.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
+| `viz-export` says vendor bundle not found | Run `python scripts/fetch_vendor.py` (downloads + verifies the pinned SHA-256). See [`EXPORT.md`](EXPORT.md). |
+| Export exceeds 8 MB budget | Lower `--n`, use `presets/demo-paper.yaml`, drop buildings / pulse, or pass `--force`. |
 | Dashboard shows a red "Backend unreachable" overlay | The frontend is up but the API isn't (or `PFLOW_VIZ_DB` points nowhere). Start the backend (`trajectory-viz-serve` or `npm run dev`, which launches both), then hit ↻ Retry. |
 | Layers default to arcs + pulse / trails off | Dataset is **macro** scale (~1M agents or ~10M waypoints, or `scale: macro` in sources.yaml). Expected — toggle **Trajectories** or the Trails / Micro preset to override; build pulse with `python -m backend.ingest --aggregates-only` if the Pulse layer is disabled. |
 | Small evacuation pack got arcs + pulse | Check `capabilities.scale` / `scale_source`. Tiny packs should auto-detect **micro**; set `scale: micro` in sources.yaml to force trails+agents defaults. |

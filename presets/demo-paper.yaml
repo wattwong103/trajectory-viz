@@ -1,0 +1,34 @@
+# Paper / slide-deck export — small, demo-DB friendly (Phase D default path).
+#
+# No lab/PFLOW DuckDB required. Bake the bundled demo first if needed:
+#   trajectory-viz-demo --ensure
+#   python scripts/fetch_vendor.py          # once per machine (see docs/EXPORT.md)
+#   viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+#              --out exports/demo-paper.html
+#
+# forms: gates baking (TV-8): trails only — no pulse / buildings / agents →
+# keeps the HTML well under the 8 MB size gate for paper & deck embeds.
+
+title: "Kichijōji Couriers — Paper"
+
+forms:
+  - trail
+
+filters:
+  vehicle_type: courier
+
+sample_n: 24
+
+include:
+  pulse: false
+
+camera:
+  longitude: 139.580
+  latitude: 35.703
+  zoom: 13.5
+  pitch: 45
+  bearing: -20
+
+loop:
+  speed: 90
+  trail_seconds: 900

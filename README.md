@@ -130,7 +130,7 @@ Every data endpoint (`/api/trips/*`, `/api/trajectories/*`, `/api/analysis/*`, `
 
 All shared dimensions live in `backend/filters.py` (`TripFilters` — the FastAPI dependency every router uses), which delegates to `db.build_trip_filter(...)`. All filter params are SQL-injection-safe (Pydantic patterns or explicit `int()`/`float()` casts).
 
-URL-hash keys for shareable views: `vt city day minh maxh gt ms xs xd mr xr` + `tm` / `ml` (mode ints / labels), `cb=tm` (color by mode), `hs` (hidden sources), `sc` (scenario), `ag` (followed agents).
+URL-hash keys for shareable views: `vt city day minh maxh gt ms xs xd mr xr` + `tm` / `ml` (mode ints / labels), `cb=tm` (color by mode), `hs` (hidden sources), `sc` (scenario), `ag` (followed agents), `pc` (disabled POI categories). Full table: [`docs/EXPORT.md` → Shareable dashboard URLs](docs/EXPORT.md#shareable-dashboard-urls).
 
 > **DuckDB connection:** process-wide module singleton via `db.get_connection()` (not per-request). Tests monkey-patch `backend.db._connection`. Performance budgets live in [`docs/ARCHITECTURE.md` → Performance budgets](docs/ARCHITECTURE.md#performance-budgets-hard) and [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md#performance-budgets).
 
@@ -210,15 +210,28 @@ Bold = v0.2/Phase-2 additions. Full OpenAPI spec served at `/docs` when the back
 ## Cinematic HTML export (Phase 2D)
 
 Package a scene into **one self-contained, offline HTML file** — animated
-trails, pulse heatmap, 3D buildings, followed agents — to mail to collaborators
-or drop into a deck (no server, zero runtime network):
+trails, optional pulse / buildings / agents — to mail to collaborators or drop
+into a deck (no server, zero runtime network).
+
+**Prerequisite:** fetch the deck.gl vendor bundle once per machine
+(`scripts/fetch_vendor.py`). Then use a gallery preset:
 
 ```bash
-python scripts/fetch_vendor.py --update   # once; pin the deck.gl bundle hash
+trajectory-viz-demo --ensure            # demo/demo.duckdb if missing
+python scripts/fetch_vendor.py          # once; verifies pinned deck.gl SHA-256
+
+# paper/deck (demo DB) — preferred out-of-box path
+viz-export --preset presets/demo-paper.yaml --db demo/demo.duckdb \
+           --out exports/demo-paper.html
+
+# lab cinematic (needs a taxi-ingested / PFLOW DuckDB)
 viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
 ```
 
-See [`docs/EXPORT.md`](docs/EXPORT.md) for the preset schema and size budget.
+Preset gallery: [`presets/README.md`](presets/README.md). Size gate, `forms:`
+gating, and `--engine minimal` (unimplemented) notes:
+[`docs/EXPORT.md`](docs/EXPORT.md). Live shareable URL hash keys are documented
+there too (separate from offline HTML).
 
 ---
 

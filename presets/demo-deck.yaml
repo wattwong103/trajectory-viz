@@ -1,0 +1,39 @@
+# Slide-deck export — demo DB with trails + followed agents + pulse.
+#
+# Still no buildings (keeps size modest). Requires density_hourly (built by
+# trajectory-viz-demo / ingest). Vendor fetch is a one-time prerequisite.
+#
+#   trajectory-viz-demo --ensure
+#   python scripts/fetch_vendor.py
+#   viz-export --preset presets/demo-deck.yaml --db demo/demo.duckdb \
+#              --out exports/demo-deck.html
+
+title: "Kichijōji Day — Deck"
+
+forms:
+  - trail
+  - agents
+  - pulse
+
+filters:
+  vehicle_type: courier
+
+sample_n: 48
+
+agents:
+  - "courier:courier-01"
+  - "courier:courier-05"
+
+include:
+  pulse: true
+
+camera:
+  longitude: 139.580
+  latitude: 35.703
+  zoom: 13.2
+  pitch: 50
+  bearing: -15
+
+loop:
+  speed: 120
+  trail_seconds: 1200

@@ -241,7 +241,7 @@ trajectory-viz/
 │   └── examples/           MATSim, SUMO FCD, OD arcs, phone GPS, JoRAS v3, …
 ├── demo/                   Default universal dataset + sources.demo.yaml
 ├── profiles/               Opt-in lab packs (pflow, gufm, …) — see README
-├── presets/                Cinematic export presets (forms declared)
+├── presets/                Export preset gallery (demo-paper / demo-deck / tokyo-night)
 ├── scripts/                docker-entrypoint, MATSim/SUMO adapters, vendor fetch
 ├── pyproject.toml          Project metadata + deps + entry points
 ├── Dockerfile              Multi-stage Docker build (bakes demo DB + UI)

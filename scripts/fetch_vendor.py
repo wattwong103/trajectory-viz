@@ -25,7 +25,7 @@ OUT = VENDOR_DIR / "deck.gl.min.js"
 # deck.gl 9.0.38 UMD bundle from the npm CDN. Pin both URL and hash.
 # To bump: change URL, run with --update to print the new hash, paste it here.
 URL = "https://cdn.jsdelivr.net/npm/deck.gl@9.0.38/dist.min.js"
-SHA256 = "PLACEHOLDER_RUN_WITH_UPDATE"
+SHA256 = "e0ec599ee202671085dfb418a11ca08f59bbc9c0168ecc47d84bdd04f22c7cf4"
 
 
 def main() -> None:

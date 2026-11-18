@@ -12,7 +12,7 @@
 
 title: "Tokyo Taxi — One Night"
 
-# Forms this preset intends to bake (Phase D — declarative; TV-8 polish later).
+# Forms this preset bakes (Phase D — viz-export gates pulse/buildings/agents).
 forms:
   - trail
   - agents

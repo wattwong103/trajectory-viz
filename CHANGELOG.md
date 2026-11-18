@@ -6,9 +6,13 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Changed
 
+- **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` exits with an honest “not implemented” message (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.
+
 - **Docs/reality sync (TV-4).** README / QUICKSTART / ARCHITECTURE / DATA_FORMATS / CONTRIBUTING aligned with shipped main after #12–#20: accurate ~320 pytest + ~150 vitest counts; demo/universal + Docker one-URL as the default path (no PFLOW-first surprise); DuckDB documented as a module-level singleton with performance budgets living in ARCHITECTURE + CONTRIBUTING (no cite of absent `.claude/rules`); `modes=` preferred over int `transport_modes=`; `TRAJECTORY_VIZ_DB` / `TRAJECTORY_VIZ_OUTPUT_ROOT` as canonical env names; GUFM path points at `profiles/gufm/sources.yaml`; universal-forms vocabulary + profile links surfaced from README / DATA_FORMATS / CONTRIBUTING.
 
 ### Added
+
+- **Export preset gallery.** `presets/demo-paper.yaml` (trails-only, demo DB, paper/deck) + `presets/demo-deck.yaml` (trails + agents + pulse) + `presets/README.md`. Lab cinematic remains `presets/tokyo-night.yaml`. Tests: forms gating + engine rejection + size-gate copy in `tests/test_export.py`.
 
 - **Scale & correctness CI fixtures (TV-6).** Tiny dual-fleet CSV pack under `tests/fixtures/scale/` (colliding bare `vehicle_id`, micro + macro `sources.yaml`) plus `tests/test_scale_correctness.py` locking `capabilities.scale` defaults, `vehicle_key`/`agent_key` joins, `density_hourly`/pulse gating, documented LOD thresholds + sample clamp, and cheap pedestrianize scenario-impact. Dedicated GitHub Actions job **Scale & correctness fixtures** (no live PFLOW).
 
