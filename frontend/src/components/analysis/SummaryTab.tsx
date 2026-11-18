@@ -24,6 +24,11 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
                 {friendlyFetchError(insightsError).text}
               </div>
             )}
+            {!insightsLoading && insightsError === null && !insights && (
+              <div style={styles.empty}>
+                No summary yet — check that trips are loaded, then widen filters if needed.
+              </div>
+            )}
             {insights && (
               <>
                 {/* Metric cards — row 1 */}

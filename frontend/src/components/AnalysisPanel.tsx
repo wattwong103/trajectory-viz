@@ -35,6 +35,7 @@ import { friendlyFetchError } from '../friendlyError';
 import { hasCarMode, hasLabAttr } from '../layerCatalog';
 import { AgentTab } from './AgentTab';
 import { CompareTab } from './CompareTab';
+import { useNarrowViewport } from '../hooks/useNarrowViewport';
 import {
   styles,
   SummaryTab,
@@ -52,19 +53,35 @@ import {
 
 type Tab = 'summary' | 'temporal' | 'metrics' | 'od' | 'density' | 'clusters' | 'chains' | 'links' | 'detail' | 'zone' | 'agents' | 'compare';
 
+/** Short labels — symbol-only tabs were hard to decode on first run. */
 const TAB_LABELS: Record<Tab, string> = {
-  summary: '\u03A3',
-  temporal: '\u23F0',
-  metrics: '\u0192',     // \u0192 for F1 derived metrics
-  od: '\u2197',
-  density: '\u2588',
-  clusters: '\u25CE',
-  chains: '\u26D3',
-  links: '\u22A5',
-  detail: '\uD83D\uDCCD',     // Sprint A1a \u2014 Trajectory Details (visible only when one selected)
-  zone: '\u25AD',        // Sprint A1b \u2014 Through-zone bbox query
-  agents: '\u2691',      // Phase 2A \u2014 agent search & follow
-  compare: '⇄',      // fleet-comparison — A⇄B fleet comparison
+  summary: 'Sum',
+  temporal: 'Time',
+  metrics: 'F1',
+  od: 'OD',
+  density: 'Dens',
+  clusters: 'Clust',
+  chains: 'Chain',
+  links: 'Link',
+  detail: 'Trip',
+  zone: 'Zone',
+  agents: 'Agent',
+  compare: 'A⇄B',
+};
+
+const TAB_TITLES: Record<Tab, string> = {
+  summary: 'Summary insights',
+  temporal: 'Temporal patterns',
+  metrics: 'Speed / dwell / detour metrics',
+  od: 'Origin–destination flows',
+  density: 'Spatial density & hotspots',
+  clusters: 'Clustering & route similarity',
+  chains: 'Trip chains & multi-stop',
+  links: 'Link / network density',
+  detail: 'Selected trajectory detail',
+  zone: 'Through-zone query',
+  agents: 'Follow agents',
+  compare: 'Fleet A⇄B comparison',
 };
 
 interface AnalysisPanelProps {
@@ -144,9 +161,21 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
     modeLabels,
   });
   const [tab, setTab] = useState<Tab>('summary');
-  const [collapsed, setCollapsed] = useState(false);
   // Shared failure line for all button-triggered loaders (rendered once
   // above the tab content); each loader clears it on start.
+  const narrow = useNarrowViewport();
+  // Collapse Analysis on narrow viewports so Filter + map stay usable;
+  // user can still expand. Wide screens keep the panel open.
+  const [collapsed, setCollapsed] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false,
+  );
+  const wasNarrow = React.useRef(narrow);
+  useEffect(() => {
+    // Collapse only when crossing into narrow — don't fight a user who
+    // already expanded on a small screen.
+    if (narrow && !wasNarrow.current) setCollapsed(true);
+    wasNarrow.current = narrow;
+  }, [narrow]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
   // Shared failure line for the temporal tab's three parallel fetches —
@@ -463,7 +492,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
             key={t}
             style={{ ...styles.tab, ...(tab === t ? styles.tabActive : {}) }}
             onClick={() => { setTab(t); setActionError(null); }}
-            title={t.charAt(0).toUpperCase() + t.slice(1)}
+            title={TAB_TITLES[t]}
+            aria-label={TAB_TITLES[t]}
           >
             {TAB_LABELS[t]}
           </button>
