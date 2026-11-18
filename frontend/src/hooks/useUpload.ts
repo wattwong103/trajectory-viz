@@ -2,6 +2,7 @@
  * useUpload — upload-and-go ingest state machine.
  *
  *   idle → uploading → processing (1 s job polling) → done | error
+ *                    ↘ mapping (tabular sniff failed; sheet → confirm) → processing …
  *
  * Owned by App so both the global dropzone and the FilterPanel upload button
  * share one instance. `onDone` fires once when the job reaches 'done' — App
@@ -13,13 +14,15 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  uploadFiles, fetchIngestJob, UploadRejectedError,
+  uploadFiles, confirmUploadMapping, fetchIngestJob, UploadRejectedError,
 } from '../api';
 import type {
   UploadAccepted, IngestJobProgress, IngestJobResult,
+  UploadMappingFile, ConfirmUploadFile,
 } from '../types';
 
-export type UploadState = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
+export type UploadState =
+  | 'idle' | 'uploading' | 'mapping' | 'processing' | 'done' | 'error';
 
 interface UseUploadOptions {
   pollMs?: number;          // default 1000; tests pass a small value
@@ -33,6 +36,7 @@ export function useUpload(options: UseUploadOptions = {}) {
   const [result, setResult] = useState<IngestJobResult | null>(null);
   const [fileNames, setFileNames] = useState<string[]>([]);
   const [errorReasons, setErrorReasons] = useState<string[]>([]);
+  const [mappingFiles, setMappingFiles] = useState<UploadMappingFile[]>([]);
 
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onDoneRef = useRef(options.onDone);
@@ -48,28 +52,7 @@ export function useUpload(options: UseUploadOptions = {}) {
   // Clear any in-flight poll on unmount.
   useEffect(() => stopPolling, [stopPolling]);
 
-  const upload = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
-    stopPolling();
-    setState('uploading');
-    setProgress(null);
-    setResult(null);
-    setErrorReasons([]);
-    setFileNames(files.map(f => f.name));
-
-    let accepted: UploadAccepted;
-    try {
-      accepted = await uploadFiles(files);
-    } catch (e) {
-      setErrorReasons(
-        e instanceof UploadRejectedError
-          ? e.reasons
-          : [String((e as Error)?.message ?? e)],
-      );
-      setState('error');
-      return;
-    }
-
+  const startPolling = useCallback((accepted: UploadAccepted) => {
     setState('processing');
     const poll = async () => {
       try {
@@ -96,7 +79,67 @@ export function useUpload(options: UseUploadOptions = {}) {
       }
     };
     pollTimer.current = setTimeout(poll, pollMs);
-  }, [pollMs, stopPolling]);
+  }, [pollMs]);
+
+  const upload = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    stopPolling();
+    setState('uploading');
+    setProgress(null);
+    setResult(null);
+    setErrorReasons([]);
+    setMappingFiles([]);
+    setFileNames(files.map(f => f.name));
+
+    let accepted: UploadAccepted;
+    try {
+      accepted = await uploadFiles(files);
+    } catch (e) {
+      if (e instanceof UploadRejectedError && e.mappingRequired && e.mappingFiles.length > 0) {
+        setMappingFiles(e.mappingFiles);
+        setErrorReasons(e.reasons);
+        setFileNames(e.mappingFiles.map(f => f.filename));
+        setState('mapping');
+        return;
+      }
+      setErrorReasons(
+        e instanceof UploadRejectedError
+          ? e.reasons
+          : [String((e as Error)?.message ?? e)],
+      );
+      setState('error');
+      return;
+    }
+
+    startPolling(accepted);
+  }, [stopPolling, startPolling]);
+
+  const confirmMapping = useCallback(async (files: ConfirmUploadFile[]) => {
+    if (files.length === 0) return;
+    stopPolling();
+    setState('uploading');
+    setProgress(null);
+    setResult(null);
+    setErrorReasons([]);
+
+    let accepted: UploadAccepted;
+    try {
+      accepted = await confirmUploadMapping(files);
+    } catch (e) {
+      // Stay on the sheet if confirm validation fails so the user can fix roles.
+      if (e instanceof UploadRejectedError) {
+        setErrorReasons(e.reasons);
+        setState(mappingFiles.length > 0 ? 'mapping' : 'error');
+        return;
+      }
+      setErrorReasons([String((e as Error)?.message ?? e)]);
+      setState('error');
+      return;
+    }
+
+    setMappingFiles([]);
+    startPolling(accepted);
+  }, [stopPolling, startPolling, mappingFiles.length]);
 
   const dismiss = useCallback(() => {
     stopPolling();
@@ -105,6 +148,7 @@ export function useUpload(options: UseUploadOptions = {}) {
     setResult(null);
     setErrorReasons([]);
     setFileNames([]);
+    setMappingFiles([]);
   }, [stopPolling]);
 
   // Out-of-band failure surface (e.g. dropzone pre-validation rejecting an
@@ -112,9 +156,12 @@ export function useUpload(options: UseUploadOptions = {}) {
   const notifyError = useCallback((reasons: string[]) => {
     stopPolling();
     setErrorReasons(reasons);
+    setMappingFiles([]);
     setState('error');
   }, [stopPolling]);
 
-  return { state, progress, result, fileNames, errorReasons,
-           upload, dismiss, notifyError };
+  return {
+    state, progress, result, fileNames, errorReasons, mappingFiles,
+    upload, confirmMapping, dismiss, notifyError,
+  };
 }

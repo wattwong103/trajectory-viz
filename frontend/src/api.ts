@@ -17,6 +17,8 @@ import type {
   PoiListResponse,
   PoiCategoriesResponse,
   UploadAccepted,
+  UploadMappingFile,
+  ConfirmUploadFile,
   IngestJob,
   CompareResponse,
   MultiCompareResponse,
@@ -927,10 +929,53 @@ export async function fetchZoneStyles(): Promise<ZoneStylesResponse> {
 
 export class UploadRejectedError extends Error {
   reasons: string[];
-  constructor(reasons: string[]) {
+  /** Present when the backend wants an interactive column-mapping sheet. */
+  mappingRequired: boolean;
+  mappingFiles: UploadMappingFile[];
+  constructor(
+    reasons: string[],
+    opts?: {
+      mappingRequired?: boolean;
+      mappingFiles?: UploadMappingFile[];
+    },
+  ) {
     super(reasons.join('\n'));
     this.name = 'UploadRejectedError';
     this.reasons = reasons;
+    this.mappingRequired = opts?.mappingRequired ?? false;
+    this.mappingFiles = opts?.mappingFiles ?? [];
+  }
+}
+
+function _parseUpload422(body: unknown): UploadRejectedError {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const d = detail as {
+      reasons?: unknown;
+      mapping_required?: unknown;
+      files?: unknown;
+    };
+    const reasons = Array.isArray(d.reasons)
+      ? d.reasons.map(String)
+      : ['Upload rejected (422)'];
+    const mappingRequired = d.mapping_required === true;
+    const mappingFiles = mappingRequired && Array.isArray(d.files)
+      ? (d.files as UploadMappingFile[])
+      : [];
+    return new UploadRejectedError(reasons, { mappingRequired, mappingFiles });
+  }
+  if (typeof detail === 'string') {
+    return new UploadRejectedError([detail]);
+  }
+  return new UploadRejectedError(['Upload rejected (422)']);
+}
+
+async function _readUpload422(res: Response): Promise<never> {
+  try {
+    throw _parseUpload422(await res.json());
+  } catch (e) {
+    if (e instanceof UploadRejectedError) throw e;
+    throw new UploadRejectedError(['Upload rejected (422)']);
   }
 }
 
@@ -942,21 +987,23 @@ export async function uploadFiles(files: File[]): Promise<UploadAccepted> {
     body: form,
   });
   if (res.status === 202) return res.json();
-  if (res.status === 422) {
-    let reasons: string[] | null = null;
-    try {
-      const body = await res.json();
-      if (Array.isArray(body?.detail?.reasons)) {
-        reasons = body.detail.reasons.map(String);
-      } else if (typeof body?.detail === 'string') {
-        reasons = [body.detail];
-      }
-    } catch { /* non-JSON error body */ }
-    throw new UploadRejectedError(reasons ?? ['Upload rejected (422)']);
-  }
+  if (res.status === 422) return _readUpload422(res);
   if (res.status === 413) {
     throw new Error('File too large — 200 MB upload cap.');
   }
+  throw new Error(`API error: ${res.status} ${res.statusText}`);
+}
+
+export async function confirmUploadMapping(
+  files: ConfirmUploadFile[],
+): Promise<UploadAccepted> {
+  const res = await fetch(`${API_BASE}/api/ingest/upload/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ files }),
+  });
+  if (res.status === 202) return res.json();
+  if (res.status === 422) return _readUpload422(res);
   throw new Error(`API error: ${res.status} ${res.statusText}`);
 }
 

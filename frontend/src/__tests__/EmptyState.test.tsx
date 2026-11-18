@@ -120,7 +120,9 @@ describe('EmptyState', () => {
       result: null,
       fileNames: [],
       errorReasons: [],
+      mappingFiles: [],
       upload: vi.fn(),
+      confirmMapping: vi.fn(),
       dismiss: vi.fn(),
       notifyError: vi.fn(),
     };

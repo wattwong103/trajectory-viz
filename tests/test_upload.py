@@ -120,10 +120,10 @@ def test_upload_csv_iso_timestamps(env, client):
     assert keys == {"fleet:v1", "fleet:v2"}
 
 
-# --- (c) Unmappable CSV → 422 with reasons --------------------------------------
+# --- (c) Unmappable CSV → 422 with mapping census (staged kept) ---------------
 
 
-def test_upload_csv_missing_columns_422(env, client):
+def test_upload_csv_missing_columns_422_with_census(env, client):
     r = _upload(client, "mystery.csv", b"a,b,c\n1,2,3\n4,5,6\n")
     assert r.status_code == 422
     detail = r.json()["detail"]
@@ -131,9 +131,142 @@ def test_upload_csv_missing_columns_422(env, client):
     assert "longitude/latitude" in reasons
     assert "timestamp" in reasons
     assert "vehicle/device id" in reasons
-    # Nothing staged, nothing ingested.
-    assert not (env.tmp / "uploads").exists() or not list((env.tmp / "uploads").iterdir())
+    assert detail["mapping_required"] is True
+    assert len(detail["files"]) == 1
+    census = detail["files"][0]
+    assert census["filename"] == "mystery.csv"
+    assert census["staged_name"] == "mystery.csv"
+    assert {c["name"] for c in census["columns"]} == {"a", "b", "c"}
+    assert "lon" in census["tried_candidates"]
+    # Staged for confirm; nothing ingested yet.
+    assert (env.tmp / "uploads" / "mystery.csv").is_file()
     assert env.conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] == 0
+
+
+# --- (c2) Interactive mapping confirm → ingest ---------------------------------
+
+
+def test_upload_confirm_opaque_columns(env, client):
+    opaque = (
+        "xpos,ypos,when,device,travel_mode\n"
+        "139.700,35.680,2024-05-01T00:00:00Z,v1,Walk\n"
+        "139.710,35.681,2024-05-01T00:05:00Z,v1,Walk\n"
+        "139.720,35.682,2024-05-01T00:10:00Z,v1,Walk\n"
+        "139.700,35.680,2024-05-01T00:00:30Z,v2,Car\n"
+        "139.710,35.681,2024-05-01T00:06:00Z,v2,Car\n"
+    )
+    r = _upload(client, "opaque.csv", opaque.encode())
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["mapping_required"] is True
+    staged = detail["files"][0]["staged_name"]
+    assert detail["files"][0]["source_id"] == "opaque"
+
+    confirm = client.post(
+        "/api/ingest/upload/confirm",
+        json={
+            "files": [{
+                "staged_name": staged,
+                "source_id": "opaque",
+                "filename": "opaque.csv",
+                "mapping": {
+                    "lon": "xpos",
+                    "lat": "ypos",
+                    "time": "when",
+                    "vehicle_id": "device",
+                    "mode": "travel_mode",
+                    "time_kind": "iso",
+                },
+            }],
+        },
+    )
+    assert confirm.status_code == 202, confirm.text
+    job = client.get(f"/api/ingest/jobs/{confirm.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["waypoints"] == 5
+    assert job["result"]["trips"] == 2
+
+    modes = {
+        row[0]
+        for row in env.conn.execute(
+            "SELECT DISTINCT mode FROM trips WHERE source_id = 'opaque'"
+        ).fetchall()
+    }
+    assert modes == {"Walk", "Car"}
+
+    registry = yaml.safe_load(
+        (env.tmp / "sources.uploads.yaml").read_text(encoding="utf-8")
+    )
+    entry = registry["sources"]["opaque"]
+    assert entry["columns"]["waypoints"]["lon"]["csv"] == "xpos"
+    assert entry["columns"]["waypoints"]["mode"]["csv"] == "travel_mode"
+    assert entry["columns"]["waypoints"]["mode"]["type"] == "varchar"
+
+
+def test_upload_confirm_mode_map_int_codes(env, client):
+    opaque = (
+        "xpos,ypos,when,device,mcode\n"
+        "139.700,35.680,2024-05-01T00:00:00Z,v1,0\n"
+        "139.710,35.681,2024-05-01T00:05:00Z,v1,0\n"
+        "139.700,35.680,2024-05-01T00:00:30Z,v2,1\n"
+        "139.710,35.681,2024-05-01T00:06:00Z,v2,1\n"
+    )
+    r = _upload(client, "codes.csv", opaque.encode())
+    assert r.status_code == 422
+    staged = r.json()["detail"]["files"][0]["staged_name"]
+    confirm = client.post(
+        "/api/ingest/upload/confirm",
+        json={
+            "files": [{
+                "staged_name": staged,
+                "source_id": "codes",
+                "filename": "codes.csv",
+                "mapping": {
+                    "lon": "xpos",
+                    "lat": "ypos",
+                    "time": "when",
+                    "agent_id": "device",
+                    "mode": "mcode",
+                    "time_kind": "iso",
+                    "mode_map": {"0": "Walk", "1": "Car"},
+                },
+            }],
+        },
+    )
+    assert confirm.status_code == 202, confirm.text
+    job = client.get(f"/api/ingest/jobs/{confirm.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    modes = {
+        row[0]
+        for row in env.conn.execute(
+            "SELECT DISTINCT mode FROM trips WHERE source_id = 'codes'"
+        ).fetchall()
+    }
+    assert modes == {"Walk", "Car"}
+    registry = yaml.safe_load(
+        (env.tmp / "sources.uploads.yaml").read_text(encoding="utf-8")
+    )
+    assert registry["sources"]["codes"]["mode_map"] == {"0": "Walk", "1": "Car"}
+    assert (
+        registry["sources"]["codes"]["columns"]["waypoints"]["transport_mode"]["csv"]
+        == "mcode"
+    )
+
+
+def test_upload_confirm_missing_staged_422(env, client):
+    r = client.post(
+        "/api/ingest/upload/confirm",
+        json={
+            "files": [{
+                "staged_name": "nope.csv",
+                "mapping": {
+                    "lon": "x", "lat": "y", "time": "t", "vehicle_id": "id",
+                },
+            }],
+        },
+    )
+    assert r.status_code == 422
+    assert "not found" in str(r.json()["detail"])
 
 
 # --- (d) Bad extension → 422 -----------------------------------------------------

@@ -17,6 +17,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { useUpload } from '../hooks/useUpload';
 import { isAcceptedFile, phaseLabel, ACCEPTED_EXTENSIONS } from '../uploadUtils';
+import { ColumnMappingSheet } from './ColumnMappingSheet';
 
 const SUCCESS_DISMISS_MS = 6000;
 
@@ -25,8 +26,8 @@ interface UploadDropzoneProps {
 }
 
 export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
-  const { state, progress, result, fileNames, errorReasons,
-          upload, dismiss, notifyError } = uploader;
+  const { state, progress, result, fileNames, errorReasons, mappingFiles,
+          upload, confirmMapping, dismiss, notifyError } = uploader;
   const [dragActive, setDragActive] = useState(false);
   const dragCounter = useRef(0);
 
@@ -97,7 +98,17 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ uploader }) => {
         </div>
       )}
 
-      {(state === 'uploading' || state === 'processing') && (
+      {mappingFiles.length > 0 && (state === 'mapping' || state === 'uploading') && (
+        <ColumnMappingSheet
+          files={mappingFiles}
+          errorReasons={errorReasons}
+          busy={state === 'uploading'}
+          onConfirm={confirmMapping}
+          onCancel={dismiss}
+        />
+      )}
+
+      {(state === 'uploading' || state === 'processing') && mappingFiles.length === 0 && (
         <div style={styles.statusCard}>
           <div style={styles.statusFiles}>{fileNames.join(', ')}</div>
           <div style={styles.statusPhase}>

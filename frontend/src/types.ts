@@ -253,8 +253,9 @@ export interface FilterOptions {
 }
 
 // ─── Upload-and-go ingest (frontend half) ───────────────
-// Matches backend/routers/ingest_api.py: POST /api/ingest/upload (202) and
-// GET /api/ingest/jobs/{job_id}. POI uploads are not part of the contract.
+// Matches backend/routers/ingest_api.py: POST /api/ingest/upload (202),
+// POST /api/ingest/upload/confirm (202), and GET /api/ingest/jobs/{job_id}.
+// POI uploads are not part of the contract (TV-29 S2).
 
 export interface UploadFileInfo {
   filename: string;
@@ -262,11 +263,65 @@ export interface UploadFileInfo {
   format: string;
 }
 
-/** 202 response from POST /api/ingest/upload. */
+/** 202 response from POST /api/ingest/upload or /upload/confirm. */
 export interface UploadAccepted {
   job_id: string;
-  status: 'queued';
+  status: 'queued' | 'running' | 'done' | 'error';
   files: UploadFileInfo[];
+}
+
+/** Roles assignable in the interactive column-mapping sheet. */
+export type ColumnMappingRole =
+  | 'lon' | 'lat' | 'time' | 'agent_id' | 'name' | 'mode' | 'ignore';
+
+export type UploadTimeKind = 'iso' | 'epoch_ms' | 'epoch_s';
+
+export interface UploadColumnCensus {
+  name: string;
+  sample_type: 'number' | 'string' | 'mixed' | 'empty' | string;
+  samples: string[];
+  guessed_role: ColumnMappingRole | null;
+  time_kind: UploadTimeKind | null;
+}
+
+/** One file in a 422 mapping_required payload. */
+export interface UploadMappingFile {
+  filename: string;
+  source_id: string;
+  format: string;
+  staged_name: string;
+  columns: UploadColumnCensus[];
+  guesses: {
+    lon: string | null;
+    lat: string | null;
+    time: string | null;
+    vehicle_id: string | null;
+    name: string | null;
+    mode: string | null;
+    time_kind: UploadTimeKind | null;
+  };
+  reasons: string[];
+  tried_candidates: Record<string, string[]>;
+}
+
+/** Confirm-body mapping for one staged tabular file. */
+export interface ColumnMappingRequest {
+  lon: string;
+  lat: string;
+  time: string;
+  vehicle_id?: string;
+  agent_id?: string;
+  name?: string;
+  mode?: string;
+  time_kind?: UploadTimeKind;
+  mode_map?: Record<string, string>;
+}
+
+export interface ConfirmUploadFile {
+  staged_name: string;
+  source_id?: string;
+  filename?: string;
+  mapping: ColumnMappingRequest;
 }
 
 export type IngestPhase =
