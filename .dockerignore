@@ -98,8 +98,11 @@ H[:]Dropbox*
 !Dockerfile
 !docker-compose.yml
 !pyproject.toml
-!demo/sources.demo.yaml
+!demo/
+!demo/**/*
+!scripts/docker-entrypoint.sh
 !profiles/
+!profiles/**/*
 !README.md
 !LICENSE
 !CITATION.cff

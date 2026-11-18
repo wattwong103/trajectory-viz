@@ -32,47 +32,38 @@ Full design notes in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Full releas
 
 ## Quick start
 
-### Demo (2 minutes, no data needed)
+### Docker (one URL — recommended)
+
+```bash
+docker compose up --build
+# → http://localhost:8080  (built UI + API + baked demo DB)
+```
+
+No pre-built host DuckDB. Override `TRAJECTORY_VIZ_DB` / set
+`TRAJECTORY_VIZ_SEED_DEMO=0` for a custom or empty database.
+
+### Native map (Vite HMR)
+
+```bash
+./setup.sh        # or setup.bat on Windows
+cd frontend && npm run dev
+# → http://localhost:5173  (auto-ingests demo/demo.duckdb on first run)
+```
+
+### Native single-port (API + built UI)
 
 ```bash
 pip install -e .
-trajectory-viz-demo --serve   # first run ingests the bundled demo dataset
-# Open http://127.0.0.1:9999  (map UI: cd frontend && npm install && npm run dev)
+cd frontend && npm install && npm run build
+trajectory-viz-demo --serve
+# → http://127.0.0.1:9999
 ```
 
-A synthetic day of couriers (GPX), buses (GeoJSON `coordTimes`), and POIs around Kichijōji, Tokyo — details in [`docs/QUICKSTART.md`](docs/QUICKSTART.md) and [`docs/DATA_FORMATS.md`](docs/DATA_FORMATS.md).
+> `trajectory-viz-demo --serve` without `npm run build` is API-only at `/`.
 
-### Docker (recommended for first-timers)
+Opt-in PFLOW lab pack: `TRAJECTORY_VIZ_PROFILE=pflow PFLOW_HOME=… trajectory-viz-ingest --profile pflow --reset`.
 
-```bash
-# 1. Place a pre-ingested DuckDB at ./data/pflow.duckdb
-# 2. Build + run
-docker compose up --build
-# 3. Visit http://localhost:8080
-```
-
-### Native (Mac + Windows; with Vite HMR for dev)
-
-```bash
-# One-time setup
-./setup.sh        # macOS / Linux
-setup.bat         # Windows
-
-# Ingest — demo/universal is the default (demo/demo.duckdb)
-trajectory-viz-ingest --reset
-
-# Opt-in PFLOW lab pack (goods / fare / person / PLATEAU context)
-# TRAJECTORY_VIZ_PROFILE=pflow PFLOW_HOME=/path/to/PFLOW \
-#   trajectory-viz-ingest --profile pflow --reset
-
-# Run — two terminals
-trajectory-viz-serve              # backend, port 9999
-cd frontend && npm run dev        # frontend dev server, port 5173
-```
-
-Visit **<http://localhost:5173>**.
-
-See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for prereqs, troubleshooting, PFLOW profile, and standalone-mode setup.
+Details: [`docs/QUICKSTART.md`](docs/QUICKSTART.md), formats: [`docs/DATA_FORMATS.md`](docs/DATA_FORMATS.md).
 
 ---
 

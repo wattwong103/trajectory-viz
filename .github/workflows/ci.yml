@@ -134,29 +134,65 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test (empty DB)
-        # The image's CMD invokes trajectory-viz-serve which fails-soft when
-        # PFLOW_VIZ_DB doesn't exist (creates an empty DuckDB and serves it).
-        # We just need to confirm the container starts and /api/stats responds.
+      - name: Smoke test (demo happy path)
+        # Default image path: baked demo DB + built UI. Prove first-run shows
+        # trips and serves the map HTML (not API-only JSON at /).
         run: |
           docker run -d --name ci-trajectory-viz \
             -p 8080:8080 \
-            -e PFLOW_VIZ_DB=/tmp/ci.duckdb \
             trajectory-viz:ci
-          # Wait for healthcheck. The image's HEALTHCHECK polls every 30s but
-          # we hit /api/stats directly with a polling loop for speed.
-          for i in $(seq 1 30); do
+          for i in $(seq 1 45); do
             if curl -sf http://127.0.0.1:8080/api/stats > /dev/null; then
               echo "Container ready after ${i}s"
               break
             fi
             sleep 1
           done
-          # Final hit — fail the job if still not responding
-          curl -sf http://127.0.0.1:8080/api/stats | tee /dev/stderr | grep -q '"trips"'
-          # And /api/stats/filter-options shape
+          STATS=$(curl -sf http://127.0.0.1:8080/api/stats)
+          echo "$STATS" | tee /dev/stderr | grep -q '"trips"'
+          printf '%s' "$STATS" | python3 -c '
+          import json, sys
+          body = json.load(sys.stdin)
+          n = body.get("trips", {}).get("row_count", 0)
+          assert n > 0, f"expected demo trips, got {body!r}"
+          assert not body.get("empty_hint"), body.get("empty_hint")
+          print(f"demo trips OK ({n})")
+          '
           curl -sf http://127.0.0.1:8080/api/stats/filter-options | tee /dev/stderr | grep -q 'vehicle_types'
+          # Map UI (StaticFiles) — must be HTML, not the API-only JSON note.
+          curl -sf -D /tmp/ci-root.hdr -o /tmp/ci-root.body http://127.0.0.1:8080/
+          head -n 20 /tmp/ci-root.hdr
+          grep -qi 'text/html' /tmp/ci-root.hdr
+          grep -qiE '<html|<!doctype html' /tmp/ci-root.body
           docker stop ci-trajectory-viz
+
+      - name: Smoke test (empty DB stays honest)
+        # SEED_DEMO=0 + fresh path → schema-only / empty; empty_hint present.
+        run: |
+          docker run -d --name ci-trajectory-viz-empty \
+            -p 8081:8080 \
+            -e TRAJECTORY_VIZ_DB=/tmp/ci-empty.duckdb \
+            -e PFLOW_VIZ_DB=/tmp/ci-empty.duckdb \
+            -e TRAJECTORY_VIZ_SEED_DEMO=0 \
+            trajectory-viz:ci
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:8081/api/stats > /dev/null; then
+              echo "Empty container ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          STATS=$(curl -sf http://127.0.0.1:8081/api/stats)
+          echo "$STATS" | tee /dev/stderr
+          printf '%s' "$STATS" | python3 -c '
+          import json, sys
+          body = json.load(sys.stdin)
+          n = body.get("trips", {}).get("row_count", 0)
+          assert n == 0, body
+          assert body.get("empty_hint"), "expected empty_hint on zero-trip DB"
+          print("empty_hint OK")
+          '
+          docker stop ci-trajectory-viz-empty
 
   # ──────────────────────────────────────────────────────────────────────
   # sources-yaml-examples: validate that every YAML under docs/examples/

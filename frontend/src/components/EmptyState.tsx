@@ -47,13 +47,17 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ onUploadFiles }) => {
       <div style={styles.card}>
         <div style={styles.heading}>No data yet</div>
         <div style={styles.body}>
-          Spin up the seeded demo dataset — GPX courier tracks, bus lines, and
-          POIs — with a single command:
+          Drop a trajectory file below, or load the seeded Kichijōji demo
+          (couriers / buses / POIs) in one shot:
         </div>
-        <pre style={styles.command}>trajectory-viz-demo --serve</pre>
+        <pre style={styles.command}>docker compose up --build</pre>
         <div style={styles.body}>
-          Or point <code style={styles.code}>sources.yaml</code> at your own
-          data (CSV, GeoJSON, GPX, NDJSON, or Parquet) and re-run ingest.{' '}
+          Native alternative:{' '}
+          <code style={styles.code}>trajectory-viz-demo</code> then{' '}
+          <code style={styles.code}>npm run build</code> /{' '}
+          <code style={styles.code}>npm run dev</code>. Or point{' '}
+          <code style={styles.code}>sources.yaml</code> at your own data and
+          re-run ingest.{' '}
           <a
             href={DOCS_URL}
             target="_blank"

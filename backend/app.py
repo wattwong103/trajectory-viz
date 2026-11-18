@@ -91,8 +91,10 @@ else:
             "docs": "/docs",
             "stats": "/api/stats",
             "note": (
-                "Frontend dist/ not bundled. Run the Vite dev server on :5173 "
-                "(or build with `npm run build` to embed)."
+                "Frontend dist/ not bundled — this is the API only, not the map. "
+                "One-URL map: `docker compose up --build` → :8080. "
+                "Native: `cd frontend && npm run build` then re-serve, or "
+                "`npm run dev` on :5173."
             ),
         }
 
