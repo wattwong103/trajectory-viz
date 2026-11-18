@@ -348,29 +348,47 @@ Matches are validated against the sampled values:
   `iso` (parsed as TIMESTAMPTZ); all-numeric within the 2000–2100 epoch range →
   `epoch_s` or `epoch_ms` by magnitude. Anything else → the column is rejected.
 
-**Happy path:** if lon/lat, time, and id are identified, ingest starts immediately
-(one-click) — same as before.
+**Happy path (GPS tracks):** if lon/lat, time, and id are identified, ingest
+starts immediately (one-click) — waypoints + gap-split trip synthesis.
+
+**Happy path (trips-only / OD arcs):** if the header looks like an OD table
+(`start_lon`/`end_lon` style names) and required trip columns sniff cleanly
+(`starttime`, start/end lon/lat, agent id, trip id), ingest starts immediately
+with `discovery.trips_glob`, `render.mode: arcs`, and **no waypoints**
+(`has_waypoints=false`). Semantics match
+[`docs/examples/sources-od-arcs.yaml`](examples/sources-od-arcs.yaml).
+`starttime` may be seconds-from-midnight, ISO-8601, or epoch s/ms.
+
+| OD role | Candidate names (first match) |
+|---|---|
+| Start lon / lat | `start_lon`, `origin_lon`, `o_lon`, … / `start_lat`, `origin_lat`, … |
+| End lon / lat | `end_lon`, `dest_lon`, `d_lon`, … / `end_lat`, `dest_lat`, … |
+| Start time | `starttime`, `start_time`, `dep_time`, `depart`, `time`, … |
+| Trip id | `trip_id`, `id`, `od_id`, `flow_id`, … |
 
 **Mapping path:** if a required role is missing, the API returns **422** with
 `mapping_required: true`, the tried candidate lists, and a per-file **column
-census** (names, sample types, sample values, guessed roles). The staged file
-is kept under `uploads/`. The UI opens a mapping sheet where you assign roles
-`lon | lat | time | agent_id | name | mode | ignore`, optionally set `time_kind`
-(`iso` / `epoch_ms` / `epoch_s`), and optionally paste a tiny `mode_map` JSON
-for int→label codes. Confirm posts to `POST /api/ingest/upload/confirm` and
-runs the same ingest job pipeline; the generated `SourceConfig` is written to
+census** (names, sample types, sample values, guessed roles, `kind` /
+`suggested_kind` = `tracks` \| `trips`). The staged file is kept under
+`uploads/`. The UI mapping sheet lets you choose **GPS tracks** vs **OD / trips
+table**, assign roles, optionally set `time_kind` (tracks: `iso` / `epoch_ms` /
+`epoch_s`; trips also allow `day_seconds`), and optionally paste a tiny
+`mode_map` JSON for int→label codes. Confirm posts to
+`POST /api/ingest/upload/confirm` (`kind` on the mapping) and runs the same
+ingest job pipeline; the generated `SourceConfig` is written to
 `sources.uploads.yaml` (hand-written registries are never mutated).
 
 Mode handling on upload:
 
-- Mapped **string** mode → `columns.waypoints.mode` (varchar); stored/filtered
-  as string labels.
+- Mapped **string** mode → `columns.waypoints.mode` or `columns.trips.mode`
+  (varchar); stored/filtered as string labels.
 - Optional **`mode_map`** → column treated as int `transport_mode` +
   `mode_map` (lab int codes only when you supply the map — no invented PFLOW
   ints).
 
 You can still rename columns or write an explicit YAML block (section 6) instead
-of using the sheet.
+of using the sheet. No native MATSim/SUMO `FormatType` — convert to tabular
+first (section 9).
 
 ### 7.1 Overlay GeoJSON — POIs and zones (upload-and-go)
 

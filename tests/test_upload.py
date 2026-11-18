@@ -476,3 +476,106 @@ def test_reupload_replaces_source(env, client):
         "SELECT COUNT(*) FROM waypoints WHERE source_id = 'track'"
     ).fetchone()[0]
     assert n2 == n1  # replaced, not duplicated
+
+
+# --- (S3) Trips-only / OD arcs upload ----------------------------------------------
+
+
+_OD_CSV = (
+    "trip_id,agent_id,starttime,start_lon,start_lat,end_lon,end_lat,mode\n"
+    "1,a1,3600,139.70,35.68,139.75,35.70,walk\n"
+    "2,a1,7200,139.75,35.70,139.72,35.69,bike\n"
+    "3,a2,4000,139.71,35.681,139.73,35.685,bus\n"
+)
+
+
+def test_upload_od_trips_csv_arcs_no_waypoints(env, client):
+    r = _upload(client, "flows.csv", _OD_CSV.encode())
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["files"][0]["role"] == "trips"
+    job = client.get(f"/api/ingest/jobs/{body['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["trips"] == 3
+    assert job["result"]["waypoints"] == 0
+    assert env.conn.execute(
+        "SELECT COUNT(*) FROM waypoints WHERE source_id = 'flows'"
+    ).fetchone()[0] == 0
+    assert env.conn.execute(
+        "SELECT COUNT(*) FROM trips WHERE source_id = 'flows'"
+    ).fetchone()[0] == 3
+
+    opts = client.get("/api/stats/filter-options").json()
+    sources = {s["source_id"]: s for s in opts["sources"]}
+    assert sources["flows"]["has_waypoints"] is False
+    assert sources["flows"]["mode"] == "arcs"
+
+    # Registry block matches sources-od-arcs semantics (trips_glob + arcs).
+    reg = yaml.safe_load((env.tmp / "sources.uploads.yaml").read_text())
+    cfg = reg["sources"]["flows"]
+    assert "trips_glob" in cfg["discovery"]
+    assert cfg["discovery"].get("trajectories_glob") in (None, "")
+    assert cfg["render"]["mode"] == "arcs"
+    assert cfg.get("trips_synthesis") is None
+
+
+def test_upload_od_confirm_opaque_columns(env, client):
+    opaque = (
+        "o_x,o_y,d_x,d_y,dep,aid,tid,m\n"
+        "139.70,35.68,139.75,35.70,3600,a1,1,walk\n"
+        "139.75,35.70,139.72,35.69,7200,a1,2,bike\n"
+    )
+    r = _upload(client, "opaque_od.csv", opaque.encode())
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["mapping_required"] is True
+    census = detail["files"][0]
+    # Not OD-shaped headers → tracks sheet by default; confirm as trips.
+    assert census["kind"] in ("tracks", "trips")
+    staged = census["staged_name"]
+
+    confirm = client.post(
+        "/api/ingest/upload/confirm",
+        json={
+            "files": [{
+                "staged_name": staged,
+                "source_id": "opaque_od",
+                "filename": "opaque_od.csv",
+                "kind": "trips",
+                "mapping": {
+                    "kind": "trips",
+                    "start_lon": "o_x",
+                    "start_lat": "o_y",
+                    "end_lon": "d_x",
+                    "end_lat": "d_y",
+                    "starttime": "dep",
+                    "vehicle_id": "aid",
+                    "trip_id": "tid",
+                    "mode": "m",
+                    "time_kind": "day_seconds",
+                },
+            }]
+        },
+    )
+    assert confirm.status_code == 202, confirm.text
+    job = client.get(f"/api/ingest/jobs/{confirm.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["trips"] == 2
+    assert job["result"]["waypoints"] == 0
+    modes = {
+        row[0]
+        for row in env.conn.execute(
+            "SELECT DISTINCT mode FROM trips WHERE source_id = 'opaque_od'"
+        ).fetchall()
+    }
+    assert modes == {"walk", "bike"}
+
+
+def test_upload_tracks_still_works_beside_od(env, client):
+    """Points-only synthesis path must remain intact after OD support."""
+    r = _upload(client, "fleet.csv", _CSV.encode())
+    assert r.status_code == 202, r.text
+    job = client.get(f"/api/ingest/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["waypoints"] == 5
+    assert job["result"]["trips"] == 2

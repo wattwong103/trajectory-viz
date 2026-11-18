@@ -274,9 +274,13 @@ export interface UploadAccepted {
 
 /** Roles assignable in the interactive column-mapping sheet. */
 export type ColumnMappingRole =
-  | 'lon' | 'lat' | 'time' | 'agent_id' | 'name' | 'mode' | 'ignore';
+  | 'lon' | 'lat' | 'time' | 'agent_id' | 'name' | 'mode' | 'ignore'
+  | 'start_lon' | 'start_lat' | 'end_lon' | 'end_lat' | 'starttime' | 'trip_id';
 
-export type UploadTimeKind = 'iso' | 'epoch_ms' | 'epoch_s';
+/** GPS tracks vs trips-only / OD arcs. */
+export type UploadTabularKind = 'tracks' | 'trips';
+
+export type UploadTimeKind = 'iso' | 'epoch_ms' | 'epoch_s' | 'day_seconds';
 
 export interface UploadColumnCensus {
   name: string;
@@ -292,15 +296,23 @@ export interface UploadMappingFile {
   source_id: string;
   format: string;
   staged_name: string;
+  kind?: UploadTabularKind;
+  suggested_kind?: UploadTabularKind | null;
   columns: UploadColumnCensus[];
   guesses: {
-    lon: string | null;
-    lat: string | null;
-    time: string | null;
-    vehicle_id: string | null;
-    name: string | null;
-    mode: string | null;
-    time_kind: UploadTimeKind | null;
+    lon?: string | null;
+    lat?: string | null;
+    time?: string | null;
+    vehicle_id?: string | null;
+    name?: string | null;
+    mode?: string | null;
+    time_kind?: UploadTimeKind | null;
+    start_lon?: string | null;
+    start_lat?: string | null;
+    end_lon?: string | null;
+    end_lat?: string | null;
+    starttime?: string | null;
+    trip_id?: string | null;
   };
   reasons: string[];
   tried_candidates: Record<string, string[]>;
@@ -308,21 +320,29 @@ export interface UploadMappingFile {
 
 /** Confirm-body mapping for one staged tabular file. */
 export interface ColumnMappingRequest {
-  lon: string;
-  lat: string;
-  time: string;
+  kind?: UploadTabularKind;
+  lon?: string;
+  lat?: string;
+  time?: string;
   vehicle_id?: string;
   agent_id?: string;
   name?: string;
   mode?: string;
   time_kind?: UploadTimeKind;
   mode_map?: Record<string, string>;
+  start_lon?: string;
+  start_lat?: string;
+  end_lon?: string;
+  end_lat?: string;
+  starttime?: string;
+  trip_id?: string;
 }
 
 export interface ConfirmUploadFile {
   staged_name: string;
   source_id?: string;
   filename?: string;
+  kind?: UploadTabularKind;
   mapping: ColumnMappingRequest;
 }
 

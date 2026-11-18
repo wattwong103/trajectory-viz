@@ -125,7 +125,7 @@ export async function sniffGeoJsonFile(file: File): Promise<GeoJsonRoleSuggestio
 }
 
 const PHASE_TEXT: Record<IngestPhase, string> = {
-  ingest: 'Ingesting waypoints',
+  ingest: 'Ingesting data',
   synthesize: 'Synthesizing trips',
   derived: 'Computing derived metrics',
   density: 'Building density',

@@ -6,6 +6,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Added
 
+- **Trips-only / OD arcs upload (TV-29 S3 / TV-33).** Tabular OD CSVs (`start_lon`/`end_lon`/… + `starttime` + agent + trip id) auto-ingest via `trips_glob` with `render.mode: arcs` and no waypoints (`has_waypoints=false`). Mapping sheet gains GPS tracks vs OD/trips toggle; confirm accepts `kind=trips`. Fresh-DB trips-only pins the historical epoch (day-seconds starttime). Docs: DATA_FORMATS §7 + QUICKSTART. Tests: OD upload/confirm pytest + ColumnMappingSheet vitest.
+
 - **BYO GeoJSON overlay upload for POIs and zones (TV-29 S2 / TV-32).** Polygon GeoJSON auto-ingests as zones; timeless Point GeoJSON as POIs; Point+time stays trajectories (override via `roles` form / UI chooser). Optional `labels` / `colors` form fields; `POST /upload/confirm-overlay` for staged role choice. Overlay configs merge into `sources.uploads.yaml` `pois:`/`zones:`; post-upload reloads zones + POI chips. Docs: DATA_FORMATS §7 + QUICKSTART. Tests: upload overlay pytest + OverlayRoleSheet / geojson-role vitest.
 
 - **Interactive column mapping for upload-and-go (TV-29 S1).** When CSV/NDJSON/Parquet sniff fails, `POST /api/ingest/upload` returns `mapping_required` + column census (kept staged); UI mapping sheet assigns `lon|lat|time|agent_id|name|mode`, optional `time_kind` / `mode_map`; `POST /api/ingest/upload/confirm` builds `SourceConfig` into `sources.uploads.yaml` and runs the existing ingest job. Heuristic one-click path unchanged when sniff succeeds. String modes by default; int codes only via user `mode_map`. Docs: DATA_FORMATS §7 + QUICKSTART. Tests: `tests/test_upload.py`, `ColumnMappingSheet` / `useUpload` vitest.
