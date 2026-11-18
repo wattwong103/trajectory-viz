@@ -81,12 +81,12 @@ What happens:
 1. The format is sniffed automatically (from the extension; `.json` files are
    content-sniffed as GeoJSON vs NDJSON).
 2. For CSV/NDJSON/Parquet, lon/lat/time/id columns are identified by name
-   heuristics; GeoJSON and GPX normalize automatically. If the columns can't
-   be identified, a **column-mapping sheet** opens (census of your headers +
-   the candidates that were tried) — assign longitude / latitude / time /
-   agent id (and optional mode), confirm, and ingest continues. Well-named
-   files still go one-click with no wizard. You can also rename columns or
-   write an explicit `sources.yaml` block (see below).
+   heuristics; if they can't, a **column-mapping sheet** opens. **GeoJSON**
+   opens an **Add as…** chooser (Trajectories / POIs / Zones) with a suggested
+   role from geometry — polygons become zone layers, timeless points become
+   POIs, timed points / lines stay trajectories. GPX stays tracks. Optional
+   label + color apply to POI/zone overlays. You can also write an explicit
+   `sources.yaml` block (see below).
 3. Trips are synthesized from the points (30-minute gap split) and ingest runs
    as a background job with a live progress card.
 4. When the job finishes, the new source simply appears — **Sources** button,

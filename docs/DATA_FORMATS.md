@@ -322,13 +322,11 @@ time:
 > `sources.yaml` mapping (section 6) always gives full control and is unaffected
 > by these heuristics.
 
-GeoJSON and GPX uploads need no guessing — they normalize to the canonical
-staging fields of section 1 (`_lon`/`_lat`/`_time_ms`/`_trk_name`/`_feature_id`).
-One guard runs first: GeoJSON uploads are geometry-censused, and anything but
-**Point/LineString** is rejected with a 422 up front (a `Polygon` upload gets
-"declare polygon layers under `zones:` in sources.yaml instead"). Without the
-census, a polygon file would be accepted and then fail mid-job — after earlier
-files in the same batch already mutated the DB.
+GeoJSON and GPX uploads need no column sniffing for trajectories — they
+normalize to the canonical staging fields of section 1
+(`_lon`/`_lat`/`_time_ms`/`_trk_name`/`_feature_id`). GeoJSON is also
+geometry-classified for overlay roles (see §7.1): polygons become zones,
+timeless points become POIs. GPX stays tracks.
 For **CSV, NDJSON, and Parquet** uploads, the first ~100 rows are sampled and
 columns are matched **case-insensitively** against these candidates (first match
 wins; the file's original casing is used downstream):
@@ -374,7 +372,21 @@ Mode handling on upload:
 You can still rename columns or write an explicit YAML block (section 6) instead
 of using the sheet.
 
-Generated defaults for accepted uploads: `source_id` slugified from the filename
+### 7.1 Overlay GeoJSON — POIs and zones (upload-and-go)
+
+GeoJSON uploads are classified by geometry (and optional form `roles`):
+
+| Geometry | Default role | Notes |
+|---|---|---|
+| Polygon / MultiPolygon only | **zones** | Ingests into `zones`; Layers → Zones |
+| LineString (any) | **trajectories** | Existing track path |
+| Point only, no time-like props | **pois** | Ingests into `pois`; category chips |
+| Point only with time-like props | **trajectories** | Backward-compatible ping tracks |
+| Mixed polygon + point/line | ask | UI chooser / `role_choice_required` |
+
+Override with multipart form field `roles` (JSON `{filename: "pois"|"zones"|"trajectories"}`), plus optional `labels` / `colors` (`[r,g,b]`). Staged ambiguous files confirm via `POST /api/ingest/upload/confirm-overlay`. Generated `pois:` / `zones:` blocks merge into `sources.uploads.yaml` (same file as trajectory uploads); hand-written registries stay untouched.
+
+Generated defaults for accepted trajectory uploads: `source_id` slugified from the filename
 stem, `vehicle_key_template` `{source_id}:{vehicle_id}`, `gap_split` trip
 synthesis at 30 minutes, a deterministic palette color, and the epoch anchor of
 section 3 (existing DB anchor; midnight UTC of the data's first day on a fresh

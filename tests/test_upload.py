@@ -76,7 +76,12 @@ def test_upload_gpx_end_to_end(env, client):
     assert r.status_code == 202, r.text
     body = r.json()
     assert body["files"] == [
-        {"filename": "track.gpx", "source_id": "track", "format": "gpx"}
+        {
+            "filename": "track.gpx",
+            "source_id": "track",
+            "format": "gpx",
+            "role": "trajectories",
+        }
     ]
 
     job = client.get(f"/api/ingest/jobs/{body['job_id']}").json()
@@ -278,37 +283,48 @@ def test_upload_rejected_extension(env, client):
     assert "unsupported file type" in str(r.json()["detail"])
 
 
-# --- (d2) Polygon GeoJSON → 422 upfront (not a mid-job failure) ------------------
+# --- (d2) Polygon GeoJSON → zones overlay (TV-29 S2) ---------------------------
 
 
-def test_upload_polygon_geojson_422_with_zones_pointer(env, client):
-    """Polygon layers are zones, not trajectories: reject at upload time with
-    a 422 pointing at `zones:` — instead of accepting the job and failing
-    mid-ingest after mutating the DB."""
+def test_upload_polygon_geojson_as_zones(env, client):
+    """Polygon layers auto-ingest as zones without editing sources.yaml."""
     import json as _json
 
     doc = {
         "type": "FeatureCollection",
         "features": [{
             "type": "Feature",
-            "properties": {"name": "Ward A"},
+            "properties": {"name": "Ward A", "category": "ward"},
             "geometry": {"type": "Polygon", "coordinates": [
                 [[139.0, 35.0], [139.1, 35.0], [139.1, 35.1], [139.0, 35.1], [139.0, 35.0]],
             ]},
         }],
     }
     r = _upload(client, "wards.geojson", _json.dumps(doc).encode())
-    assert r.status_code == 422
-    reasons = " ".join(r.json()["detail"]["reasons"])
-    assert "Polygon" in reasons
-    assert "zones:" in reasons
-    # Nothing staged, nothing ingested, no job created.
-    assert not (env.tmp / "uploads").exists() or not list((env.tmp / "uploads").iterdir())
-    assert env.conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] == 0
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["files"][0]["role"] == "zones"
+    job = client.get(f"/api/ingest/jobs/{body['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["zones"] == 1
+    assert job["result"]["trips"] == 0
+    n = env.conn.execute(
+        "SELECT COUNT(*) FROM zones WHERE source_key = 'wards'"
+    ).fetchone()[0]
+    assert n == 1
+    styles = client.get("/api/zones/styles").json()
+    assert "wards" in styles["styles"]
+    assert styles["styles"]["wards"]["label"] == "wards"
+
+    registry = yaml.safe_load(
+        (env.tmp / "sources.uploads.yaml").read_text(encoding="utf-8")
+    )
+    assert "wards" in registry["zones"]
+    assert registry["zones"]["wards"]["format"] == "geojson"
 
 
 def test_upload_point_geojson_passes_census(env, client):
-    """Point/LineString GeoJSON still uploads fine (census is allowlist-based)."""
+    """Point GeoJSON with time props still uploads as trajectories (one-click)."""
     import json as _json
 
     doc = {
@@ -321,6 +337,68 @@ def test_upload_point_geojson_passes_census(env, client):
     }
     r = _upload(client, "points.geojson", _json.dumps(doc).encode())
     assert r.status_code == 202, r.text
+    assert r.json()["files"][0]["role"] == "trajectories"
+
+
+def test_upload_point_geojson_as_pois(env, client):
+    """Point GeoJSON without time auto-ingests as POIs; chips/styles update."""
+    import json as _json
+
+    doc = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"name": "Cafe A", "category": "cafe"},
+                "geometry": {"type": "Point", "coordinates": [139.7, 35.68]},
+            },
+            {
+                "type": "Feature",
+                "properties": {"name": "Station X", "category": "station"},
+                "geometry": {"type": "Point", "coordinates": [139.72, 35.70]},
+            },
+        ],
+    }
+    r = _upload(client, "amenities.geojson", _json.dumps(doc).encode())
+    assert r.status_code == 202, r.text
+    assert r.json()["files"][0]["role"] == "pois"
+    job = client.get(f"/api/ingest/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["pois"] == 2
+    cats = client.get("/api/pois/categories").json()["categories"]
+    names = {c["category"] for c in cats}
+    assert "cafe" in names and "station" in names
+    opts = client.get("/api/stats/filter-options").json()
+    # Overlay-only upload on empty DB: no trips, but POI API works.
+    assert opts["capabilities"] is not None
+
+
+def test_upload_point_geojson_role_pois_override(env, client):
+    """roles form field forces Point+time GeoJSON into POIs (not trajectories)."""
+    import json as _json
+
+    doc = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {
+                "name": "Cafe A", "category": "cafe",
+                "time": "2024-05-01T09:00:00+09:00",
+            },
+            "geometry": {"type": "Point", "coordinates": [139.7, 35.68]},
+        }],
+    }
+    r = client.post(
+        "/api/ingest/upload",
+        data={"roles": _json.dumps({"cafes.geojson": "pois"})},
+        files=[("files", ("cafes.geojson", _json.dumps(doc).encode()))],
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["files"][0]["role"] == "pois"
+    job = client.get(f"/api/ingest/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["pois"] == 1
+    assert env.conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] == 0
 
 
 # --- (e) Uploads registry written + style lookup merge ----------------------------

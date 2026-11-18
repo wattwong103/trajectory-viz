@@ -40,15 +40,16 @@ export function usePois(options: UsePoisOptions = {}) {
   const onDisabledChangeRef = useRef(onDisabledChange);
   onDisabledChangeRef.current = onDisabledChange;
 
-  // Fetch the category catalogue once. Failure degrades to "no POI layer"
-  // (empty categories hide the FilterPanel section and the map layer).
-  useEffect(() => {
-    let cancelled = false;
-    fetchPoiCategories()
-      .then(res => { if (!cancelled) setCategories(res.categories); })
+  // Fetch the category catalogue. `reload()` re-runs after overlay uploads.
+  const reloadCategories = useCallback(() => {
+    return fetchPoiCategories()
+      .then(res => { setCategories(res.categories); })
       .catch(e => console.error('POI categories fetch failed:', e));
-    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    void reloadCategories();
+  }, [reloadCategories]);
 
   // Categories arrive one row per (source_key, category); the enabled set is
   // keyed by category NAME, so duplicate names across sources toggle together.
@@ -124,6 +125,10 @@ export function usePois(options: UsePoisOptions = {}) {
     setDisabled(enabled ? [] : [...allCategories]);
   }, [allCategories]);
 
+  const reload = useCallback(async () => {
+    await reloadCategories();
+  }, [reloadCategories]);
+
   return { pois, categories, enabledCategories, disabledCategories: disabled,
-           toggleCategory, setAll, loading };
+           toggleCategory, setAll, loading, reload };
 }

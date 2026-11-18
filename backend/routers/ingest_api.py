@@ -1,20 +1,24 @@
 """Upload-and-go ingest API (upload-and-go change).
 
-POST /api/ingest/upload  — multipart upload of one or more trajectory files.
-    Files are staged to <db dir>/uploads/, sniffed, validated, and ingested
-    into the current DB as a background job. Source configs are auto-generated
-    and persisted to sources.uploads.yaml next to the DB (the user's
-    hand-written sources.yaml is never mutated).
+POST /api/ingest/upload  — multipart upload of trajectory and/or overlay files.
+    Files are staged to <db dir>/uploads/, sniffed/classified, and ingested
+    into the current DB as a background job. Source / POI / zone configs are
+    auto-generated and persisted to sources.uploads.yaml next to the DB (the
+    user's hand-written sources.yaml is never mutated).
+    Optional form field ``roles`` (JSON object filename→role) selects
+    trajectories | pois | zones for GeoJSON; omitted roles are auto-detected.
     When tabular sniff fails, returns 422 with ``mapping_required`` + column
     census (staged file kept) so the UI can show an interactive mapping sheet.
+    Ambiguous Point GeoJSON (no role) returns ``role_choice_required``.
 POST /api/ingest/upload/confirm — apply column mapping to staged tabular files
     and run the same ingest job pipeline.
+POST /api/ingest/upload/confirm-overlay — apply role/label/color to staged
+    GeoJSON and ingest as trajectories / pois / zones.
 GET  /api/ingest/jobs/{job_id} — job status/progress/result/error.
 GET  /api/ingest/jobs — last 20 jobs, newest first.
 
-Job orchestration mirrors backend.ingest.main(): waypoints ingest → epoch
-anchor resolution → synthesize_trips → compute_derived_metrics →
-build_density_hourly → uploads-registry write.
+Job orchestration mirrors backend.ingest.main() for trajectories, plus
+ingest_pois / ingest_zones for overlays.
 """
 
 from __future__ import annotations
@@ -25,9 +29,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ..config import uploads_dir, uploads_registry_path
@@ -36,20 +40,27 @@ from ..ingest import (
     build_density_hourly,
     compute_derived_metrics,
     ensure_epoch_anchor,
+    ingest_pois,
     ingest_source_trajectories,
+    ingest_zones,
     synthesize_trips,
 )
 from ..sources_schema import TimeConfig
 from ..upload_config import (
     UploadConfigError,
-    census_geojson_geometry,
+    census_geojson_types,
     census_tabular,
     census_to_api_dict,
+    generate_poi_config,
     generate_source_config,
+    generate_zone_config,
+    geojson_property_keys,
     load_uploads_registry_ids,
     slugify_source_id,
     sniff_failure_reasons,
     sniff_from_mapping,
+    suggest_geojson_role,
+    validate_geojson_role,
     write_uploads_registry,
 )
 
@@ -149,6 +160,7 @@ def _detect_upload_format(path: Path, ext: str) -> str:
 
 
 def _existing_source_ids(conn) -> set[str]:
+    """Ids claimed by uploads registry + already-ingested sources/overlays."""
     ids = load_uploads_registry_ids(uploads_registry_path())
     try:
         ids |= {
@@ -159,6 +171,16 @@ def _existing_source_ids(conn) -> set[str]:
         }
     except Exception:
         pass
+    for table in ("pois", "zones"):
+        try:
+            ids |= {
+                r[0]
+                for r in conn.execute(
+                    f"SELECT DISTINCT source_key FROM {table} WHERE source_key IS NOT NULL"
+                ).fetchall()
+            }
+        except Exception:
+            pass
     return ids
 
 
@@ -182,77 +204,122 @@ def _resolve_known_anchor(conn) -> int | None:
 
 
 def _run_job(job_id: str, prepared: list[dict]) -> None:
+    """Run an upload job for trajectories and/or POI/zone overlays."""
     job = _JOBS[job_id]
     job["status"] = "running"
     try:
         conn = get_connection()
-        anchor = _resolve_known_anchor(conn)
-        fresh_db = anchor is None
-        if anchor is not None:
-            ensure_epoch_anchor(conn, anchor)
-            anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
-            for p in prepared:
-                p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
-
-        # 1) Waypoint ingest (absolute ms — anchor-independent).
+        traj = [p for p in prepared if p.get("kind", "trajectory") == "trajectory"]
+        overlays = [p for p in prepared if p.get("kind") in ("poi", "zone")]
         total_files = len(prepared)
-        for i, p in enumerate(prepared, start=1):
+        done = 0
+
+        # --- Trajectories (optional) ----------------------------------------
+        if traj:
+            anchor = _resolve_known_anchor(conn)
+            fresh_db = anchor is None
+            if anchor is not None:
+                ensure_epoch_anchor(conn, anchor)
+                anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
+                for p in traj:
+                    p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
+
+            for p in traj:
+                _set_progress(
+                    job, "ingest", file=p["filename"], done_files=done,
+                    total_files=total_files,
+                )
+                conn.execute(
+                    "DELETE FROM waypoints WHERE source_id = ?", [p["source_id"]]
+                )
+                n = ingest_source_trajectories(
+                    conn, p["staged_path"], p["source_id"], p["cfg"], anchor
+                )
+                p["waypoints"] = n
+                done += 1
+
+            if fresh_db:
+                min_ms = conn.execute(
+                    "SELECT MIN(unix_time_ms) FROM waypoints"
+                ).fetchone()[0]
+                if min_ms is None:
+                    raise ValueError("upload produced no waypoints — nothing to anchor")
+                anchor = int(min_ms // 1000)
+                anchor -= anchor % 86400
+                ensure_epoch_anchor(conn, anchor)
+                anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
+                for p in traj:
+                    p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
+
             _set_progress(
-                job, "ingest", file=p["filename"], done_files=i - 1,
+                job, "synthesize", done_files=done, total_files=total_files,
+            )
+            for p in traj:
+                p["trips"] = synthesize_trips(conn, p["cfg"], anchor)
+                p["vehicles"] = conn.execute(
+                    "SELECT COUNT(DISTINCT vehicle_key) FROM trips WHERE source_id = ?",
+                    [p["source_id"]],
+                ).fetchone()[0]
+
+            _set_progress(job, "derived")
+            compute_derived_metrics(conn)
+            _set_progress(job, "density")
+            build_density_hourly(conn)
+        else:
+            for p in traj:  # pragma: no cover
+                p.setdefault("trips", 0)
+                p.setdefault("waypoints", 0)
+                p.setdefault("vehicles", 0)
+
+        # --- Overlays (POIs / zones) ----------------------------------------
+        for p in overlays:
+            _set_progress(
+                job, "ingest", file=p["filename"], done_files=done,
                 total_files=total_files,
             )
-            # Idempotent re-upload: replace this source's waypoints.
-            conn.execute(
-                "DELETE FROM waypoints WHERE source_id = ?", [p["source_id"]]
-            )
-            n = ingest_source_trajectories(
-                conn, p["staged_path"], p["source_id"], p["cfg"], anchor
-            )
-            p["waypoints"] = n
+            if p["kind"] == "poi":
+                n = ingest_pois(conn, p["source_id"], p["cfg"], p["staged_path"])
+                p["pois"] = n
+                p["zones"] = 0
+            else:
+                n = ingest_zones(conn, p["source_id"], p["cfg"], p["staged_path"])
+                p["zones"] = n
+                p["pois"] = 0
+            p.setdefault("trips", 0)
+            p.setdefault("waypoints", 0)
+            p.setdefault("vehicles", 0)
+            done += 1
 
-        # 2) Deferred anchor for a fresh DB: midnight UTC of the first day.
-        if fresh_db:
-            min_ms = conn.execute("SELECT MIN(unix_time_ms) FROM waypoints").fetchone()[0]
-            if min_ms is None:
-                raise ValueError("upload produced no waypoints — nothing to anchor")
-            anchor = int(min_ms // 1000)
-            anchor -= anchor % 86400
-            ensure_epoch_anchor(conn, anchor)
-            anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
-            for p in prepared:
-                p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
+        for p in traj:
+            p.setdefault("pois", 0)
+            p.setdefault("zones", 0)
 
-        # 3) Trip synthesis (needs the anchor for mod-86400 math).
-        _set_progress(job, "synthesize", done_files=total_files, total_files=total_files)
-        for p in prepared:
-            p["trips"] = synthesize_trips(conn, p["cfg"], anchor)
-            p["vehicles"] = conn.execute(
-                "SELECT COUNT(DISTINCT vehicle_key) FROM trips WHERE source_id = ?",
-                [p["source_id"]],
-            ).fetchone()[0]
-
-        # 4) Derived metrics + pulse aggregate (whole-DB passes, as in CLI).
-        _set_progress(job, "derived")
-        compute_derived_metrics(conn)
-        _set_progress(job, "density")
-        build_density_hourly(conn)
-
-        # 5) Persist generated configs — only now that anchors are stamped.
+        # --- Registry -------------------------------------------------------
         _set_progress(job, "registry")
-        write_uploads_registry(uploads_registry_path(), [p["cfg"] for p in prepared])
+        write_uploads_registry(
+            uploads_registry_path(),
+            [p["cfg"] for p in traj],
+            pois={p["source_id"]: p["cfg"] for p in overlays if p["kind"] == "poi"},
+            zones={p["source_id"]: p["cfg"] for p in overlays if p["kind"] == "zone"},
+        )
 
         job["result"] = {
-            "trips": sum(p["trips"] for p in prepared),
-            "waypoints": sum(p["waypoints"] for p in prepared),
+            "trips": sum(p.get("trips", 0) for p in prepared),
+            "waypoints": sum(p.get("waypoints", 0) for p in prepared),
+            "pois": sum(p.get("pois", 0) for p in prepared),
+            "zones": sum(p.get("zones", 0) for p in prepared),
             "source_ids": [p["source_id"] for p in prepared],
             "files": [
                 {
                     "filename": p["filename"],
                     "source_id": p["source_id"],
                     "label": p["cfg"].label,
-                    "trips": p["trips"],
-                    "waypoints": p["waypoints"],
-                    "vehicles": p["vehicles"],
+                    "role": p.get("kind", "trajectory"),
+                    "trips": p.get("trips", 0),
+                    "waypoints": p.get("waypoints", 0),
+                    "vehicles": p.get("vehicles", 0),
+                    "pois": p.get("pois", 0),
+                    "zones": p.get("zones", 0),
                 }
                 for p in prepared
             ],
@@ -299,9 +366,153 @@ def _start_job(prepared: list[dict]) -> dict:
         "job_id": job["job_id"],
         "status": job["status"],
         "files": [
-            {"filename": p["filename"], "source_id": p["source_id"], "format": p["format"]}
+            {
+                "filename": p["filename"],
+                "source_id": p["source_id"],
+                "format": p["format"],
+                "role": (
+                    "pois" if p.get("kind") == "poi"
+                    else "zones" if p.get("kind") == "zone"
+                    else "trajectories"
+                ),
+            }
             for p in prepared
         ],
+    }
+
+
+# Point-only GeoJSON can be trajectories or pois when suggestion is ambiguous.
+_TRAJECTORY_OR_POI = frozenset({"Point"})
+
+
+def _parse_json_object_form(raw: str | None, field: str) -> dict:
+    if not raw or not str(raw).strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"{field} must be JSON object: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail=f"{field} must be a JSON object")
+    return parsed
+
+
+def _parse_roles_form(roles_json: str | None) -> dict[str, str]:
+    raw = _parse_json_object_form(roles_json, "roles")
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _parse_labels_form(labels_json: str | None) -> dict[str, str]:
+    raw = _parse_json_object_form(labels_json, "labels")
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _parse_colors_form(colors_json: str | None) -> dict[str, list[int]]:
+    raw = _parse_json_object_form(colors_json, "colors")
+    out: dict[str, list[int]] = {}
+    for k, v in raw.items():
+        if not isinstance(v, (list, tuple)) or len(v) != 3:
+            raise HTTPException(
+                status_code=422,
+                detail=f"colors[{k!r}] must be an RGB triple [r,g,b]",
+            )
+        out[str(k)] = [int(c) for c in v]
+    return out
+
+
+def _prepare_geojson_item(
+    *,
+    name: str,
+    source_id: str,
+    staged_path: Path,
+    role: str | None,
+    label: str | None = None,
+    color: list[int] | None = None,
+) -> dict | tuple[str, dict]:
+    """Classify a staged GeoJSON file into a prepared job item.
+
+    Returns a prepared dict on success, or ``("role_choice", census_dict)``
+    when the client must pick a role (mixed/ambiguous geometry).
+    """
+    types = census_geojson_types(staged_path)
+    props = geojson_property_keys(staged_path)
+    resolved = role or suggest_geojson_role(types, props)
+    if resolved is None:
+        if types <= _TRAJECTORY_OR_POI:
+            options = ["trajectories", "pois"]
+        elif types <= {"Polygon", "MultiPolygon"}:
+            options = ["zones"]
+        else:
+            options = ["trajectories", "pois", "zones"]
+        return ("role_choice", {
+            "filename": name,
+            "source_id": source_id,
+            "format": "geojson",
+            "staged_name": staged_path.name,
+            "geometry_types": sorted(str(t) for t in types),
+            "property_keys": sorted(props),
+            "suggested_role": None,
+            "options": options,
+            "reasons": [
+                "could not auto-detect overlay role — choose trajectories, "
+                "pois, or zones"
+            ],
+        })
+
+    validate_geojson_role(resolved, types)
+    layer_label = label or Path(name).stem
+    staged_rel = f"uploads/{staged_path.name}"
+
+    if resolved == "trajectories":
+        cfg = generate_source_config(
+            source_id=source_id,
+            fmt="geojson",
+            staged_rel_path=staged_rel,
+            label=layer_label,
+            sniff=None,
+        )
+        return {
+            "filename": name,
+            "source_id": source_id,
+            "format": "geojson",
+            "staged_path": staged_path,
+            "cfg": cfg,
+            "kind": "trajectory",
+        }
+
+    if resolved == "pois":
+        cfg = generate_poi_config(
+            layer_key=source_id,
+            staged_rel_path=staged_rel,
+            label=layer_label,
+            prop_keys=props,
+            color=color,
+        )
+        return {
+            "filename": name,
+            "source_id": source_id,
+            "format": "geojson",
+            "staged_path": staged_path,
+            "cfg": cfg,
+            "kind": "poi",
+        }
+
+    cfg = generate_zone_config(
+        layer_key=source_id,
+        staged_rel_path=staged_rel,
+        label=layer_label,
+        prop_keys=props,
+        color=color,
+    )
+    return {
+        "filename": name,
+        "source_id": source_id,
+        "format": "geojson",
+        "staged_path": staged_path,
+        "cfg": cfg,
+        "kind": "zone",
     }
 
 
@@ -320,16 +531,32 @@ def _resolve_staged_path(staged_name: str) -> Path:
 
 
 @router.post("/upload", status_code=202)
-async def upload(files: Annotated[list[UploadFile], File(...)]):
-    """Accept one or more trajectory files and ingest them as a job.
+async def upload(
+    files: Annotated[list[UploadFile], File(...)],
+    roles: Annotated[str | None, Form()] = None,
+    labels: Annotated[str | None, Form()] = None,
+    colors: Annotated[str | None, Form()] = None,
+):
+    """Accept trajectory and/or overlay files and ingest them as a job.
 
-    Heuristic happy path (sniff succeeds) returns 202 and starts the job.
-    When tabular sniff fails, returns 422 with ``mapping_required`` + column
-    census and keeps the staged file for ``POST /upload/confirm``.
+    Optional form fields (JSON objects keyed by original filename):
+      - ``roles`` → ``trajectories`` | ``pois`` | ``zones``
+      - ``labels`` → layer label string
+      - ``colors`` → RGB triple ``[r,g,b]`` (overlay roles only)
+
+    When ``roles`` is omitted, GeoJSON roles are auto-detected
+    (polygons→zones, lines→trajectories, timeless points→pois).
+
+    Heuristic tabular happy path returns 202. Tabular sniff failure → 422
+    ``mapping_required``. Ambiguous GeoJSON without a role → 422
+    ``role_choice_required``.
     """
     if not files:
         raise HTTPException(status_code=422, detail="no files uploaded")
 
+    role_by_name = _parse_roles_form(roles)
+    label_by_name = _parse_labels_form(labels)
+    color_by_name = _parse_colors_form(colors)
     staged_dir = uploads_dir()
     conn = get_connection()
     existing = _existing_source_ids(conn)
@@ -337,7 +564,8 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
     prepared: list[dict] = []
     hard_reasons: list[str] = []
     mapping_files: list[dict] = []
-    mapping_staged: list[Path] = []
+    role_choice_files: list[dict] = []
+    keep_staged: list[Path] = []
 
     for uf in files:
         # Filename guard: strip any directory components from the client name.
@@ -357,13 +585,26 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
         try:
             fmt = _detect_upload_format(staged_path, ext)
             if fmt == "geojson":
-                # Upfront geometry census: polygon layers must not reach the
-                # background job, where one bad file would abort the whole
-                # batch after earlier files already mutated the DB.
-                census_geojson_geometry(staged_path)
-                sniff = None
-            elif fmt == "gpx":
-                sniff = None
+                result = _prepare_geojson_item(
+                    name=name,
+                    source_id=source_id,
+                    staged_path=staged_path,
+                    role=role_by_name.get(name),
+                    label=label_by_name.get(name),
+                    color=color_by_name.get(name),
+                )
+                if isinstance(result, tuple) and result[0] == "role_choice":
+                    role_choice_files.append(result[1])
+                    keep_staged.append(staged_path)
+                    existing.add(source_id)
+                    continue
+                prepared.append(result)  # type: ignore[arg-type]
+                existing.add(source_id)
+                continue
+
+            sniff = None
+            if fmt == "gpx":
+                pass
             else:
                 census = census_tabular(staged_path, fmt)
                 sniff = census.sniff
@@ -376,7 +617,7 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
                         staged_name=staged_path.name,
                         census=census,
                     ))
-                    mapping_staged.append(staged_path)
+                    keep_staged.append(staged_path)
                     existing.add(source_id)
                     continue
 
@@ -403,30 +644,31 @@ async def upload(files: Annotated[list[UploadFile], File(...)]):
             "format": fmt,
             "staged_path": staged_path,
             "cfg": cfg,
+            "kind": "trajectory",
         })
 
-    # Mapping affordance takes priority over starting a partial job: keep the
-    # staged tabular files that need a sheet, drop any already-prepared siblings
-    # (user can re-drop those after — one-click path still works alone).
-    if mapping_files:
+    # Prefer interactive affordances over starting a partial job.
+    if role_choice_files or mapping_files:
         for p in prepared:
             p["staged_path"].unlink(missing_ok=True)
         reasons = list(hard_reasons)
         for mf in mapping_files:
             reasons.extend(f"{mf['filename']}: {r}" for r in mf["reasons"])
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "reasons": reasons,
-                "mapping_required": True,
-                "files": mapping_files,
-            },
-        )
+        for rf in role_choice_files:
+            reasons.extend(f"{rf['filename']}: {r}" for r in rf["reasons"])
+        detail: dict[str, Any] = {"reasons": reasons}
+        if mapping_files:
+            detail["mapping_required"] = True
+            detail["files"] = mapping_files
+        if role_choice_files:
+            detail["role_choice_required"] = True
+            detail["overlay_files"] = role_choice_files
+        raise HTTPException(status_code=422, detail=detail)
 
     if hard_reasons:
         for p in prepared:
             p["staged_path"].unlink(missing_ok=True)
-        for path in mapping_staged:
+        for path in keep_staged:
             path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail={"reasons": hard_reasons})
     if not prepared:
@@ -505,12 +747,87 @@ async def upload_confirm(body: ConfirmUploadPayload):
             "format": fmt,
             "staged_path": staged_path,
             "cfg": cfg,
+            "kind": "trajectory",
         })
 
     if reasons:
         raise HTTPException(status_code=422, detail={"reasons": reasons})
     if not prepared:
         raise HTTPException(status_code=422, detail="no valid files to confirm")
+
+    return _start_job(prepared)
+
+
+class ConfirmOverlayFilePayload(BaseModel):
+    staged_name: str
+    source_id: str | None = None
+    filename: str | None = None
+    role: Literal["trajectories", "pois", "zones"]
+    label: str | None = None
+    color: list[int] | None = None
+
+
+class ConfirmOverlayPayload(BaseModel):
+    files: list[ConfirmOverlayFilePayload] = Field(min_length=1)
+
+
+@router.post("/upload/confirm-overlay", status_code=202)
+async def upload_confirm_overlay(body: ConfirmOverlayPayload):
+    """Apply overlay role (and optional label/color) to staged GeoJSON uploads."""
+    conn = get_connection()
+    existing = _existing_source_ids(conn)
+    prepared: list[dict] = []
+    reasons: list[str] = []
+
+    for item in body.files:
+        try:
+            staged_path = _resolve_staged_path(item.staged_name)
+        except HTTPException as exc:
+            reasons.append(str(exc.detail))
+            continue
+
+        ext = staged_path.suffix.lower()
+        try:
+            fmt = _detect_upload_format(staged_path, ext if ext != ".json" else ".json")
+        except UploadConfigError as exc:
+            reasons.extend(f"{item.staged_name}: {r}" for r in exc.reasons)
+            continue
+        if fmt != "geojson":
+            reasons.append(
+                f"{item.staged_name}: overlay confirm applies to GeoJSON only"
+            )
+            continue
+
+        source_id = item.source_id or slugify_source_id(staged_path.stem, existing)
+        try:
+            result = _prepare_geojson_item(
+                name=item.filename or staged_path.name,
+                source_id=source_id,
+                staged_path=staged_path,
+                role=item.role,
+                label=item.label,
+                color=item.color,
+            )
+        except UploadConfigError as exc:
+            reasons.extend(f"{item.staged_name}: {r}" for r in exc.reasons)
+            continue
+        except Exception as exc:
+            reasons.append(f"{item.staged_name}: {type(exc).__name__}: {exc}")
+            continue
+
+        if isinstance(result, tuple):
+            reasons.append(
+                f"{item.staged_name}: role {item.role!r} still ambiguous for geometry"
+            )
+            continue
+
+        existing.add(source_id)
+        prepared.append(result)
+
+    if reasons:
+        raise HTTPException(status_code=422, detail={"reasons": reasons})
+    if not prepared:
+        raise HTTPException(status_code=422, detail="no valid overlays to confirm")
 
     return _start_job(prepared)
 

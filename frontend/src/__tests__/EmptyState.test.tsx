@@ -121,8 +121,11 @@ describe('EmptyState', () => {
       fileNames: [],
       errorReasons: [],
       mappingFiles: [],
+      overlayDrafts: [],
+      overlayStaged: false,
       upload: vi.fn(),
       confirmMapping: vi.fn(),
+      confirmOverlay: vi.fn(),
       dismiss: vi.fn(),
       notifyError: vi.fn(),
     };

@@ -262,15 +262,24 @@ export default function App() {
   // here (above handleUploaded) so the upload-completion refetch can reload.
   const { zones, styles: zoneStyles, reload: reloadZones } = useZones();
 
+  // POI catalogue — also above handleUploaded so overlay uploads can reload
+  // category chips after BYO GeoJSON POI ingest (TV-29 S2).
+  const poi = usePois({
+    initialDisabled: disabledPoiCategories,
+    onDisabledChange: setDisabledPoiCategories,
+  });
+  const reloadPois = poi.reload;
+
   // Upload-and-go: on ingest completion, re-run exactly what Refresh does
   // (useTrajectories refetch) plus filter-options, so the new source appears
-  // as a vehicle-type button + legend entry without a reload. Zones reload
-  // too — an upload bundle may carry zone layers.
+  // as a vehicle-type button + legend entry without a reload. Zones + POIs
+  // reload too — an upload may carry overlay layers.
   const handleUploaded = useCallback(() => {
     refetch();
     reloadFilterOptions();
     void reloadZones();
-  }, [refetch, reloadFilterOptions, reloadZones]);
+    void reloadPois();
+  }, [refetch, reloadFilterOptions, reloadZones, reloadPois]);
 
   const uploader = useUpload({ onDone: handleUploaded });
 
@@ -312,13 +321,6 @@ export default function App() {
     !!layerVisibility.footfall, filter.vehicleType, filter.city, filter.simulationDay,
     filter.minHour, filter.maxHour, filter.goodsType,
   );
-
-  // Universal-trajectory Phase 2 — POI catalogue + points for the enabled
-  // categories. Independent of the trip filter; category set is the only dim.
-  const poi = usePois({
-    initialDisabled: disabledPoiCategories,
-    onDisabledChange: setDisabledPoiCategories,
-  });
 
   // Category → color map (YAML color wins; deterministic hash fallback) and
   // POI source_key → label map for MapView dots + tooltips. Categories arrive
