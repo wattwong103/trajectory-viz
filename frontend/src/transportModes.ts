@@ -5,11 +5,14 @@
  * treatment 'trails'|'points'|'arcs'). Everything transport-mode-related uses
  * the full transportMode / transport_mode name.
  *
- * The id space comes from Pseudo-PFLOW's mode-choice step (walk, bicycle,
- * bus, car, railway) plus the taxi ABM's 8. The value shown here is always
+ * Public UI language is the **string label** (from filter-options `modes[]` /
+ * sources.yaml `mode_map`). Integer codes remain the filter wire format for
+ * PFLOW-shaped datasets until schema v0.3. The value shown here is always
  * the TRIP's mode (trips.transport_mode) — waypoint modes are uniform per
  * source in router output and are never surfaced.
  */
+
+import type { ModeOption } from './types';
 
 export const TRANSPORT_MODE_META: Record<number, { label: string; color: [number, number, number] }> = {
   0: { label: 'Walk',  color: [43, 200, 80] },    // green
@@ -30,4 +33,20 @@ export function transportModeLabel(m?: number | null): string {
 export function transportModeColor(m?: number | null): [number, number, number] {
   if (m === undefined || m === null) return UNKNOWN_COLOR;
   return TRANSPORT_MODE_META[m]?.color ?? UNKNOWN_COLOR;
+}
+
+/**
+ * Prefer labeled `modes[]` from filter-options; fall back to transport_modes
+ * counts + default PFLOW labels. Filter chips still submit integer ids.
+ */
+export function resolveModeOptions(
+  modes?: ModeOption[] | null,
+  transportModes?: Array<{ mode: number; count: number }> | null,
+): ModeOption[] {
+  if (modes && modes.length > 0) return modes;
+  return (transportModes ?? []).map(({ mode, count }) => ({
+    id: mode,
+    label: transportModeLabel(mode),
+    count,
+  }));
 }

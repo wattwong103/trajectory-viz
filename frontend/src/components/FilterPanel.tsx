@@ -8,10 +8,13 @@
 import React, { useState, useRef } from 'react';
 import type { FilterState, StatsResponse, FilterOptions, Trajectory, PoiCategory } from '../types';
 import type { LayerVisibility } from '../App';
-import { TRANSPORT_MODE_META, transportModeLabel } from '../transportModes';
+import { TRANSPORT_MODE_META, resolveModeOptions } from '../transportModes';
 import { sourceFallbackColor } from '../sourceColors';
 import { poiColor } from '../poiColors';
-import { LAYER_GROUPS, type LayerAvailabilityContext } from '../layerCatalog';
+import {
+  LAYER_GROUPS, visibleLayerGroups, hasLabAttr,
+  type LayerAvailabilityContext,
+} from '../layerCatalog';
 import { friendlyFetchError } from '../friendlyError';
 import { ACCEPT_ATTR } from '../uploadUtils';
 import type { ScenarioImpact } from '../hooks/useScenarioImpact';
@@ -85,10 +88,20 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Per-group expansion inside the Layers section (Core/Scene open first).
+  // Per-group expansion inside the Layers section (core/scene open first).
   const [groupExpanded, setGroupExpanded] = useState<Record<string, boolean>>(
     () => Object.fromEntries(LAYER_GROUPS.map(g => [g.key, g.defaultExpanded])),
   );
+
+  const modeOptions = resolveModeOptions(
+    filterOptions?.modes,
+    filterOptions?.transport_modes,
+  );
+  const showGoodsFilter = hasLabAttr(
+    { attrKeys: filterOptions?.capabilities?.attr_keys ?? [] },
+    'goods_type',
+  ) && (filterOptions?.goods_types?.length ?? 0) > 0;
+  const layerGroups = visibleLayerGroups(layerAvailability);
 
   // F1 slider bounds (per Phase 2 Step 2.2 design choice: Conservative).
   // Adjust these constants to widen/narrow the slider input range.
@@ -237,9 +250,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                   onClick={() => onChange({
                     ...filter,
                     vehicleType: vt,
-                    // Clear goods type when switching to a non-truck source (only
-                    // truck-like sources currently declare goods_type in sources.yaml).
-                    goodsType: vt && vt !== 'truck' ? undefined : filter.goodsType,
+                    // Clear goods when the lab attr is absent for this dataset.
+                    goodsType: showGoodsFilter ? filter.goodsType : undefined,
                   })}
                 >
                   {label}
@@ -250,12 +262,11 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </div>
       </div>
 
-      {/* Transport mode multi-select chips + color-by toggle (Phase 1).
-          Filters by the TRIP's mode (trips.transport_mode). Hidden for
-          single-mode datasets — nothing to filter. */}
-      {filterOptions?.transport_modes && filterOptions.transport_modes.length >= 2 && (
+      {/* Mode multi-select — prefer string labels from modes[]; submit PFLOW
+          ints on the wire. Hidden for single-mode / mode-less datasets. */}
+      {modeOptions.length >= 2 && (
         <div style={styles.section}>
-          <label style={styles.sectionLabel}>Transport Mode</label>
+          <label style={styles.sectionLabel}>Mode</label>
           <div style={{ ...styles.btnGroup, flexWrap: 'wrap' as const }}>
             <button
               key="all-modes"
@@ -267,14 +278,12 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             >
               All
             </button>
-            {filterOptions.transport_modes.map(({ mode, count }) => {
-              const active = filter.transportModes?.includes(mode) ?? false;
-              const c = TRANSPORT_MODE_META[mode]?.color ?? [128, 128, 128];
-              const label = filterOptions.modes?.find(m => m.id === mode)?.label
-                ?? transportModeLabel(mode);
+            {modeOptions.map(({ id, label, count }) => {
+              const active = filter.transportModes?.includes(id) ?? false;
+              const c = TRANSPORT_MODE_META[id]?.color ?? [128, 128, 128];
               return (
                 <button
-                  key={mode}
+                  key={id}
                   style={{
                     ...styles.modeChip,
                     ...(active ? styles.toggleActive : {}),
@@ -283,9 +292,9 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                   title={`${count.toLocaleString()} trips`}
                   onClick={() => {
                     const cur = filter.transportModes ?? [];
-                    const next = cur.includes(mode)
-                      ? cur.filter(m => m !== mode)
-                      : [...cur, mode].sort((a, b) => a - b);
+                    const next = cur.includes(id)
+                      ? cur.filter(m => m !== id)
+                      : [...cur, id].sort((a, b) => a - b);
                     onChange({ ...filter, transportModes: next.length ? next : undefined });
                   }}
                 >
@@ -401,8 +410,8 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </div>
       )}
 
-      {/* Goods type dropdown — trucks only */}
-      {filter.vehicleType !== 'taxi' && filterOptions && filterOptions.goods_types && filterOptions.goods_types.length > 0 && (
+      {/* Goods type — lab attr; hidden when capabilities.attr_keys omit it */}
+      {showGoodsFilter && filterOptions && (
         <div style={styles.section}>
           <label style={styles.sectionLabel}>Goods Type</label>
           <select
@@ -619,15 +628,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
         </button>
         {layersExpanded && (
           <div style={styles.layersList}>
-            {LAYER_GROUPS.map(group => (
+            {layerGroups.map(group => (
               <div key={group.key} style={{ marginBottom: 4 }}>
                 <button
                   onClick={() => setGroupExpanded(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
                   style={styles.layerGroupBtn}
                 >
-                  {groupExpanded[group.key] ? '▾' : '▸'} {group.label}
+                  {(groupExpanded[group.key] ?? group.defaultExpanded) ? '▾' : '▸'} {group.label}
                 </button>
-                {groupExpanded[group.key] && group.layers.map(def => {
+                {(groupExpanded[group.key] ?? group.defaultExpanded) && group.layers.map(def => {
                   const reason = def.unavailableReason?.(layerAvailability) ?? null;
                   const disabled = reason !== null;
                   const checked = !disabled && (layerVisibility[def.key] ?? true);

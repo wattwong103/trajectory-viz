@@ -33,6 +33,7 @@ import {
 } from '../api';
 import type { CompareGridResponse } from '../types';
 import { friendlyFetchError } from '../friendlyError';
+import { hasCarMode, hasLabAttr } from '../layerCatalog';
 import { AgentTab } from './AgentTab';
 import { CompareTab } from './CompareTab';
 
@@ -105,6 +106,11 @@ interface AnalysisPanelProps {
   maxDwellMinutes?: number;
   minDetourRatio?: number;
   maxDetourRatio?: number;
+  // Phase B — capability gating for lab plugins (goods / pedestrianize).
+  attrKeys?: string[];
+  modeLabels?: string[];
+  /** Mode ids present in the dataset (not the active filter selection). */
+  datasetTransportModes?: number[];
 }
 
 // Sprint A1a — Per-trajectory detail view rendered in the Detail tab.
@@ -344,7 +350,13 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
   onAddAgent, onRemoveAgent, onClearAgents,
   sources = [], transportModes, scenario,
   minSpeed, maxSpeed, maxDwellMinutes, minDetourRatio, maxDetourRatio,
+  attrKeys = [], modeLabels = [], datasetTransportModes = [],
 }) => {
+  const showCommodityPatterns = hasLabAttr({ attrKeys }, 'goods_type');
+  const showPedestrianize = hasCarMode({
+    transportModes: datasetTransportModes,
+    modeLabels,
+  });
   const [tab, setTab] = useState<Tab>('summary');
   const [collapsed, setCollapsed] = useState(false);
   // Shared failure line for all button-triggered loaders (rendered once
@@ -1182,8 +1194,8 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
               })()}
             </div>
 
-            {/* Commodity patterns — truck/all only */}
-            {(vehicleType === 'truck' || vehicleType === 'all') && (
+            {/* Commodity patterns — lab plugin; needs goods_type attr */}
+            {showCommodityPatterns && (
               <div style={{ marginTop: 10 }}>
                 <div style={styles.subtitle}>Commodity Patterns</div>
                 <button onClick={loadCommodityPatterns} style={styles.actionBtn} disabled={commodityLoading}>
@@ -1386,9 +1398,9 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
                 {zoneError}
               </div>
             )}
-            {/* Phase 4 — promote the queried zone into a pedestrianize scenario.
-                Query-time: excludes car trips entering this bbox everywhere. */}
-            {zoneBBox && onPedestrianize && (
+            {/* Phase 4 / B — pedestrianize is a lab plugin; hide when no car
+                mode (still show Clear if a scenario is already active). */}
+            {zoneBBox && onPedestrianize && (showPedestrianize || scenarioActive) && (
               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                 {!scenarioActive ? (
                   <button
