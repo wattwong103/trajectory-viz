@@ -105,6 +105,7 @@ def sample_waypoint_rows(
     simulation_day: int | None = None,
     transport_modes: list[int] | None = None,
     scenario_clause: str | None = None,
+    trip_where: str | None = None,
 ) -> list:
     """Sample n random trajectories and return all their waypoint rows
     (WAYPOINT_COLS_WITH_TRIP_MODE shape — trip transport_mode at index 14),
@@ -115,14 +116,21 @@ def sample_waypoint_rows(
     Caller inputs must already be pattern-validated (Pydantic) — values are
     inlined, matching build_trip_filter's contract.
 
-    With transport_modes or a scenario set, sampling switches from the
-    per-vehicle vehicle_key subquery to the trip-granular
-    (vehicle_key, trip_id) subquery (see build_trip_pair_subquery) — both are
-    per-TRIP conditions. The vehicle_key path is kept for the common
-    unfiltered case — identical behavior to before.
+    `trip_where` is a trips-table WHERE clause from TripFilters.where() —
+    when set, sampling is trip-granular (hour/goods/F1/mode/scenario). The
+    vehicle_key path is kept for the unfiltered case and for callers that
+    only pass vehicle_type/city/day (export). transport_modes / scenario
+    without trip_where still use the pair subquery.
     """
     vtype_filter = f"AND vehicle_type = '{vehicle_type}'" if vehicle_type else ""
-    if transport_modes or scenario_clause:
+    if trip_where:
+        # trip_where already includes vehicle_type when set.
+        vtype_filter = ""
+        scope_filter = (
+            "AND (vehicle_key, trip_id) IN "
+            f"(SELECT vehicle_key, trip_id FROM trips {trip_where})"
+        )
+    elif transport_modes or scenario_clause:
         pair_subq = build_trip_pair_subquery(
             vehicle_type, city, simulation_day, transport_modes, scenario_clause
         )

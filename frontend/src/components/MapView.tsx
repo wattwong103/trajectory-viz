@@ -27,6 +27,8 @@ import { DataFilterExtension } from '@deck.gl/extensions';
 
 import type { Trajectory, TripPoint, SourceStyle, Poi, CompareGridCell, Zone } from '../types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem, HourlyDensity } from '../api';
+import { strokesFromLinks, type LinkStroke } from '../utils/linkNetwork';
+import { agentHighlightColor } from '../utils/agentColor';
 import type { LayerVisibility } from '../App';
 import { positionAtTime, hourPhase } from '../utils/interpolate';
 import {
@@ -99,13 +101,6 @@ const CLUSTER_COLORS: [number, number, number][] = [
   [243, 156, 18], [233, 30, 99],
 ];
 
-// Phase 2A — highlight palette for followed agents, indexed by the agent's
-// position in selectedAgents. Bright, high-contrast against dimmed trails.
-const AGENT_COLORS: [number, number, number][] = [
-  [255, 230, 100], [0, 255, 200], [255, 105, 180], [130, 200, 255],
-  [255, 160, 40], [190, 130, 255], [120, 255, 120], [255, 90, 90],
-];
-
 // Time window (seconds each side of the clock) for arc-mode sources — trips
 // departing within ±30 min of currentTime show as arcs.
 const ARC_WINDOW_SEC = 1800;
@@ -167,6 +162,8 @@ interface MapViewProps {
   onMapClick: (lon: number, lat: number) => void;
   // Sprint A1a: click a trajectory on the map → App's selectedTrajectory state
   onTrajectoryClick?: (trajectory: Trajectory) => void;
+  /** Debounced after pan/zoom. Used to swap the city-wide sample for a bbox query. */
+  onViewIdle?: (info: { zoom: number; bbox: { w: number; s: number; e: number; n: number } }) => void;
 }
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -197,6 +194,7 @@ export const MapView: React.FC<MapViewProps> = ({
   zoneStyleBySource = {},
   onMapClick,
   onTrajectoryClick,
+  onViewIdle,
 }) => {
   const [viewState, setViewState] = useState<any>(INITIAL_VIEW);
 
@@ -207,6 +205,8 @@ export const MapView: React.FC<MapViewProps> = ({
   // `autoFitDoneRef` makes the fit strictly one-shot per mount.
   const userInteractedRef = useRef(false);
   const autoFitDoneRef = useRef(false);
+  const onViewIdleRef = useRef(onViewIdle);
+  onViewIdleRef.current = onViewIdle;
 
   // ── Phase 2C: 3D buildings ────────────────────────────────────────────
   // The buildings layer lives in its OWN memo, prepended below — an MVTLayer
@@ -308,6 +308,18 @@ export const MapView: React.FC<MapViewProps> = ({
   // Phase 1 — per-source visibility (legend row toggles). Data-level filter,
   // not layer `visible`: sources share single layers.
   const hidden = useMemo(() => new Set(hiddenSources), [hiddenSources]);
+  const visibleTrajs = useMemo(
+    () => hidden.size > 0
+      ? trajectories.filter(t => !hidden.has(t.metadata.vehicle_type))
+      : trajectories,
+    [trajectories, hidden],
+  );
+  const visibleTrips = useMemo(
+    () => hidden.size > 0
+      ? trips.filter(d => !hidden.has(d.vehicle_type))
+      : trips,
+    [trips, hidden],
+  );
 
   useEffect(() => {
     if (cityCenter) {
@@ -373,6 +385,431 @@ export const MapView: React.FC<MapViewProps> = ({
     }));
   }, [fitToBBox, cityCenter]);
 
+  // Viewport-idle callback for bbox sampling. Skip until the user has
+  // actually panned/zoomed so the first-load auto-fit doesn't fire a query.
+  useEffect(() => {
+    if (!onViewIdleRef.current || !userInteractedRef.current) return;
+    const handle = window.setTimeout(() => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const vp = new WebMercatorViewport({
+        ...viewState, width, height,
+      });
+      const [w, n] = vp.unproject([0, 0]);
+      const [e, s] = vp.unproject([width, height]);
+      onViewIdleRef.current?.({
+        zoom: viewState.zoom,
+        bbox: { w, s, e, n },
+      });
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [viewState.longitude, viewState.latitude, viewState.zoom]);
+
+  // Link-network PathLayer is static (no currentTime). Keep it out of the
+  // per-RAF layers memo so playback doesn't rebuild hundreds of polylines.
+  const linkLayers = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.linkDensity && linkDensityPoints && linkDensityPoints.length > 0) {
+      const { strokes, centroids } = strokesFromLinks(linkDensityPoints, {
+        colorBy, hiddenSources: hidden, colorFor,
+      });
+      if (strokes.length > 0) {
+        result.push(
+          new PathLayer<LinkStroke>({
+            id: 'link-network',
+            data: strokes,
+            getPath: (d) => d.path,
+            getColor: (d) => d.color,
+            getWidth: (d) => d.width,
+            widthUnits: 'pixels',
+            widthMinPixels: 1,
+            widthMaxPixels: 8,
+            jointRounded: true,
+            capRounded: true,
+            pickable: true,
+            updateTriggers: { getColor: [colorBy, hidden, sourceStyles] },
+          }),
+        );
+      }
+      if (centroids.length > 0) {
+        const maxCount = Math.max(...centroids.map(l => l.waypoint_count), 1);
+        result.push(
+          new ScatterplotLayer<LinkDensityItem>({
+            id: 'link-density',
+            data: centroids,
+            getPosition: (d: LinkDensityItem) => d.centroid,
+            getFillColor: (d: LinkDensityItem) => {
+              const t = Math.log2(1 + d.waypoint_count) / Math.log2(1 + maxCount);
+              return [
+                Math.round(68 + t * (253 - 68)),
+                Math.round(1 + t * (231 - 1)),
+                Math.round(84 + t * (37 - 84)),
+                200,
+              ] as [number, number, number, number];
+            },
+            getRadius: (d: LinkDensityItem) => 30 + 20 * Math.log2(1 + d.waypoint_count),
+            radiusMinPixels: 3,
+            radiusMaxPixels: 20,
+            stroked: false,
+            pickable: true,
+          }),
+        );
+      }
+    }
+    return result;
+  }, [layerVisibility.linkDensity, linkDensityPoints, colorBy, hidden, sourceStyles, styleBySource]);
+
+  // Heatmaps / zones / compare / F3 overlays do not depend on currentTime.
+  const groundOverlays = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.density && densityPoints.length > 0) {
+      result.push(
+        new HeatmapLayer({
+          id: 'density-heatmap',
+          data: densityPoints,
+          getPosition: (d: DensityPoint) => [d.lon, d.lat],
+          getWeight: (d: DensityPoint) => d.weight,
+          radiusPixels: 30,
+          intensity: 1.5,
+          threshold: 0.05,
+          opacity: 0.6,
+        }),
+      );
+    }
+    if (layerVisibility.footfall && footfallPoints.length > 0) {
+      result.push(
+        new HeatmapLayer({
+          id: 'footfall-heatmap',
+          data: footfallPoints,
+          getPosition: (d: DensityPoint) => [d.lon, d.lat],
+          getWeight: (d: DensityPoint) => d.weight,
+          radiusPixels: 25,
+          colorRange: [
+            [10, 30, 18], [18, 84, 38], [30, 140, 60],
+            [43, 200, 80], [150, 235, 130], [235, 255, 220],
+          ],
+          intensity: 1.4,
+          threshold: 0.03,
+          opacity: 0.7,
+        }),
+      );
+    }
+    if (layerVisibility.zones && zones.length > 0) {
+      const zoneBase = (z: Zone): [number, number, number] =>
+        zoneStyleBySource[z.source_key]?.color ?? sourceFallbackColor(z.source_key);
+      const zoneColor = (z: Zone): [number, number, number, number] => {
+        const c = zoneBase(z);
+        return [c[0], c[1], c[2], 40] as [number, number, number, number];
+      };
+      result.push(
+        new PolygonLayer<Zone>({
+          id: 'zones',
+          data: zones,
+          getPolygon: (d: Zone) => d.geometry.coordinates as number[][][],
+          getFillColor: zoneColor,
+          getLineColor: (d: Zone) => {
+            const c = zoneBase(d);
+            return [c[0], c[1], c[2], 160] as [number, number, number, number];
+          },
+          updateTriggers: { getFillColor: [zoneStyleBySource], getLineColor: [zoneStyleBySource] },
+          getLineWidth: 1,
+          lineWidthMinPixels: 1,
+          lineWidthUnits: 'pixels',
+          stroked: true,
+          filled: true,
+          wireframe: false,
+          pickable: true,
+          opacity: 0.6,
+        }),
+      );
+    }
+    result.push(...linkLayers);
+    if (layerVisibility.compareGrid && compareGridCells && compareGridCells.length > 0) {
+      const maxAbs = Math.max(...compareGridCells.map(c => Math.abs(c.delta)), 1);
+      const radiusM = compareGridCellDeg * 111320 * 0.7;
+      result.push(
+        new ScatterplotLayer<CompareGridCell>({
+          id: 'compare-grid-diff',
+          data: compareGridCells,
+          getPosition: (d: CompareGridCell) => [d.lon, d.lat],
+          getFillColor: (d: CompareGridCell) => {
+            const t = Math.abs(d.delta) / maxAbs;
+            const base: [number, number, number] = d.delta > 0 ? [68, 170, 255] : [253, 128, 93];
+            return [
+              Math.round(base[0] * (0.45 + 0.55 * t)),
+              Math.round(base[1] * (0.45 + 0.55 * t)),
+              Math.round(base[2] * (0.45 + 0.55 * t)),
+              Math.round(60 + 160 * t),
+            ] as [number, number, number, number];
+          },
+          getRadius: radiusM,
+          radiusMinPixels: 3,
+          radiusMaxPixels: 26,
+          stroked: false,
+          pickable: true,
+        }),
+      );
+    }
+    if (layerVisibility.speedSegments && visibleTrajs.length > 0) {
+      type SegPath = { path: [number, number][]; color: [number, number, number, number] };
+      const segData: SegPath[] = [];
+      for (const t of visibleTrajs) {
+        if (!t.segments) continue;
+        for (let i = 0; i < t.segments.length; i++) {
+          segData.push({
+            path: [t.path[i], t.path[i + 1]] as [number, number][],
+            color: speedToColor(t.segments[i].speed_kmh),
+          });
+        }
+      }
+      if (segData.length > 0) {
+        result.push(
+          new PathLayer<SegPath>({
+            id: 'speed-segments',
+            data: segData,
+            getPath: (d) => d.path,
+            getColor: (d) => d.color,
+            getWidth: 1,
+            widthMinPixels: 2,
+            opacity: 0.6,
+            jointRounded: true,
+            capRounded: true,
+          }),
+        );
+      }
+    }
+    if (layerVisibility.dwellMarkers && visibleTrajs.length > 0) {
+      type Dwell = { position: [number, number]; dwell: number };
+      const dwellPts: Dwell[] = [];
+      for (const t of visibleTrajs) {
+        if (!t.segments) continue;
+        for (let i = 0; i < t.segments.length; i++) {
+          const d = t.segments[i].dwell_sec;
+          if (d !== null && d !== undefined && d > 60) {
+            dwellPts.push({
+              position: t.path[i + 1] as [number, number],
+              dwell: d,
+            });
+          }
+        }
+      }
+      if (dwellPts.length > 0) {
+        result.push(
+          new ScatterplotLayer<Dwell>({
+            id: 'dwell-markers',
+            data: dwellPts,
+            getPosition: (d) => d.position,
+            getFillColor: [255, 60, 60, 180],
+            getRadius: (d) => 20 + 10 * Math.log2(1 + d.dwell / 60),
+            radiusMinPixels: 3,
+            radiusMaxPixels: 20,
+            stroked: true,
+            getLineColor: [255, 230, 100, 220],
+            lineWidthMinPixels: 1,
+            pickable: true,
+          }),
+        );
+      }
+    }
+    return result;
+  }, [
+    layerVisibility, densityPoints, footfallPoints, zones, zoneStyleBySource,
+    linkLayers, compareGridCells, compareGridCellDeg, visibleTrajs,
+  ]);
+
+  const chromeMid = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.pois && pois.length > 0) {
+      if (poiIconAtlas) {
+        result.push(
+          new IconLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getIcon: (d: Poi) => {
+              const cat = d.category ?? '';
+              if (cat in poiIconAtlas.iconFor) return cat;
+              return Object.keys(poiIconAtlas.iconFor)[0] ?? '';
+            },
+            iconAtlas: poiIconAtlas.url,
+            iconMapping: poiIconAtlas.iconFor,
+            getSize: 22,
+            sizeUnits: 'pixels',
+            sizeMinPixels: 10,
+            sizeMaxPixels: 34,
+            opacity: 0.95,
+            pickable: true,
+            updateTriggers: { getIcon: [poiIconAtlas] },
+          }),
+        );
+      } else {
+        result.push(
+          new ScatterplotLayer<Poi>({
+            id: 'pois',
+            data: pois,
+            getPosition: (d: Poi) => [d.lon, d.lat],
+            getFillColor: (d: Poi) => {
+              const key = d.category ?? '';
+              const c = poiColorByCategory[key] ?? poiFallbackColor(key);
+              return [c[0], c[1], c[2], 230];
+            },
+            updateTriggers: { getFillColor: [poiColorByCategory] },
+            getRadius: 60,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 8,
+            opacity: 0.85,
+            stroked: true,
+            getLineColor: [255, 255, 255, 90],
+            lineWidthMinPixels: 1,
+            pickable: true,
+          }),
+        );
+      }
+    }
+    if (layerVisibility.origins && visibleTrips.length > 0) {
+      result.push(
+        new ScatterplotLayer<TripPoint>({
+          id: 'origins',
+          data: visibleTrips,
+          getPosition: (d: TripPoint) => [d.start_lon, d.start_lat],
+          getFillColor: COLORS.origin,
+          getRadius: 80,
+          radiusMinPixels: 1,
+          radiusMaxPixels: 4,
+          opacity: 0.4,
+          pickable: true,
+        }),
+      );
+    }
+    if (layerVisibility.destinations && visibleTrips.length > 0) {
+      result.push(
+        new ScatterplotLayer<TripPoint>({
+          id: 'destinations',
+          data: visibleTrips,
+          getPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
+          getFillColor: COLORS.dest,
+          getRadius: 80,
+          radiusMinPixels: 1,
+          radiusMaxPixels: 4,
+          opacity: 0.3,
+          pickable: true,
+        }),
+      );
+    }
+    return result;
+  }, [layerVisibility, pois, poiIconAtlas, poiColorByCategory, visibleTrips]);
+
+  const chromeLate = useMemo(() => {
+    const result: any[] = [];
+    if (layerVisibility.odFlows && odFlows.length > 0) {
+      result.push(
+        new ArcLayer<ODFlow>({
+          id: 'od-flows',
+          data: odFlows,
+          getSourcePosition: (d: ODFlow) => d.source,
+          getTargetPosition: (d: ODFlow) => d.target,
+          getSourceColor: COLORS.arcSource,
+          getTargetColor: COLORS.arcTarget,
+          getWidth: (d: ODFlow) => Math.max(1, Math.log2(d.volume)),
+          widthMinPixels: 1,
+          widthMaxPixels: 8,
+          opacity: 0.6,
+          pickable: true,
+        }),
+      );
+    }
+    if (layerVisibility.clusters && clusterResult && clusterResult.clusters.length > 0) {
+      const clusterArcs = clusterResult.clusters.map(c => ({
+        source: c.centroid.start,
+        target: c.centroid.end,
+        size: c.size,
+        clusterId: c.cluster_id,
+      }));
+      result.push(
+        new ArcLayer({
+          id: 'cluster-arcs',
+          data: clusterArcs,
+          getSourcePosition: (d: any) => d.source,
+          getTargetPosition: (d: any) => d.target,
+          getSourceColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
+          getTargetColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
+          getWidth: (d: any) => Math.max(2, Math.log2(d.size) * 2),
+          widthMinPixels: 2,
+          widthMaxPixels: 12,
+          opacity: 0.8,
+          pickable: true,
+        }),
+      );
+    }
+    return result;
+  }, [layerVisibility, odFlows, clusterResult]);
+
+  const chromeTop = useMemo(() => {
+    const result: any[] = [];
+    if (drillPoint) {
+      result.push(
+        new ScatterplotLayer({
+          id: 'drill-point',
+          data: [{ position: drillPoint }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [0, 0, 0, 0],
+          getLineColor: [255, 230, 100, 220],
+          getRadius: 1000,
+          radiusMinPixels: 8,
+          radiusMaxPixels: 48,
+          stroked: true,
+          filled: true,
+          lineWidthMinPixels: 2,
+        }),
+      );
+    }
+    if (zoneBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [zoneBBox.w, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.s],
+        [zoneBBox.e, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.n],
+        [zoneBBox.w, zoneBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'zone-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [255, 230, 100, 40],
+          getLineColor: [255, 230, 100, 220],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+    if (scenarioBBox) {
+      type Poly = { polygon: [number, number][] };
+      const polygon: [number, number][] = [
+        [scenarioBBox.w, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.s],
+        [scenarioBBox.e, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.n],
+        [scenarioBBox.w, scenarioBBox.s],
+      ];
+      result.push(
+        new PolygonLayer<Poly>({
+          id: 'scenario-bbox',
+          data: [{ polygon }],
+          getPolygon: (d) => d.polygon,
+          getFillColor: [231, 76, 60, 25],
+          getLineColor: [231, 76, 60, 230],
+          lineWidthMinPixels: 2,
+          stroked: true,
+          filled: true,
+        }),
+      );
+    }
+    return result;
+  }, [drillPoint, zoneBBox, scenarioBBox]);
+
   const layers = useMemo(() => {
     const result: any[] = [];
 
@@ -409,215 +846,13 @@ export const MapView: React.FC<MapViewProps> = ({
       );
     }
 
-    // Layer 1: Spatial density heatmap (below everything else)
-    if (layerVisibility.density && densityPoints.length > 0) {
-      result.push(
-        new HeatmapLayer({
-          id: 'density-heatmap',
-          data: densityPoints,
-          getPosition: (d: DensityPoint) => [d.lon, d.lat],
-          getWeight: (d: DensityPoint) => d.weight,
-          radiusPixels: 30,
-          intensity: 1.5,
-          threshold: 0.05,
-          opacity: 0.6,
-        }),
-      );
-    }
-
-    // Layer 1b: Footfall heatmap — walk-trip waypoint density (Phase 2).
-    // Distinct green "pedestrian ground glow" ramp so it reads apart from the
-    // generic density heatmap; stays low in the z-order with the other heatmaps.
-    if (layerVisibility.footfall && footfallPoints.length > 0) {
-      result.push(
-        new HeatmapLayer({
-          id: 'footfall-heatmap',
-          data: footfallPoints,
-          getPosition: (d: DensityPoint) => [d.lon, d.lat],
-          getWeight: (d: DensityPoint) => d.weight,
-          radiusPixels: 25,
-          colorRange: [
-            [10, 30, 18], [18, 84, 38], [30, 140, 60],
-            [43, 200, 80], [150, 235, 130], [235, 255, 220],
-          ],
-          intensity: 1.4,
-          threshold: 0.03,
-          opacity: 0.7,
-        }),
-      );
-    }
-
-    // Layer 1c: Zone/polygon layers (zones feature). Flat translucent fills
-    // with the layer's YAML color when declared (/api/zones/styles), hash
-    // fallback otherwise — same discipline as POI category colors. Lowest
-    // of the context layers so POIs and trips read on top.
-    if (layerVisibility.zones && zones.length > 0) {
-      const zoneBase = (z: Zone): [number, number, number] =>
-        zoneStyleBySource[z.source_key]?.color ?? sourceFallbackColor(z.source_key);
-      const zoneColor = (z: Zone): [number, number, number, number] => {
-        const c = zoneBase(z);
-        return [c[0], c[1], c[2], 40] as [number, number, number, number];
-      };
-      result.push(
-        new PolygonLayer<Zone>({
-          id: 'zones',
-          data: zones,
-          getPolygon: (d: Zone) => d.geometry.coordinates as number[][][],
-          getFillColor: zoneColor,
-          getLineColor: (d: Zone) => {
-            const c = zoneBase(d);
-            return [c[0], c[1], c[2], 160] as [number, number, number, number];
-          },
-          updateTriggers: { getFillColor: [zoneStyleBySource], getLineColor: [zoneStyleBySource] },
-          getLineWidth: 1,
-          lineWidthMinPixels: 1,
-          lineWidthUnits: 'pixels',
-          stroked: true,
-          filled: true,
-          wireframe: false,
-          pickable: true,
-          opacity: 0.6,
-        }),
-      );
-    }
-
-    // Layer 2: Link density scatterplot (above heatmap, below trajectories)
-    if (layerVisibility.linkDensity && linkDensityPoints && linkDensityPoints.length > 0) {
-      const maxCount = Math.max(...linkDensityPoints.map(l => l.waypoint_count));
-      result.push(
-        new ScatterplotLayer<LinkDensityItem>({
-          id: 'link-density',
-          data: linkDensityPoints,
-          getPosition: (d: LinkDensityItem) => d.centroid,
-          getFillColor: (d: LinkDensityItem) => {
-            const t = Math.log2(1 + d.waypoint_count) / Math.log2(1 + maxCount);
-            return [
-              Math.round(68 + t * (253 - 68)),
-              Math.round(1 + t * (231 - 1)),
-              Math.round(84 + t * (37 - 84)),
-              200,
-            ] as [number, number, number, number];
-          },
-          getRadius: (d: LinkDensityItem) => 30 + 20 * Math.log2(1 + d.waypoint_count),
-          radiusMinPixels: 3,
-          radiusMaxPixels: 20,
-          stroked: false,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 2b: A/B grid-diff (fleet comparison). Diverging scatterplot:
-    // blue cells = B-heavier, orange = A-heavier; opacity scales with the
-    // |delta| so weak differences recede. Radius ≈ cell footprint in meters
-    // (equirectangular: ~111.32 km per degree, capped to pixel bounds).
-    if (layerVisibility.compareGrid && compareGridCells && compareGridCells.length > 0) {
-      const maxAbs = Math.max(...compareGridCells.map(c => Math.abs(c.delta)), 1);
-      const radiusM = compareGridCellDeg * 111320 * 0.7;
-      result.push(
-        new ScatterplotLayer<CompareGridCell>({
-          id: 'compare-grid-diff',
-          data: compareGridCells,
-          getPosition: (d: CompareGridCell) => [d.lon, d.lat],
-          getFillColor: (d: CompareGridCell) => {
-            const t = Math.abs(d.delta) / maxAbs;
-            const base: [number, number, number] = d.delta > 0 ? [68, 170, 255] : [253, 128, 93];
-            return [
-              Math.round(base[0] * (0.45 + 0.55 * t)),
-              Math.round(base[1] * (0.45 + 0.55 * t)),
-              Math.round(base[2] * (0.45 + 0.55 * t)),
-              Math.round(60 + 160 * t),
-            ] as [number, number, number, number];
-          },
-          getRadius: radiusM,
-          radiusMinPixels: 3,
-          radiusMaxPixels: 26,
-          stroked: false,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 3a: F3 — Speed-gradient PathLayer (Phase 2 Step 2.7).
-    // Each trajectory becomes len(path)-1 short two-point paths, each coloured
-    // by its segment's speed_kmh. Renders below the animated trajectories.
-    if (layerVisibility.speedSegments && trajectories.length > 0) {
-      type SegPath = { path: [number, number][]; color: [number, number, number, number] };
-      const segData: SegPath[] = [];
-      for (const t of trajectories) {
-        if (!t.segments) continue;
-        for (let i = 0; i < t.segments.length; i++) {
-          segData.push({
-            path: [t.path[i], t.path[i + 1]] as [number, number][],
-            color: speedToColor(t.segments[i].speed_kmh),
-          });
-        }
-      }
-      if (segData.length > 0) {
-        result.push(
-          new PathLayer<SegPath>({
-            id: 'speed-segments',
-            data: segData,
-            getPath: (d) => d.path,
-            getColor: (d) => d.color,
-            getWidth: 1,
-            widthMinPixels: 2,
-            opacity: 0.6,
-            jointRounded: true,
-            capRounded: true,
-          }),
-        );
-      }
-    }
-
-    // Layer 3b: F3 — Dwell markers (idle segments where speed < 1 km/h).
-    // Renders ScatterplotLayer at the second waypoint of each idle segment;
-    // marker radius scales with dwell duration.
-    if (layerVisibility.dwellMarkers && trajectories.length > 0) {
-      type Dwell = { position: [number, number]; dwell: number };
-      const dwellPts: Dwell[] = [];
-      for (const t of trajectories) {
-        if (!t.segments) continue;
-        for (let i = 0; i < t.segments.length; i++) {
-          const d = t.segments[i].dwell_sec;
-          if (d !== null && d !== undefined && d > 60) {  // > 1 minute idle
-            dwellPts.push({
-              position: t.path[i + 1] as [number, number],
-              dwell: d,
-            });
-          }
-        }
-      }
-      if (dwellPts.length > 0) {
-        result.push(
-          new ScatterplotLayer<Dwell>({
-            id: 'dwell-markers',
-            data: dwellPts,
-            getPosition: (d) => d.position,
-            getFillColor: [255, 60, 60, 180],
-            getRadius: (d) => 20 + 10 * Math.log2(1 + d.dwell / 60),  // grow with minutes
-            radiusMinPixels: 3,
-            radiusMaxPixels: 20,
-            stroked: true,
-            getLineColor: [255, 230, 100, 220],
-            lineWidthMinPixels: 1,
-            pickable: true,
-          }),
-        );
-      }
-    }
+    result.push(...groundOverlays);
 
     // Layer 3: Animated trajectories.
     // Phase 2A splits by render mode: 'points' sources (people) become moving
     // dots + a faint short trail; everything else stays a full TripsLayer
     // trail. When agents are followed, background layers dim to alpha 40.
     const dimmed = selectedAgents.length > 0;
-    const visibleTrajs = hidden.size > 0
-      ? trajectories.filter(t => !hidden.has(t.metadata.vehicle_type))
-      : trajectories;
-    const visibleTrips = hidden.size > 0
-      ? trips.filter(d => !hidden.has(d.vehicle_type))
-      : trips;
     const trailTrajs = visibleTrajs.filter(
       t => styleBySource[t.metadata.vehicle_type]?.mode !== 'points',
     );
@@ -711,93 +946,7 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 3a-3 (universal-trajectory Phase 2): POI context layer. Sits below
-    // origins/destinations so trip endpoints stay visually dominant. Data is
-    // pre-filtered to enabled categories by usePois; colors come from the
-    // category map (YAML override → deterministic hash fallback). With a
-    // sprite atlas (poiSprites.ts) each category renders its glyph; without
-    // one (or in canvas-less environments) plain colored dots are kept.
-    if (layerVisibility.pois && pois.length > 0) {
-      if (poiIconAtlas) {
-        result.push(
-          new IconLayer<Poi>({
-            id: 'pois',
-            data: pois,
-            getPosition: (d: Poi) => [d.lon, d.lat],
-            getIcon: (d: Poi) => {
-              const cat = d.category ?? '';
-              if (cat in poiIconAtlas.iconFor) return cat;
-              return Object.keys(poiIconAtlas.iconFor)[0] ?? '';
-            },
-            iconAtlas: poiIconAtlas.url,
-            iconMapping: poiIconAtlas.iconFor,
-            getSize: 22,
-            sizeUnits: 'pixels',
-            sizeMinPixels: 10,
-            sizeMaxPixels: 34,
-            opacity: 0.95,
-            pickable: true,
-            updateTriggers: { getIcon: [poiIconAtlas] },
-          }),
-        );
-      } else {
-        result.push(
-          new ScatterplotLayer<Poi>({
-            id: 'pois',
-            data: pois,
-            getPosition: (d: Poi) => [d.lon, d.lat],
-            getFillColor: (d: Poi) => {
-              const key = d.category ?? '';
-              const c = poiColorByCategory[key] ?? poiFallbackColor(key);
-              return [c[0], c[1], c[2], 230];
-            },
-            updateTriggers: { getFillColor: [poiColorByCategory] },
-            getRadius: 60,
-            radiusMinPixels: 2,
-            radiusMaxPixels: 8,
-            opacity: 0.85,
-            stroked: true,
-            getLineColor: [255, 255, 255, 90],
-            lineWidthMinPixels: 1,
-            pickable: true,
-          }),
-        );
-      }
-    }
-
-    // Layer 3b: Trip origins
-    if (layerVisibility.origins && visibleTrips.length > 0) {
-      result.push(
-        new ScatterplotLayer<TripPoint>({
-          id: 'origins',
-          data: visibleTrips,
-          getPosition: (d: TripPoint) => [d.start_lon, d.start_lat],
-          getFillColor: COLORS.origin,
-          getRadius: 80,
-          radiusMinPixels: 1,
-          radiusMaxPixels: 4,
-          opacity: 0.4,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 3c: Trip destinations
-    if (layerVisibility.destinations && visibleTrips.length > 0) {
-      result.push(
-        new ScatterplotLayer<TripPoint>({
-          id: 'destinations',
-          data: visibleTrips,
-          getPosition: (d: TripPoint) => [d.end_lon, d.end_lat],
-          getFillColor: COLORS.dest,
-          getRadius: 80,
-          radiusMinPixels: 1,
-          radiusMaxPixels: 4,
-          opacity: 0.3,
-          pickable: true,
-        }),
-      );
-    }
+    result.push(...chromeMid);
 
     // Layer 3d (Phase 2A): time-windowed arcs for 'arcs' render-mode sources
     // (trip-only populations with no waypoints). DataFilterExtension applies
@@ -839,49 +988,7 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 4: OD Flow arcs (Phase 2)
-    if (layerVisibility.odFlows && odFlows.length > 0) {
-      result.push(
-        new ArcLayer<ODFlow>({
-          id: 'od-flows',
-          data: odFlows,
-          getSourcePosition: (d: ODFlow) => d.source,
-          getTargetPosition: (d: ODFlow) => d.target,
-          getSourceColor: COLORS.arcSource,
-          getTargetColor: COLORS.arcTarget,
-          getWidth: (d: ODFlow) => Math.max(1, Math.log2(d.volume)),
-          widthMinPixels: 1,
-          widthMaxPixels: 8,
-          opacity: 0.6,
-          pickable: true,
-        }),
-      );
-    }
-
-    // Layer 5: Cluster representative arcs (Phase 3)
-    if (layerVisibility.clusters && clusterResult && clusterResult.clusters.length > 0) {
-      const clusterArcs = clusterResult.clusters.map(c => ({
-        source: c.centroid.start,
-        target: c.centroid.end,
-        size: c.size,
-        clusterId: c.cluster_id,
-      }));
-      result.push(
-        new ArcLayer({
-          id: 'cluster-arcs',
-          data: clusterArcs,
-          getSourcePosition: (d: any) => d.source,
-          getTargetPosition: (d: any) => d.target,
-          getSourceColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
-          getTargetColor: (d: any) => CLUSTER_COLORS[d.clusterId % CLUSTER_COLORS.length],
-          getWidth: (d: any) => Math.max(2, Math.log2(d.size) * 2),
-          widthMinPixels: 2,
-          widthMaxPixels: 12,
-          opacity: 0.8,
-          pickable: true,
-        }),
-      );
-    }
+    result.push(...chromeLate);
 
     // Layer 6: Drill-down trajectories (bright yellow, map-click radius query)
     if (layerVisibility.drill && drillTrajectories.length > 0) {
@@ -907,18 +1014,20 @@ export const MapView: React.FC<MapViewProps> = ({
     // bright highlight color by selection index, rendered above everything
     // that dims.
     if (layerVisibility.agents !== false && agentTrajectories.length > 0) {
-      const agentColor = (key: string): [number, number, number] => {
-        const idx = selectedAgents.indexOf(key);
-        return AGENT_COLORS[(idx >= 0 ? idx : 0) % AGENT_COLORS.length];
-      };
+      const agentColor = (d: Trajectory): [number, number, number] =>
+        agentHighlightColor(
+          d.metadata.vehicle_key, selectedAgents,
+          { vehicle_type: d.metadata.vehicle_type, transport_mode: d.metadata.transport_mode },
+          colorBy, colorFor,
+        );
       result.push(
         new TripsLayer<Trajectory>({
           id: 'agent-trails',
           data: agentTrajectories,
           getPath: (d: Trajectory) => d.path,
           getTimestamps: (d: Trajectory) => d.timestamps,
-          getColor: (d: Trajectory) => agentColor(d.metadata.vehicle_key),
-          updateTriggers: { getColor: [selectedAgents] },
+          getColor: (d: Trajectory) => agentColor(d),
+          updateTriggers: { getColor: [selectedAgents, colorBy, sourceStyles] },
           currentTime,
           trailLength,
           widthMinPixels: 4,
@@ -929,13 +1038,27 @@ export const MapView: React.FC<MapViewProps> = ({
         }),
       );
       // Moving marker at each agent's interpolated position.
-      type Marker = { position: [number, number]; vehicle_key: string; timeLabel: string };
+      type Marker = {
+        position: [number, number];
+        vehicle_key: string;
+        vehicle_type: string;
+        transport_mode?: number | null;
+        timeLabel: string;
+      };
       const hh = String(Math.floor(currentTime / 3600)).padStart(2, '0');
       const mm = String(Math.floor((currentTime % 3600) / 60)).padStart(2, '0');
       const markers: Marker[] = [];
       for (const t of agentTrajectories) {
         const p = positionAtTime(t, currentTime);
-        if (p) markers.push({ position: p, vehicle_key: t.metadata.vehicle_key, timeLabel: `${hh}:${mm}` });
+        if (p) {
+          markers.push({
+            position: p,
+            vehicle_key: t.metadata.vehicle_key,
+            vehicle_type: t.metadata.vehicle_type,
+            transport_mode: t.metadata.transport_mode,
+            timeLabel: `${hh}:${mm}`,
+          });
+        }
       }
       if (markers.length > 0) {
         result.push(
@@ -944,9 +1067,14 @@ export const MapView: React.FC<MapViewProps> = ({
             data: markers,
             getPosition: (d) => d.position,
             getFillColor: (d) => {
-              const c = agentColor(d.vehicle_key);
+              const c = agentHighlightColor(
+                d.vehicle_key, selectedAgents,
+                { vehicle_type: d.vehicle_type, transport_mode: d.transport_mode },
+                colorBy, colorFor,
+              );
               return [c[0], c[1], c[2], 255];
             },
+            updateTriggers: { getFillColor: [selectedAgents, colorBy, sourceStyles] },
             getRadius: 60,
             radiusMinPixels: 5,
             radiusMaxPixels: 14,
@@ -959,85 +1087,17 @@ export const MapView: React.FC<MapViewProps> = ({
       }
     }
 
-    // Layer 7: Drill click-point ring marker
-    if (drillPoint) {
-      result.push(
-        new ScatterplotLayer({
-          id: 'drill-point',
-          data: [{ position: drillPoint }],
-          getPosition: (d: any) => d.position,
-          getFillColor: [0, 0, 0, 0],         // transparent fill (hollow)
-          getLineColor: [255, 230, 100, 220],  // yellow ring
-          getRadius: 1000,                     // ~1 km radius
-          radiusMinPixels: 8,
-          radiusMaxPixels: 48,
-          stroked: true,
-          filled: true,
-          lineWidthMinPixels: 2,
-        }),
-      );
-    }
-
-    // Layer 8: Through-zone bbox (Sprint A1b — F2 UI).
-    // Translucent yellow rectangle showing the user's query bounds.
-    if (zoneBBox) {
-      type Poly = { polygon: [number, number][] };
-      const polygon: [number, number][] = [
-        [zoneBBox.w, zoneBBox.s],
-        [zoneBBox.e, zoneBBox.s],
-        [zoneBBox.e, zoneBBox.n],
-        [zoneBBox.w, zoneBBox.n],
-        [zoneBBox.w, zoneBBox.s],
-      ];
-      result.push(
-        new PolygonLayer<Poly>({
-          id: 'zone-bbox',
-          data: [{ polygon }],
-          getPolygon: (d) => d.polygon,
-          getFillColor: [255, 230, 100, 40],   // translucent yellow fill
-          getLineColor: [255, 230, 100, 220],
-          lineWidthMinPixels: 2,
-          stroked: true,
-          filled: true,
-        }),
-      );
-    }
-
-    // Layer 9: Pedestrianize-scenario bbox (Phase 4) — red, so it reads as
-    // "cars excluded here" and stays distinct from the yellow query zone.
-    if (scenarioBBox) {
-      type Poly = { polygon: [number, number][] };
-      const polygon: [number, number][] = [
-        [scenarioBBox.w, scenarioBBox.s],
-        [scenarioBBox.e, scenarioBBox.s],
-        [scenarioBBox.e, scenarioBBox.n],
-        [scenarioBBox.w, scenarioBBox.n],
-        [scenarioBBox.w, scenarioBBox.s],
-      ];
-      result.push(
-        new PolygonLayer<Poly>({
-          id: 'scenario-bbox',
-          data: [{ polygon }],
-          getPolygon: (d) => d.polygon,
-          getFillColor: [231, 76, 60, 25],
-          getLineColor: [231, 76, 60, 230],
-          lineWidthMinPixels: 2,
-          stroked: true,
-          filled: true,
-        }),
-      );
-    }
+    result.push(...chromeTop);
 
     return result;
   }, [
-    trajectories, trips, currentTime, trailLength,
-    odFlows, densityPoints, clusterResult, linkDensityPoints,
-    drillTrajectories, drillPoint, zoneBBox, scenarioBBox,
+    visibleTrajs, visibleTrips, currentTime, trailLength,
+    groundOverlays, chromeMid, chromeLate, chromeTop,
+    drillTrajectories,
     layerVisibility,
     agentTrajectories, selectedAgents, styleBySource, sourceStyles,
-    pulseData, footfallPoints,
+    pulseData,
     colorBy, hidden,
-    pois, poiColorByCategory,
   ]);
 
   return (
@@ -1093,8 +1153,10 @@ export const MapView: React.FC<MapViewProps> = ({
         }
         // Link density tooltip
         if ('link_id' in object && 'waypoint_count' in object) {
+          const grp = 'group' in object && object.group && object.group !== '_all'
+            ? `\n${object.group}` : '';
           return {
-            text: `Link #${object.link_id}\n${(object.waypoint_count as number).toLocaleString()} waypoints\n${(object.unique_vehicles as number).toLocaleString()} unique vehicles`,
+            text: `Link #${object.link_id}${grp}\n${(object.waypoint_count as number).toLocaleString()} waypoints\n${(object.unique_vehicles as number).toLocaleString()} unique vehicles`,
           };
         }
         // OD flow tooltip

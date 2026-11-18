@@ -11,14 +11,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchVehicles } from '../api';
 import type { AgentInfo } from '../types';
+import { AGENT_COLORS, agentChipColor } from '../utils/agentColor';
 
-// Mirror of MapView's AGENT_COLORS — chip color must match the trail.
-export const AGENT_COLORS: [number, number, number][] = [
-  [255, 230, 100], [0, 255, 200], [255, 105, 180], [130, 200, 255],
-  [255, 160, 40], [190, 130, 255], [120, 255, 120], [255, 90, 90],
-];
-
-export const MAX_AGENTS = 8;
+export const MAX_AGENTS = 20;
+export { AGENT_COLORS };
 
 function fmtTime(sec: number): string {
   const h = String(Math.floor(sec / 3600) % 24).padStart(2, '0');
@@ -35,12 +31,14 @@ interface AgentTabProps {
   onAddAgent: (key: string) => void;
   onRemoveAgent: (key: string) => void;
   onClearAgents: () => void;
+  colorBy?: 'source' | 'transportMode';
 }
 
 export const AgentTab: React.FC<AgentTabProps> = ({
   vehicleType, city, simulationDay,
   selectedAgents, agentLoading,
   onAddAgent, onRemoveAgent, onClearAgents,
+  colorBy = 'source',
 }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<AgentInfo[]>([]);
@@ -81,7 +79,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
             {selectedAgents.map((key, i) => {
-              const c = AGENT_COLORS[i % AGENT_COLORS.length];
+              const c = agentChipColor(key, i, selectedAgents.length, colorBy);
               return (
                 <span key={key} style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
