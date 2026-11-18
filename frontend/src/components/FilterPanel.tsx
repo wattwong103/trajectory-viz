@@ -16,8 +16,10 @@ import {
   type LayerAvailabilityContext, type LayerPresetId,
 } from '../layerCatalog';
 import { friendlyFetchError } from '../friendlyError';
+import { DEFAULT_FILTER } from '../filterHash';
 import { ACCEPT_ATTR } from '../uploadUtils';
 import type { ScenarioImpact } from '../hooks/useScenarioImpact';
+import { useNarrowViewport } from '../hooks/useNarrowViewport';
 
 interface FilterPanelProps {
   filter: FilterState;
@@ -86,6 +88,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   onChange, onRefetch, onClearDrill, onLayerToggle, onApplyPreset,
   onBuildingExaggeration, onScreenshot,
 }) => {
+  const narrow = useNarrowViewport();
   const [layersExpanded, setLayersExpanded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -178,9 +181,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
     (enabledPoiCategories?.length ?? 0) === poiChips.length;
 
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      ...(narrow ? styles.containerNarrow : {}),
+    }}>
       <div style={styles.titleRow}>
-        <h2 style={styles.title}>PFLOW Viz</h2>
+        <div>
+          <h2 style={styles.title}>Trajectory Viz</h2>
+          <div style={styles.subtitle}>Mobility · trajectories</div>
+        </div>
         <button
           onClick={onScreenshot}
           style={styles.screenshotBtn}
@@ -200,7 +209,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           </div>
         ) : (
           <>
-            <div>{totalTrips.toLocaleString()} trips</div>
+            <div style={styles.statsPrimary}>{totalTrips.toLocaleString()} trips</div>
+            {(filter.city || filter.simulationDay !== undefined) && totalTrips > 0 && (
+              <div style={styles.contextChip}>
+                {[
+                  filter.city,
+                  filter.simulationDay !== undefined ? `day ${filter.simulationDay}` : null,
+                ].filter(Boolean).join(' · ')}
+              </div>
+            )}
             {stats?.trips?.by_vehicle_type && (
               <div style={{ fontSize: 11, marginTop: 1 }}>
                 {Object.entries(stats.trips.by_vehicle_type).map(([type, info]) => {
@@ -222,7 +239,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             )}
             {noData && (
               <div style={styles.warn}>
-                No data — upload a file, run `trajectory-viz-demo`, or `docker compose up --build`
+                No data — upload a file, or seed the demo (`docker compose up --build`)
               </div>
             )}
           </>
@@ -575,8 +592,15 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
             No trips match current filters.
             <br />
             <span style={{ color: '#777' }}>
-              Try widening the hour range or selecting 'All cities'.
+              Widen hours, clear modes, or reset filters.
             </span>
+            <button
+              type="button"
+              onClick={() => onChange({ ...DEFAULT_FILTER })}
+              style={styles.resetFiltersBtn}
+            >
+              Reset filters
+            </button>
           </div>
         ) : (
           <>
@@ -820,17 +844,30 @@ const styles: Record<string, React.CSSProperties> = {
     scrollbarWidth: 'thin',
     scrollbarColor: 'rgba(255,255,255,0.25) transparent',
   },
+  containerNarrow: {
+    width: 220,
+    padding: 12,
+    maxHeight: 'calc(100vh - 120px)',
+  },
   titleRow: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: 8,
+    gap: 8,
   },
   title: {
     margin: 0,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: 700,
     color: '#4fc3f7',
+    lineHeight: 1.2,
+  },
+  subtitle: {
+    fontSize: 10,
+    color: '#6a7a8a',
+    letterSpacing: 0.3,
+    marginTop: 2,
   },
   screenshotBtn: {
     padding: '3px 8px',
@@ -841,6 +878,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: 10,
     whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
   },
   statsBox: {
     background: 'rgba(255,255,255,0.05)',
@@ -849,6 +887,31 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     marginBottom: 12,
     lineHeight: 1.6,
+  },
+  statsPrimary: {
+    fontWeight: 600,
+    color: '#d8dee6',
+  },
+  contextChip: {
+    display: 'inline-block',
+    marginTop: 4,
+    marginBottom: 2,
+    padding: '1px 6px',
+    borderRadius: 4,
+    fontSize: 10,
+    color: '#9ab4c8',
+    background: 'rgba(79,195,247,0.08)',
+    border: '1px solid rgba(79,195,247,0.22)',
+  },
+  resetFiltersBtn: {
+    marginTop: 6,
+    padding: '3px 8px',
+    border: '1px solid rgba(255,183,77,0.45)',
+    borderRadius: 4,
+    background: 'transparent',
+    color: '#ffb74d',
+    cursor: 'pointer',
+    fontSize: 10,
   },
   skeletonLine: {
     height: 10,

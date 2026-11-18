@@ -9,6 +9,7 @@
  */
 
 import React from 'react';
+import { useNarrowViewport } from '../hooks/useNarrowViewport';
 
 interface TimeSliderProps {
   currentTime: number;
@@ -31,15 +32,27 @@ export const TimeSlider: React.FC<TimeSliderProps> = ({
   currentTime, speed, playing, trailLength,
   onTogglePlay, onSetSpeed, onSetTime, onSetTrailLength,
 }) => {
+  const narrow = useNarrowViewport();
+
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      ...(narrow ? styles.containerNarrow : {}),
+    }}>
       <div style={styles.timeDisplay}>
-        <span style={styles.clock}>{formatTime(currentTime)}</span>
+        <span style={{ ...styles.clock, ...(narrow ? styles.clockNarrow : {}) }}>
+          {formatTime(currentTime)}
+        </span>
         <span style={styles.label}>JST</span>
       </div>
 
       <div style={styles.controls}>
-        <button onClick={onTogglePlay} style={styles.playBtn}>
+        <button
+          onClick={onTogglePlay}
+          style={styles.playBtn}
+          aria-label={playing ? 'Pause' : 'Play'}
+          title={playing ? 'Pause' : 'Play'}
+        >
           {playing ? '⏸' : '▶'}
         </button>
 
@@ -51,6 +64,7 @@ export const TimeSlider: React.FC<TimeSliderProps> = ({
           onChange={e => onSetTime(Number(e.target.value))}
           style={styles.slider}
           title="Scrub time"
+          aria-label="Simulation time"
         />
       </div>
 
@@ -63,6 +77,7 @@ export const TimeSlider: React.FC<TimeSliderProps> = ({
           value={speed}
           onChange={e => onSetSpeed(Number(e.target.value))}
           style={styles.smallSlider}
+          aria-label="Playback speed"
         />
       </div>
 
@@ -76,6 +91,7 @@ export const TimeSlider: React.FC<TimeSliderProps> = ({
           value={trailLength}
           onChange={e => onSetTrailLength(Number(e.target.value))}
           style={styles.smallSlider}
+          aria-label="Trail length"
         />
       </div>
     </div>
@@ -96,6 +112,15 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 360,
     zIndex: 10,
   },
+  containerNarrow: {
+    left: 12,
+    right: 12,
+    transform: 'none',
+    minWidth: 0,
+    width: 'auto',
+    padding: '10px 14px',
+    bottom: 12,
+  },
   timeDisplay: {
     display: 'flex',
     alignItems: 'baseline',
@@ -105,8 +130,11 @@ const styles: Record<string, React.CSSProperties> = {
   clock: {
     fontSize: 28,
     fontWeight: 700,
-    fontFamily: 'monospace',
+    fontFamily: 'ui-monospace, Consolas, monospace',
     color: '#4fc3f7',
+  },
+  clockNarrow: {
+    fontSize: 22,
   },
   label: {
     fontSize: 12,

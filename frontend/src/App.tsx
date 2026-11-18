@@ -1,5 +1,5 @@
 /**
- * PFLOW Viz — Main application component.
+ * Trajectory Viz — Main application component.
  *
  * Composes MapView, FilterPanel, TimeSlider, and AnalysisPanel into a
  * full-screen trajectory visualization dashboard.
@@ -17,6 +17,7 @@ import { TimeSlider } from './components/TimeSlider';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { SourceLegend } from './components/SourceLegend';
 import { EmptyState } from './components/EmptyState';
+import { StatusBanner } from './components/StatusBanner';
 import { PLATEAU_ATTRIBUTION } from './buildings';
 import { useTrajectories } from './hooks/useTrajectories';
 import { useAnimation } from './hooks/useAnimation';
@@ -578,7 +579,7 @@ export default function App() {
           zIndex: 10, maxWidth: 360, textAlign: 'center', lineHeight: 1.5,
         }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
-            ⚠ {filterOptionsError}
+            {filterOptionsError}
           </div>
           <div style={{ color: '#999', marginBottom: 10 }}>
             The map, filters, and analysis all need the API. If you launched
@@ -592,50 +593,44 @@ export default function App() {
               padding: '5px 14px', fontSize: 12, cursor: 'pointer',
             }}
           >
-            ↻ Retry
+            Retry
           </button>
         </div>
       )}
 
-      {/* Phase 2B — surfaced when the pulse aggregate isn't built (HTTP 409) */}
-      {layerVisibility.pulse && pulse.error && (
-        <div style={{
-          position: 'absolute', bottom: 96, right: 12, maxWidth: 320,
-          background: 'rgba(60,20,20,0.9)', border: '1px solid #a55',
-          borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f0c0c0',
-          zIndex: 5,
-        }}>
-          Pulse layer unavailable: {pulse.error}
-        </div>
-      )}
-
-      {/* Drill query failure — same overlay pattern, stacked above pulse */}
-      {drillError !== null && (
-        <div style={{
-          position: 'absolute', bottom: 148, right: 12, maxWidth: 320,
-          background: 'rgba(60,20,20,0.9)', border: '1px solid #a55',
-          borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f0c0c0',
-          zIndex: 5,
-        }}>
-          Area query failed: {drillError}
-        </div>
-      )}
-
-      {/* Footfall — honest labels for degraded states (pulse-409 pattern) */}
-      {layerVisibility.footfall && (footfall.error || footfall.fallback) && (
-        <div style={{
-          position: 'absolute', bottom: footfall.error ? 96 : 148, right: 12, maxWidth: 320,
-          background: footfall.error ? 'rgba(60,20,20,0.9)' : 'rgba(60,45,15,0.9)',
-          border: footfall.error ? '1px solid #a55' : '1px solid #a85',
-          borderRadius: 6, padding: '8px 10px', fontSize: 11,
-          color: footfall.error ? '#f0c0c0' : '#f0d8b0',
-          zIndex: 5,
-        }}>
-          {footfall.error
-            ? `Footfall layer unavailable: ${footfall.error}`
-            : 'Footfall: no walk waypoints in this dataset — showing walk-trip OD density instead.'}
-        </div>
-      )}
+      {/* Map-corner status stack (pulse / drill / footfall) */}
+      {(() => {
+        const banners: Array<{ key: string; message: string; tone: 'error' | 'warn'; onDismiss?: () => void }> = [];
+        if (layerVisibility.pulse && pulse.error) {
+          banners.push({ key: 'pulse', message: `Pulse layer unavailable: ${pulse.error}`, tone: 'error' });
+        }
+        if (drillError !== null) {
+          banners.push({
+            key: 'drill',
+            message: `Area query failed: ${drillError}`,
+            tone: 'error',
+            onDismiss: () => setDrillError(null),
+          });
+        }
+        if (layerVisibility.footfall && footfall.error) {
+          banners.push({ key: 'footfall-err', message: `Footfall layer unavailable: ${footfall.error}`, tone: 'error' });
+        } else if (layerVisibility.footfall && footfall.fallback) {
+          banners.push({
+            key: 'footfall-fb',
+            message: 'Footfall: no walk waypoints — showing walk-trip OD density instead.',
+            tone: 'warn',
+          });
+        }
+        return banners.map((b, i) => (
+          <StatusBanner
+            key={b.key}
+            message={b.message}
+            tone={b.tone}
+            stackIndex={i}
+            onDismiss={b.onDismiss}
+          />
+        ));
+      })()}
 
       <FilterPanel
         filter={filter}

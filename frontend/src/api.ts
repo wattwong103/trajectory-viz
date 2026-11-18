@@ -1,5 +1,5 @@
 /**
- * API client for the PFLOW Viz backend.
+ * API client for the Trajectory Viz backend.
  *
  * In dev mode, Vite proxies /api/* to localhost:9999 (see vite.config.ts).
  * In production, set VITE_API_BASE to the backend URL.

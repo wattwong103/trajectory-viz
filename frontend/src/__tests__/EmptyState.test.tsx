@@ -16,9 +16,17 @@ import { ACCEPT_ATTR } from '../uploadUtils';
 describe('EmptyState', () => {
   it('keeps first-run guidance (compose + demo CLI + sources.yaml)', () => {
     render(<EmptyState />);
+    expect(screen.getByText('First run')).toBeInTheDocument();
     expect(screen.getByText('docker compose up --build')).toBeInTheDocument();
     expect(screen.getByText(/trajectory-viz-demo/)).toBeInTheDocument();
     expect(screen.getByText(/sources\.yaml/)).toBeInTheDocument();
+  });
+
+  it('leads with upload before the demo CLI secondary path', () => {
+    render(<EmptyState />);
+    const upload = screen.getByText(/Drop a trajectory file here/);
+    const seed = screen.getByText(/Or seed the demo/);
+    expect(upload.compareDocumentPosition(seed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('renders the drop hint with the friendly extension list', () => {
