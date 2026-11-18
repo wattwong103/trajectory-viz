@@ -40,7 +40,6 @@ export function resolveSimScale(
   // Legacy aliases from #18 wire / YAML override.
   if (raw === 'mega' || caps.mega_sim === true) return 'macro';
   if (raw === 'standard') return 'meso';
-  if (caps.mega_sim === true) return 'macro';
   return null;
 }
 
