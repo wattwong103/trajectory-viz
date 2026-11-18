@@ -1,0 +1,5 @@
+id,time_ms,x,y,edge,type,mode,speed
+veh0,1717200000000,139.7,35.68,edge0,passenger,Car,10.0
+bus1,1717200000000,139.701,35.681,edge0,bus,Bus,8.0
+veh0,1717200001000,139.701,35.68,edge0,passenger,Car,10.0
+bus1,1717200001000,139.702,35.681,edge0,bus,Bus,8.0

@@ -384,8 +384,8 @@ Config/recipes first; XML stays out-of-process (no new `FormatType`).
 
 | Recipe | Path | Notes |
 |---|---|---|
-| MATSim events → CSV | `scripts/matsim_events_to_csv.py` + [`sources-matsim.yaml`](examples/sources-matsim.yaml) | Optional `--network` for link centroids |
-| SUMO FCD → NDJSON | `scripts/sumo_fcd_to_ndjson.py` + [`sources-sumo-fcd.yaml`](examples/sources-sumo-fcd.yaml) | Prefer SUMO CSV/Parquet when available |
+| MATSim events → CSV | `scripts/matsim_events_to_csv.py` + [`sources-matsim.yaml`](examples/sources-matsim.yaml) | Optional `--network` for link centroids; CI fixtures under `tests/fixtures/adapters/` |
+| SUMO FCD → CSV/NDJSON | `scripts/sumo_fcd_to_ndjson.py` + [`sources-sumo-fcd.yaml`](examples/sources-sumo-fcd.yaml) | Prefer native CSV/Parquet; XML adapter defaults to CSV (`--format ndjson` optional) |
 | OD arcs (trips-only) | [`sources-od-arcs.yaml`](examples/sources-od-arcs.yaml) | `render.mode: arcs` |
 | Phone GPS | [`sources-phone-gps.yaml`](examples/sources-phone-gps.yaml) | RAPIDS-like column names + `gap_split` |
 | JoRAS business traffic v3.0 | [`sources-joras-v3.yaml`](examples/sources-joras-v3.yaml) | Canonical truck/taxi pack; MFS/THTA in `profiles/pflow/sources.yaml` stay as legacy |

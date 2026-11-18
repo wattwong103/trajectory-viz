@@ -4,6 +4,10 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ## [Unreleased]
 
+### Added
+
+- **MATSim / SUMO adapter fixtures + CI wiring (TV-18).** Golden adapter outputs under `tests/fixtures/adapters/output_root/` with globs matching `docs/examples/sources-matsim.yaml` / `sources-sumo-fcd.yaml`; fixture-local `sources.matsim.yaml` / `sources.sumo.yaml` for discovery + ingest CI. SUMO XML adapter defaults to **CSV** (`--format ndjson` optional); example YAML leads with the tabular FCD path. No new `FormatType`.
+
 ### Changed
 
 - **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` exits with an honest “not implemented” message (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.

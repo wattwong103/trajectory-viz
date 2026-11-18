@@ -1,0 +1,4 @@
+person_id,trip_id,time_ms,lon_wgs84,lat_wgs84,link_id,mode
+1,1,110000,139.705,35.685,1,car
+1,1,150000,139.705,35.685,1,car
+1,1,200000,139.715,35.695,2,car

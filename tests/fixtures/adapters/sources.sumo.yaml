@@ -1,0 +1,63 @@
+# CI fixture wiring for SUMO FCD (CSV preferred, NDJSON fallback).
+# Preferred path matches docs/examples/sources-sumo-fcd.yaml tabular recipe.
+#
+# Generate / refresh (CSV default; NDJSON optional):
+#   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
+#       -o tests/fixtures/adapters/output_root/sumo/demo/fcd.csv \
+#       --epoch-ms 1717200000000
+#   python scripts/sumo_fcd_to_ndjson.py tests/fixtures/adapters/sumo_fcd_tiny.xml \
+#       -o tests/fixtures/adapters/output_root/sumo/demo/fcd.ndjson \
+#       --format ndjson --epoch-ms 1717200000000
+#
+# Discovery:
+#   python -m backend.sources_schema --discovery tests/fixtures/adapters/sources.sumo.yaml \
+#       --output-root tests/fixtures/adapters/output_root
+
+version: 1
+
+time:
+  epoch_anchor: "2024-06-01T00:00:00+09:00"
+
+sources:
+  # Preferred: TraceExporter / SUMO CSV (or XML adapter --format csv).
+  sumo-fcd-csv:
+    label: "SUMO FCD CSV (fixture)"
+    source_id: sumo
+    discovery:
+      trajectories_glob: "sumo/**/fcd*.csv"
+      latest_only: false
+    vehicle_key_template: "sumo:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
+    render:
+      mode: trails
+      color: [90, 160, 255]
+    columns:
+      vehicle_id_col: id
+      waypoints:
+        unix_time_ms: { csv: time_ms, type: bigint }
+        lon:          { csv: x,       type: double }
+        lat:          { csv: y,       type: double }
+        link_id:      { csv: edge,    type: varchar }
+        mode:         { csv: mode,    type: varchar }
+
+  # Fallback when only NDJSON from the XML adapter is on disk.
+  sumo-fcd-ndjson:
+    label: "SUMO FCD NDJSON (fixture)"
+    source_id: sumo_ndjson
+    discovery:
+      trajectories_glob: "sumo/**/fcd*.ndjson"
+      trajectories_format: ndjson
+      latest_only: false
+    vehicle_key_template: "sumo_ndjson:{vehicle_id}"
+    trips_synthesis: { strategy: gap_split, gap_minutes: 5 }
+    render:
+      mode: trails
+      color: [90, 180, 220]
+    columns:
+      vehicle_id_col: id
+      waypoints:
+        unix_time_ms: { csv: time_ms, type: bigint }
+        lon:          { csv: x,       type: double }
+        lat:          { csv: y,       type: double }
+        link_id:      { csv: edge,    type: varchar }
+        mode:         { csv: mode,    type: varchar }

@@ -1,0 +1,4 @@
+{"id":"veh0","time_ms":1717200000000,"x":139.7,"y":35.68,"edge":"edge0","type":"passenger","mode":"Car","speed":10.0}
+{"id":"bus1","time_ms":1717200000000,"x":139.701,"y":35.681,"edge":"edge0","type":"bus","mode":"Bus","speed":8.0}
+{"id":"veh0","time_ms":1717200001000,"x":139.701,"y":35.68,"edge":"edge0","type":"passenger","mode":"Car","speed":10.0}
+{"id":"bus1","time_ms":1717200001000,"x":139.702,"y":35.681,"edge":"edge0","type":"bus","mode":"Bus","speed":8.0}

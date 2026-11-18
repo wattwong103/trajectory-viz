@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
@@ -31,6 +32,23 @@ def _attr(el: ET.Element, *names: str) -> str | None:
         if v is not None and v != "":
             return v
     return None
+
+
+def _haversine_m(
+    lon0: float | None, lat0: float | None, lon1: float | None, lat1: float | None
+) -> float:
+    """Great-circle metres; 0.0 when any endpoint is missing."""
+    if None in (lon0, lat0, lon1, lat1):
+        return 0.0
+    r = 6_371_000.0
+    p0, p1 = math.radians(lat0), math.radians(lat1)  # type: ignore[arg-type]
+    dphi = math.radians(lat1 - lat0)  # type: ignore[operator]
+    dlmb = math.radians(lon1 - lon0)  # type: ignore[operator]
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(p0) * math.cos(p1) * math.sin(dlmb / 2) ** 2
+    )
+    return 2 * r * math.asin(math.sqrt(a))
 
 
 def load_network_centroids(path: Path) -> dict[str, tuple[float, float]]:
@@ -57,7 +75,8 @@ def load_network_centroids(path: Path) -> dict[str, tuple[float, float]]:
             continue
         x0, y0 = nodes[frm]
         x1, y1 = nodes[to]
-        centroids[lid] = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        # Round to avoid float noise in golden CSVs (link midpoints).
+        centroids[lid] = (round((x0 + x1) / 2.0, 6), round((y0 + y1) / 2.0, 6))
     return centroids
 
 
@@ -109,16 +128,23 @@ def convert(
                 ex, ey = centroids[end_link]
             # Fallback: zero coords when network missing — arcs still ingestable
             # after user replaces with WGS84 endpoints.
+            start_lon = sx if sx is not None else 0.0
+            start_lat = sy if sy is not None else 0.0
+            end_lon = ex if ex is not None else 0.0
+            end_lat = ey if ey is not None else 0.0
             trips.append({
                 "trip_id": tid,
                 "person_id": person,
                 "start_time_sec": start_t,
-                "start_lon_wgs84": sx if sx is not None else 0.0,
-                "start_lat_wgs84": sy if sy is not None else 0.0,
-                "end_lon_wgs84": ex if ex is not None else 0.0,
-                "end_lat_wgs84": ey if ey is not None else 0.0,
+                "start_lon_wgs84": start_lon,
+                "start_lat_wgs84": start_lat,
+                "end_lon_wgs84": end_lon,
+                "end_lat_wgs84": end_lat,
                 "mode": dep.get("mode", mode) if dep else mode,
-                "trip_length_m": "",
+                # Always numeric so distance_km transforms type-check in DuckDB.
+                "trip_length_m": round(
+                    _haversine_m(sx, sy, ex, ey), 3
+                ),
             })
         elif etype in ("entered link", "left link", "LinkEnterEvent", "LinkLeaveEvent"):
             agent = person or vehicle

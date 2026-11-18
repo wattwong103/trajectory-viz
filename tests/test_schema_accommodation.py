@@ -14,10 +14,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.db import _init_schema  # noqa: E402
-from backend.ingest import ingest_source_trips, resolve_epoch_anchor  # noqa: E402
-from backend.sources_schema import SourcesFile, load_sources  # noqa: E402
+from backend.ingest import (  # noqa: E402
+    ingest_source_trajectories,
+    ingest_source_trips,
+    resolve_epoch_anchor,
+    synthesize_trips,
+)
+from backend.sources_schema import (  # noqa: E402
+    SourcesFile,
+    dryrun_discovery,
+    load_sources,
+)
 
 FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "adapters"
+OUTPUT_ROOT = FIXTURES / "output_root"
 EXAMPLES = PROJECT_ROOT / "docs" / "examples"
 SCRIPTS = PROJECT_ROOT / "scripts"
 
@@ -165,14 +175,29 @@ def test_matsim_events_to_csv(tmp_path):
     assert "walk" in trips_csv
     geo_csv = (out / "events_car_geo.csv").read_text(encoding="utf-8")
     assert "link_id" in geo_csv
-    assert "139.7" in geo_csv  # network centroid roughly
+    assert "139.705" in geo_csv  # rounded network centroid
+
+
+def test_sumo_fcd_to_csv(tmp_path):
+    """CSV is the preferred adapter output (tabular path first)."""
+    convert = _load_script("sumo_fcd_to_ndjson").convert
+
+    out = tmp_path / "fcd.csv"
+    n = convert(FIXTURES / "sumo_fcd_tiny.xml", out, epoch_ms=1_000_000, fmt="csv")
+    assert n == 4
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].startswith("id,time_ms,x,y,edge,type,mode,speed")
+    assert any("Car" in line for line in lines[1:])
+    assert any("Bus" in line for line in lines[1:])
 
 
 def test_sumo_fcd_to_ndjson(tmp_path):
     convert = _load_script("sumo_fcd_to_ndjson").convert
 
     out = tmp_path / "fcd.ndjson"
-    n = convert(FIXTURES / "sumo_fcd_tiny.xml", out, epoch_ms=1_000_000)
+    n = convert(
+        FIXTURES / "sumo_fcd_tiny.xml", out, epoch_ms=1_000_000, fmt="ndjson"
+    )
     assert n == 4  # 2 vehicles × 2 timesteps
     lines = out.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 4
@@ -181,3 +206,51 @@ def test_sumo_fcd_to_ndjson(tmp_path):
     modes = {json.loads(line)["mode"] for line in lines}
     assert "Car" in modes and "Bus" in modes
     assert all(json.loads(line)["time_ms"] >= 1_000_000 for line in lines)
+
+
+def test_adapter_fixture_yaml_discovery():
+    """Example globs resolve against committed adapter output_root fixtures."""
+    matsim = load_sources(FIXTURES / "sources.matsim.yaml")
+    sumo = load_sources(FIXTURES / "sources.sumo.yaml")
+    matsim_counts = dryrun_discovery(matsim, OUTPUT_ROOT)
+    sumo_counts = dryrun_discovery(sumo, OUTPUT_ROOT)
+    assert matsim_counts["matsim-car"] >= 2  # trips + geo CSVs
+    assert sumo_counts["sumo-fcd-csv"] >= 1
+    assert sumo_counts["sumo-fcd-ndjson"] >= 1
+
+
+def test_matsim_fixture_ingests(conn):
+    """Golden MATSim CSVs ingest via the fixture-wired sources.yaml."""
+    sf = load_sources(FIXTURES / "sources.matsim.yaml")
+    src = sf.sources["matsim-car"]
+    trips_path = OUTPUT_ROOT / "matsim/berlin/iter_001/trips_car.csv"
+    geo_path = OUTPUT_ROOT / "matsim/berlin/iter_001/events_car_geo.csv"
+    anchor = resolve_epoch_anchor(sf)
+    n_trips = ingest_source_trips(conn, trips_path, "matsim-car", src, anchor)
+    n_wp = ingest_source_trajectories(conn, geo_path, "matsim-car", src, anchor)
+    assert n_trips == 2
+    assert n_wp == 3
+    modes = {
+        r[0] for r in conn.execute("SELECT DISTINCT mode FROM trips").fetchall()
+    }
+    assert modes == {"car", "walk"}
+    keys = conn.execute(
+        "SELECT DISTINCT vehicle_key FROM trips ORDER BY 1"
+    ).fetchall()
+    assert keys == [("car:berlin:1",), ("car:berlin:2",)]
+
+
+def test_sumo_csv_fixture_ingests(conn):
+    """Preferred SUMO CSV path: waypoints + gap_split synthesis."""
+    sf = load_sources(FIXTURES / "sources.sumo.yaml")
+    src = sf.sources["sumo-fcd-csv"]
+    csv_path = OUTPUT_ROOT / "sumo/demo/fcd.csv"
+    anchor = resolve_epoch_anchor(sf)
+    n_wp = ingest_source_trajectories(conn, csv_path, "sumo-fcd-csv", src, anchor)
+    assert n_wp == 4
+    n_trips = synthesize_trips(conn, src, anchor)
+    assert n_trips >= 2  # veh0 + bus1
+    modes = {
+        r[0] for r in conn.execute("SELECT DISTINCT mode FROM waypoints").fetchall()
+    }
+    assert "Car" in modes and "Bus" in modes
