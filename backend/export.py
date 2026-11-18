@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import struct
 import sys
@@ -357,6 +358,27 @@ def resolve_sources(conn) -> list[dict]:
 # --- HTML assembly ----------------------------------------------------------------
 
 
+def escape_html_text(value: str) -> str:
+    """Escape text for HTML element bodies (<title>, <h1>, footer, …)."""
+    return html.escape(value, quote=True)
+
+
+def json_for_script(obj) -> str:
+    """JSON-serialize for embedding inside a <script>…</script> block.
+
+    A literal '</script>' (or '</') anywhere in the JSON text closes the HTML
+    script element even when JSON-valid. Escape <, >, & to Unicode escapes so
+    the browser's HTML parser never sees a tag boundary; JSON.parse still
+    restores the original characters.
+    """
+    return (
+        json.dumps(obj, separators=(",", ":"))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def export_html(
     conn,
     vendor_js: str,
@@ -429,23 +451,27 @@ def export_html(
         "buildings": buildings_b64,
     }
 
+    safe_title = escape_html_text(title)
+    safe_attribution = escape_html_text(" · ".join(attribution))
+    safe_payload = json_for_script(payload)
+
     if engine == "minimal":
         template_path = MINIMAL_TEMPLATE_PATH
         placeholders = ("{{TITLE}}", "{{ATTRIBUTION}}", "{{PAYLOAD}}")
         substitutions = {
-            "{{TITLE}}": title,
-            "{{ATTRIBUTION}}": " · ".join(attribution),
-            "{{PAYLOAD}}": json.dumps(payload, separators=(",", ":")),
+            "{{TITLE}}": safe_title,
+            "{{ATTRIBUTION}}": safe_attribution,
+            "{{PAYLOAD}}": safe_payload,
         }
         notes.append("engine=minimal — Canvas 2D shell, no deck.gl vendor")
     else:
         template_path = TEMPLATE_PATH
         placeholders = ("{{TITLE}}", "{{ATTRIBUTION}}", "{{DECK_JS}}", "{{PAYLOAD}}")
         substitutions = {
-            "{{TITLE}}": title,
-            "{{ATTRIBUTION}}": " · ".join(attribution),
+            "{{TITLE}}": safe_title,
+            "{{ATTRIBUTION}}": safe_attribution,
             "{{DECK_JS}}": vendor_js,
-            "{{PAYLOAD}}": json.dumps(payload, separators=(",", ":")),
+            "{{PAYLOAD}}": safe_payload,
         }
 
     template = template_path.read_text(encoding="utf-8")

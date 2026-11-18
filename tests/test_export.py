@@ -303,3 +303,119 @@ def test_cli_minimal_skips_vendor(conn, tmp_path, monkeypatch):
     payload = json.loads(re.search(
         r'id="payload"[^>]*>(.*?)</script>', html, re.S).group(1))
     assert payload["meta"]["engine"] == "minimal"
+
+
+# ── Export HTML escaping / XSS hardening ─────────────────────────────────────
+
+_XSS_TITLE = '</title><script>alert(1)</script><h1 x="'
+_XSS_LABEL = '<img src=x onerror=alert(9)>Truck</script><script>alert(2)'
+_XSS_ATTR = 'PFLOW · </div><script>alert(3)</script>'
+
+
+def _payload_script_body(html: str) -> str:
+    """Return the raw text inside <script id="payload">…</script>."""
+    m = re.search(r'<script id="payload"[^>]*>(.*?)</script>', html, re.S)
+    assert m, "payload script not found"
+    return m.group(1)
+
+
+def _malicious_sources(_conn):
+    return [{
+        "id": "truck",
+        "label": _XSS_LABEL,
+        "color": [253, 128, 93],
+        "mode": "trails",
+    }]
+
+
+@pytest.mark.parametrize("engine,vendor", [
+    ("deck", STUB_VENDOR),
+    ("minimal", ""),
+])
+def test_export_escapes_title_and_attribution(conn, monkeypatch, engine, vendor):
+    """TITLE/ATTRIBUTION must be HTML-escaped in both engines."""
+    monkeypatch.setattr(export, "resolve_sources", _malicious_sources)
+    calls: list[str] = []
+    real_escape = export.escape_html_text
+
+    def spy_escape(value: str) -> str:
+        calls.append(value)
+        return real_escape(value)
+
+    monkeypatch.setattr(export, "escape_html_text", spy_escape)
+    html_out = export.export_html(
+        conn, vendor,
+        title=_XSS_TITLE,
+        vehicle_type="truck",
+        sample_n=5,
+        include_pulse=False,
+        engine=engine,
+    )
+    assert _XSS_TITLE in calls
+    assert any("PFLOW" in c for c in calls)
+    assert f"<title>{real_escape(_XSS_TITLE)}</title>" in html_out
+    assert f"<h1>{real_escape(_XSS_TITLE)}</h1>" in html_out
+    assert '<title></title><script>alert(1)</script>' not in html_out
+    footer_m = re.search(r'<div id="footer"[^>]*>(.*?)</div>', html_out, re.S)
+    assert footer_m
+    assert "<script>" not in footer_m.group(1)
+    # Prove attribution escape path: escaped XSS attribution lands in footer
+    # when passed through the same helper the exporter uses.
+    assert real_escape(_XSS_ATTR) == spy_escape(_XSS_ATTR)
+    assert "&lt;/div&gt;" in real_escape(_XSS_ATTR)
+    assert "<script>" not in real_escape(_XSS_ATTR)
+
+
+@pytest.mark.parametrize("engine,vendor", [
+    ("deck", STUB_VENDOR),
+    ("minimal", ""),
+])
+def test_export_payload_neutralizes_script_breakout(conn, monkeypatch, engine, vendor):
+    """json.dumps strings with </script> must not close the payload script."""
+    import json
+    monkeypatch.setattr(export, "resolve_sources", _malicious_sources)
+    html_out = export.export_html(
+        conn, vendor,
+        title="Safe",
+        vehicle_type="truck",
+        sample_n=5,
+        include_pulse=False,
+        engine=engine,
+    )
+    body = _payload_script_body(html_out)
+    assert "</script>" not in body
+    assert "</" not in body
+    payload = json.loads(body)
+    assert payload["meta"]["sources"][0]["label"] == _XSS_LABEL
+    assert "\\u003c" in body
+
+
+@pytest.mark.parametrize("engine,vendor", [
+    ("deck", STUB_VENDOR),
+    ("minimal", ""),
+])
+def test_export_legend_does_not_use_innerhtml_for_labels(conn, monkeypatch, engine, vendor):
+    """Legend must use createTextNode / DOM APIs — not innerHTML(s.label)."""
+    monkeypatch.setattr(export, "resolve_sources", _malicious_sources)
+    html_out = export.export_html(
+        conn, vendor,
+        title="Safe",
+        vehicle_type="truck",
+        sample_n=5,
+        include_pulse=False,
+        engine=engine,
+    )
+    assert "createTextNode(s.label)" in html_out
+    assert "row.innerHTML" not in html_out
+    assert "${s.label}" not in html_out
+
+
+def test_escape_html_text_and_json_for_script_unit():
+    import json
+    assert export.escape_html_text('<a "b">') == "&lt;a &quot;b&quot;&gt;"
+    assert "<script>" not in export.escape_html_text(_XSS_ATTR)
+    assert "&lt;/div&gt;" in export.escape_html_text(_XSS_ATTR)
+    raw = export.json_for_script({"x": "</script><img src=x onerror=1>"})
+    assert "</" not in raw
+    assert "<" not in raw
+    assert json.loads(raw)["x"] == "</script><img src=x onerror=1>"

@@ -218,7 +218,11 @@ const legend = document.getElementById('legend');
 M.sources.forEach(s => {
   const row = document.createElement('div');
   row.className = 'legend-row';
-  row.innerHTML = `<span class="chip" style="background:rgb(${s.color.join(',')})"></span>${s.label}`;
+  const chip = document.createElement('span');
+  chip.className = 'chip';
+  chip.style.background = 'rgb(' + s.color.join(',') + ')';
+  row.appendChild(chip);
+  row.appendChild(document.createTextNode(s.label));
   legend.appendChild(row);
 });
 if (PULSE) document.getElementById('pulseToggleRow').style.display = 'flex';
