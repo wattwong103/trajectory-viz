@@ -51,7 +51,7 @@ from backend.sources_schema import load_sources  # noqa: E402
 
 @pytest.fixture
 def sources():
-    return load_sources(PROJECT_ROOT / "sources.yaml")
+    return load_sources(PROJECT_ROOT / "profiles" / "pflow" / "sources.yaml")
 
 
 @pytest.fixture

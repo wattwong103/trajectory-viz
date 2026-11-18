@@ -1,5 +1,8 @@
 # Cinematic export preset (Phase 2D) — Tokyo taxis over one simulated night.
 #
+# Lab/PFLOW-oriented: point TRAJECTORY_VIZ_PROFILE=pflow (and PFLOW_HOME) or
+# TRAJECTORY_VIZ_DB at a taxi-ingested DuckDB before exporting.
+#
 #   python scripts/fetch_vendor.py                 # once per machine
 #   viz-export --preset presets/tokyo-night.yaml --out exports/tokyo-night.html
 #
@@ -8,6 +11,13 @@
 # spot. See docs/EXPORT.md.
 
 title: "Tokyo Taxi — One Night"
+
+# Forms this preset intends to bake (Phase D — declarative; TV-8 polish later).
+forms:
+  - trail
+  - agents
+  - pulse
+  - buildings
 
 filters:
   vehicle_type: taxi

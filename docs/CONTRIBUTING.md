@@ -57,7 +57,9 @@ sources:
 ### Step 3 — Validate the YAML
 
 ```bash
-python -m backend.sources_schema --validate sources.yaml
+python -m backend.sources_schema --validate demo/sources.demo.yaml
+# or your profile / custom registry:
+python -m backend.sources_schema --validate profiles/pflow/sources.yaml
 ```
 
 Common errors:
@@ -69,7 +71,9 @@ Common errors:
 ### Step 4 — Dry-run the glob
 
 ```bash
-python -m backend.sources_schema --discovery sources.yaml --output-root /path/to/output
+python -m backend.sources_schema --discovery demo/sources.demo.yaml --output-root demo
+# lab:
+python -m backend.sources_schema --discovery profiles/pflow/sources.yaml --output-root /path/to/output
 ```
 
 This counts files matching each source's glob without actually ingesting. A zero count means the glob doesn't match anything — fix the path.

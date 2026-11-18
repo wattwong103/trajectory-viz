@@ -67,18 +67,18 @@ def test_example_yaml_validates(name):
 
 def test_registry_mode_maps_present():
     """PFLOW person/taxi/truck + GUFM packs declare mode_map."""
-    root = load_sources(PROJECT_ROOT / "sources.yaml")
+    root = load_sources(PROJECT_ROOT / "profiles" / "pflow" / "sources.yaml")
     assert root.sources["pflow-truck"].mode_map is not None
     assert root.sources["pflow-taxi-tokyo"].mode_map is not None
     assert root.sources["pflow-person-shopping"].mode_map is not None
     assert root.sources["pflow-person-shopping"].mode_map["0"] == "Walk"
 
-    gufm = load_sources(PROJECT_ROOT / "sources.gufm.yaml")
+    gufm = load_sources(PROJECT_ROOT / "profiles" / "gufm" / "sources.yaml")
     for key in ("gufm-gen", "pflow-gt"):
         assert gufm.sources[key].mode_map is not None
         assert "3" in gufm.sources[key].mode_map
 
-    kj = load_sources(PROJECT_ROOT / "sources.kichijoji.yaml")
+    kj = load_sources(PROJECT_ROOT / "profiles" / "pflow" / "sources.kichijoji.yaml")
     for src in kj.sources.values():
         assert src.mode_map is not None
 

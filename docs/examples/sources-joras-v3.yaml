@@ -1,13 +1,13 @@
 # Canonical JoRAS Pseudo-PFLOW business-traffic pack (v3.0).
 #
 # Truck + taxi trajectories from the CSIS People Flow Project business-traffic
-# release. Person-flow stays in the main sources.yaml / Kichijōji registries.
+# release. Person-flow stays in profiles/pflow/ (opt-in lab profile).
 #
 # v3.0 trips may include sub-trip / leg rows — map `leg_id` (sub-trip number)
 # as a first-class column (not explode-only). See docs/DATA_FORMATS.md §8.
 #
 # Legacy lab recipes (kept working, not deleted):
-#   sources.yaml → pflow-truck (MFS-calibrated), pflow-taxi-tokyo (THTA)
+#   profiles/pflow/sources.yaml → pflow-truck (MFS), pflow-taxi-tokyo (THTA)
 #
 # Adapt globs to your JoRAS export layout. Validate:
 #   python -m backend.sources_schema --validate docs/examples/sources-joras-v3.yaml

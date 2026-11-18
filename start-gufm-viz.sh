@@ -18,14 +18,14 @@ set -e
 cd "$(dirname "$0")"
 
 ROOT="$PWD"
-export PFLOW_VIZ_SOURCES="$ROOT/sources.gufm.yaml"
+export PFLOW_VIZ_SOURCES="$ROOT/profiles/gufm/sources.yaml"
 export PFLOW_VIZ_DB="$ROOT/data/gufm/gufm.duckdb"
 export PFLOW_VIZ_OUTPUT_ROOT="$ROOT/data/gufm/output"
 
 if [ ! -f "$PFLOW_VIZ_DB" ]; then
   echo "[ERROR] database not found: $PFLOW_VIZ_DB"
   echo "        Run the converter first (see data/gufm/README.md), then:"
-  echo "        PFLOW_VIZ_SOURCES=\"\$PWD/sources.gufm.yaml\" PFLOW_VIZ_DB=\"\$PWD/data/gufm/gufm.duckdb\" \\"
+  echo "        PFLOW_VIZ_SOURCES=\"\$PWD/profiles/gufm/sources.yaml\" PFLOW_VIZ_DB=\"\$PWD/data/gufm/gufm.duckdb\" \\"
   echo "          PFLOW_VIZ_OUTPUT_ROOT=\"\$PWD/data/gufm/output\" ./.venv-viz/bin/trajectory-viz-ingest --reset"
   exit 1
 fi

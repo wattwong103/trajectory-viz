@@ -1,14 +1,20 @@
-# trajectory-viz source registry.
+# PFLOW lab profile (Phase D opt-in) — goods / fare / person / taxi packs.
+#
+# Not the default discovery path. Activate with:
+#   TRAJECTORY_VIZ_PROFILE=pflow PFLOW_HOME=/path/to/PFLOW \
+#     trajectory-viz-ingest --profile pflow --reset
+# See profiles/README.md.
 #
 # Each entry under `sources:` declares one agent-based-model output that the
 # dashboard can ingest. The key (e.g. `pflow-truck`) is unique; multiple keys
 # may share a `source_id` (e.g. all taxi cities share source_id=taxi).
 #
 # Validate this file:
-#   python -m backend.sources_schema --validate sources.yaml
+#   python -m backend.sources_schema --validate profiles/pflow/sources.yaml
 #
 # Dry-run discovery (counts matching CSVs under PFLOW_VIZ_OUTPUT_ROOT):
-#   python -m backend.sources_schema --discovery sources.yaml --output-root /path/to/output
+#   python -m backend.sources_schema --discovery profiles/pflow/sources.yaml \
+#     --output-root /path/to/output
 #
 # Schema reference: see backend/sources_schema.py.
 

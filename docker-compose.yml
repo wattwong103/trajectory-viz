@@ -1,14 +1,16 @@
 # docker-compose.yml — one-command Docker deploy for trajectory-viz.
 #
 # Usage:
-#   1. Place a pre-built pflow.duckdb at ./data/pflow.duckdb (or override volume
-#      mount below), OR mount a PFLOW project root with output/viz/pflow.duckdb.
+#   1. Place a pre-built DuckDB at ./data/pflow.duckdb (or override volume
+#      mount below). Tip (TV-3 hook): bake demo/demo.duckdb via
+#      `trajectory-viz-demo` and copy it here for a one-URL first run.
 #   2. `docker compose up --build`
 #   3. Visit http://localhost:8080
 #
 # The dashboard's API is on the same port (FastAPI serves the built React app
 # at / and the API at /api/*). For development with Vite HMR, use the native
-# setup.{sh,bat} flow — see README.md.
+# setup.{sh,bat} flow — see README.md. Default native profile is demo/universal;
+# PFLOW is opt-in (profiles/pflow/).
 
 services:
   trajectory-viz:

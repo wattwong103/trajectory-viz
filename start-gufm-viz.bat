@@ -20,7 +20,7 @@ setlocal
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
-set "PFLOW_VIZ_SOURCES=%ROOT%\sources.gufm.yaml"
+set "PFLOW_VIZ_SOURCES=%ROOT%\profiles/gufm/sources.yaml"
 set "PFLOW_VIZ_DB=%ROOT%\data\gufm\gufm.duckdb"
 set "PFLOW_VIZ_OUTPUT_ROOT=%ROOT%\data\gufm\output"
 

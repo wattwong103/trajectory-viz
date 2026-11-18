@@ -47,15 +47,19 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # Now copy the rest of the source.
 COPY backend/ ./backend/
-COPY sources.yaml ./sources.yaml
+# Phase D — demo/universal is the default registry; lab packs under profiles/.
+COPY demo/sources.demo.yaml ./demo/sources.demo.yaml
+COPY profiles/ ./profiles/
 COPY LICENSE ./LICENSE
 
 # Copy the built frontend from stage 1 into the location app.py mounts.
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 # Standalone mode by default: serve from a pre-built DuckDB mounted at this path.
-# Override with -e PFLOW_VIZ_DB=/data/your.duckdb or set PFLOW_HOME for monorepo.
+# Override with -e TRAJECTORY_VIZ_DB=/data/your.duckdb (or PFLOW_VIZ_DB).
+# Registry defaults to demo/sources.demo.yaml when no SOURCES env is set.
 ENV PFLOW_VIZ_DB=/data/pflow.duckdb \
+    TRAJECTORY_VIZ_SOURCES=/app/demo/sources.demo.yaml \
     TRAJECTORY_VIZ_HOST=0.0.0.0 \
     TRAJECTORY_VIZ_PORT=8080
 
