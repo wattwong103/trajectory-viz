@@ -602,9 +602,14 @@ export default function App() {
         </div>
       )}
 
-      {/* Map-corner status stack (pulse / drill / footfall) */}
+      {/* Map-corner status stack: errors first, then live analysis overlays */}
       {(() => {
-        const banners: Array<{ key: string; message: string; tone: 'error' | 'warn'; onDismiss?: () => void }> = [];
+        const banners: Array<{
+          key: string;
+          message: string;
+          tone: 'error' | 'warn' | 'info';
+          onDismiss?: () => void;
+        }> = [];
         if (layerVisibility.pulse && pulse.error) {
           banners.push({ key: 'pulse', message: `Pulse layer unavailable: ${pulse.error}`, tone: 'error' });
         }
@@ -623,6 +628,47 @@ export default function App() {
             key: 'footfall-fb',
             message: 'Footfall: no walk waypoints — showing walk-trip OD density instead.',
             tone: 'warn',
+          });
+        }
+        // Everyday analysis handoff — dismiss clears the map overlay.
+        if (odFlows.length > 0) {
+          banners.push({
+            key: 'od',
+            message: `OD flows on map · ${odFlows.length.toLocaleString()} arcs`,
+            tone: 'info',
+            onDismiss: () => setODFlows([]),
+          });
+        }
+        if (densityPoints.length > 0) {
+          banners.push({
+            key: 'density',
+            message: `Density heatmap on map · ${densityPoints.length.toLocaleString()} cells`,
+            tone: 'info',
+            onDismiss: () => setDensityPoints([]),
+          });
+        }
+        if (clusterResult !== null) {
+          banners.push({
+            key: 'clusters',
+            message: `Clusters on map · ${clusterResult.num_clusters} groups`,
+            tone: 'info',
+            onDismiss: () => setClusterResult(null),
+          });
+        }
+        if (linkDensity.length > 0) {
+          banners.push({
+            key: 'links',
+            message: `Link density on map · ${linkDensity.length.toLocaleString()} links`,
+            tone: 'info',
+            onDismiss: () => setLinkDensity([]),
+          });
+        }
+        if (compareGrid !== null && compareGrid.cells.length > 0) {
+          banners.push({
+            key: 'compare',
+            message: `Fleet A⇄B grid on map · ${compareGrid.cells.length.toLocaleString()} cells`,
+            tone: 'info',
+            onDismiss: () => setCompareGrid(null),
           });
         }
         return banners.map((b, i) => (
@@ -704,6 +750,10 @@ export default function App() {
         onClusters={handleClusters}
         onLinkDensity={handleLinkDensity}
         onCompareGrid={handleCompareGrid}
+        odFlowCount={odFlows.length}
+        densityCount={densityPoints.length}
+        linkCount={linkDensity.length}
+        mapHasClusters={clusterResult !== null}
         selectedTrajectory={selectedTrajectory}
         onClearSelectedTrajectory={clearSelectedTrajectory}
         zoneBBox={zoneBBox}

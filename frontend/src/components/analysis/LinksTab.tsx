@@ -29,14 +29,20 @@ export const LinksTab: React.FC<LinksTabProps> = ({
                 Truck queries take ~25s — please wait after clicking.
               </div>
             )}
+            {linkData && linkData.count > 0 && (
+              <div style={styles.mapActive} role="status">
+                {linkData.count.toLocaleString()} links on map
+              </div>
+            )}
             <button onClick={loadLinkDensity} style={styles.actionBtn} disabled={linkLoading}>
-              {linkLoading ? 'Loading...' : 'Load Top 500 Links'}
+              {linkLoading ? 'Loading…' : linkData ? 'Reload Top 500 Links' : 'Load Top 500 Links'}
             </button>
             <button
               onClick={onClear}
               style={styles.clearBtn}
+              disabled={!linkData}
             >
-              Clear
+              Clear map
             </button>
             {linkData && (
               <div style={styles.results}>

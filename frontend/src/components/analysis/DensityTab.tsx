@@ -8,6 +8,8 @@ export interface DensityTabProps {
   loading: boolean;
   loadDensity: (source: 'od' | 'waypoint') => void;
   onClearDensity: () => void;
+  /** Cells currently drawn on the map heatmap (0 = none). */
+  activeCount?: number;
   hotspotsLoading: boolean;
   loadHotspots: () => void;
   hotspotsData: Array<{ lon: number; lat: number; volume: number; unique_vehicles: number; rank: number }>;
@@ -15,6 +17,7 @@ export interface DensityTabProps {
 
 export const DensityTab: React.FC<DensityTabProps> = ({
   densitySource, setDensitySource, loading, loadDensity, onClearDensity,
+  activeCount = 0,
   hotspotsLoading, loadHotspots, hotspotsData,
 }) => (
           <div>
@@ -48,10 +51,17 @@ export const DensityTab: React.FC<DensityTabProps> = ({
                 ? 'Heatmap of trip origins and destinations (~1km grid).'
                 : 'Heatmap of trajectory waypoints (~500m grid).'}
             </p>
+            {activeCount > 0 && (
+              <div style={styles.mapActive} role="status">
+                Heatmap on map · {formatCompact(activeCount)} cells
+              </div>
+            )}
             <button onClick={() => loadDensity(densitySource)} style={styles.actionBtn} disabled={loading}>
-              {loading ? 'Loading...' : 'Load Heatmap'}
+              {loading ? 'Loading…' : activeCount > 0 ? 'Reload Heatmap' : 'Load Heatmap'}
             </button>
-            <button onClick={onClearDensity} style={styles.clearBtn}>Clear</button>
+            <button onClick={onClearDensity} style={styles.clearBtn} disabled={activeCount === 0}>
+              Clear map
+            </button>
 
             <div style={{ marginTop: 10 }}>
               <div style={styles.subtitle}>Top Hotspots</div>
