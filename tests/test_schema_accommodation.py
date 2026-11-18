@@ -170,6 +170,6 @@ def test_sumo_fcd_to_ndjson(tmp_path):
     assert len(lines) == 4
     row = json.loads(lines[0])
     assert set(row) >= {"id", "time_ms", "x", "y", "mode", "type", "edge"}
-    modes = {json.loads(l)["mode"] for l in lines}
+    modes = {json.loads(line)["mode"] for line in lines}
     assert "Car" in modes and "Bus" in modes
-    assert all(json.loads(l)["time_ms"] >= 1_000_000 for l in lines)
+    assert all(json.loads(line)["time_ms"] >= 1_000_000 for line in lines)
