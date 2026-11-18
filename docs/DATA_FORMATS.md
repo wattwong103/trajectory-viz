@@ -406,10 +406,38 @@ Flatten to one of the supported tabular shapes first:
 MultiLineString / nested geometry dumps should be exploded upstream. A
 dedicated nested normalizer is deferred.
 
-## 11. Mega-sim ingest (trips + aggregates first)
+## 11. Simulation scale (micro / meso / macro)
 
-For sims larger than ~**1M agents** (or ~**10M** waypoint rows), do **not** load
-full trails into the viz DB. Prefer:
+`capabilities.scale` is a first-class engine mode (`micro` | `meso` | `macro`).
+Auto-detected from agent/waypoint estimates; override with top-level
+`scale:` in `sources.yaml` (aliases: `mega`→macro, `standard`→meso).
+
+### Micro — evacuation / event / building / block
+
+Fine trails and agents; short windows; high temporal resolution is fine.
+Defaults are **trails + agents** — the UI must **not** force arcs+pulse when
+N is small. Keep waypoints (do not `--skip-waypoints`).
+
+```yaml
+version: 1
+scale: micro   # optional; tiny packs auto-detect as micro
+sources:
+  evacuation-agents:
+    render: { mode: trails }
+    # … trips + trajectories_glob …
+```
+
+Worked recipe: [sources-evacuation-micro.yaml](examples/sources-evacuation-micro.yaml).
+
+### Meso — mid-scale ABM
+
+Classic city packs (PFLOW lab profiles). Trails default; arcs when a source
+declares `render.mode: arcs`; pulse opt-in once `density_hourly` exists.
+
+### Macro — city / region / nation (mega-sim LOD)
+
+For sims larger than ~**1M agents** (or ~**10M** waypoint rows), or when you
+set `scale: macro`, do **not** load full trails into the viz DB. Prefer:
 
 1. **Always ingest trips** (OD endpoints + time) — filters, arcs, and temporal
    views need them. Set `render.mode: arcs` for trips-only sources.
@@ -422,16 +450,19 @@ full trails into the viz DB. Prefer:
    python -m backend.ingest --max-waypoints-per-trip=64
    python -m backend.ingest --waypoint-sample-frac=0.1
    ```
-3. **Require aggregates for pulse** — build `density_hourly` (and prefer
-   link / mesh aggregates upstream when available):
+3. **Encourage / require aggregates for pulse** — build `density_hourly` (and
+   prefer link / mesh aggregates upstream when available):
    ```bash
    python -m backend.ingest --aggregates-only
    ```
-4. **UI contract** — when `capabilities.mega_sim` is true, the map auto-switches
-   to **arcs + pulse** and hides trails; re-enable **Trajectories** (or the
-   Trails preset) to override. Sample APIs still cap at ≤500 trails per render.
+4. **UI contract** — when `capabilities.scale` is `macro` (`mega_sim=true`),
+   the map auto-switches to **arcs + pulse** and hides trails; re-enable
+   **Trajectories** (or the Trails / Micro preset) to override. Sample APIs
+   still cap at ≤500 trails per render.
 
-See [ARCHITECTURE.md → Mega-sim LOD](ARCHITECTURE.md#mega-sim-lod-1m-agents).
+Worked recipe: [sources-od-arcs.yaml](examples/sources-od-arcs.yaml) (`scale: macro`).
+
+See [ARCHITECTURE.md → Simulation scale](ARCHITECTURE.md#simulation-scale-micro--meso--macro).
 
 ---
 
@@ -453,4 +484,4 @@ See [ARCHITECTURE.md → Mega-sim LOD](ARCHITECTURE.md#mega-sim-lod-1m-agents).
 - `.json` files always need an explicit `format:` declaration (the upload path
   content-sniffs them instead — section 7).
 - Full nationwide trail dumps (Pseudo-PFLOW scale) are out of scope for the
-  map — use section 11 mega-sim ingest + arcs/pulse instead.
+  map — use section 11 macro / aggregate-first ingest + arcs/pulse instead.

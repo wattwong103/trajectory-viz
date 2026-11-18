@@ -659,9 +659,11 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                     title={
                       id === 'network'
                         ? 'Polylines when trajectories exist; origins/destinations/arcs always stay on'
-                        : id === 'mega'
-                          ? 'Mega-sim default: O-D arcs + pulse heatmap (trails hidden; re-enable Trajectories to override)'
-                          : undefined
+                        : id === 'mega' || id === 'macro'
+                          ? 'Macro / mega-sim default: O-D arcs + pulse heatmap (trails hidden; re-enable Trajectories to override)'
+                          : id === 'micro'
+                            ? 'Micro default: fine trails + agents (no forced arcs/pulse)'
+                            : undefined
                     }
                   >
                     {LAYER_PRESETS[id].label}
@@ -669,7 +671,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                 ))}
               </div>
             )}
-            {layerAvailability.megaSim && (
+            {(layerAvailability.megaSim || layerAvailability.simScale === 'macro') && (
               <div
                 style={{
                   fontSize: 11,
@@ -679,10 +681,26 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                 }}
                 title={(filterOptions?.capabilities?.fix_its ?? []).join('\n')}
               >
-                Mega-sim LOD: arcs + pulse by default
+                Macro scale: arcs + pulse by default
                 {filterOptions?.capabilities?.agent_count != null
                   ? ` (${filterOptions.capabilities.agent_count.toLocaleString()} agents)`
                   : ''}. Toggle Trajectories to override.
+              </div>
+            )}
+            {layerAvailability.simScale === 'micro' && !layerAvailability.megaSim && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: '#5a6a7a',
+                  marginBottom: 6,
+                  lineHeight: 1.35,
+                }}
+                title={(filterOptions?.capabilities?.fix_its ?? []).join('\n')}
+              >
+                Micro scale: fine trails + agents
+                {filterOptions?.capabilities?.agent_count != null
+                  ? ` (${filterOptions.capabilities.agent_count.toLocaleString()} agents)`
+                  : ''}. Arcs/pulse stay optional.
               </div>
             )}
             {layerGroups.map(group => (

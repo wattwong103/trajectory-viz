@@ -35,7 +35,14 @@ import { fetchFilterOptions, queryTrajectoriesPoint, queryTrajectoriesBBox, fetc
 import { exportCompositePng } from './utils/exportPng';
 import { friendlyFetchError } from './friendlyError';
 import type { LayerAvailabilityContext } from './layerCatalog';
-import { forceOdArcs, isMegaSim, marksLodOverride, megaDefaultVisibility } from './lodPolicy';
+import {
+  defaultVisibilityForScale,
+  forceOdArcs,
+  isMegaSim,
+  isMicroScale,
+  marksLodOverride,
+  resolveSimScale,
+} from './lodPolicy';
 import { MAX_AGENTS } from './components/AgentTab';
 import type { FilterState, FilterOptions, Trajectory, TripPoint, CompareGridResponse } from './types';
 import type { ODFlow, DensityPoint, ClusterResult, LinkDensityItem } from './api';
@@ -63,8 +70,9 @@ export default function App() {
   // Renders the backend-error overlay instead of an eternal empty screen.
   const [filterOptionsError, setFilterOptionsError] = useState<string | null>(null);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VIS);
-  // Mega-sim LOD: auto arcs+pulse once; user toggle/preset that re-enables
-  // trails sticks as an override for the rest of the session.
+  // Scale LOD: macro → arcs+pulse once; micro → trails+agents (never mega
+  // defaults). User toggle/preset that fights the scale default sticks as an
+  // override for the rest of the session.
   const [lodUserOverride, setLodUserOverride] = useState(false);
   const [megaLodApplied, setMegaLodApplied] = useState(false);
 
@@ -127,11 +135,18 @@ export default function App() {
     reloadFilterOptions();
   }, [reloadFilterOptions]);
 
-  // Mega-sim LOD auto-switch: arcs + pulse, hide trails (survey §6).
+  // Scale LOD auto-switch (TV-16): macro → arcs+pulse; micro → trails+agents.
   useEffect(() => {
     const caps = filterOptions?.capabilities;
-    if (!isMegaSim(caps) || lodUserOverride || megaLodApplied) return;
-    setLayerVisibility(prev => ({ ...prev, ...megaDefaultVisibility() }));
+    if (lodUserOverride || megaLodApplied) return;
+    const scale = resolveSimScale(caps);
+    // Only auto-apply for micro/macro; meso keeps DEFAULT_LAYER_VIS.
+    if (scale !== 'macro' && scale !== 'micro') return;
+    // Micro with no capabilities yet — wait; also skip micro if caps missing.
+    if (!caps) return;
+    const patch = defaultVisibilityForScale(scale);
+    if (!patch) return;
+    setLayerVisibility(prev => ({ ...prev, ...patch }));
     setMegaLodApplied(true);
   }, [filterOptions, lodUserOverride, megaLodApplied]);
 
@@ -472,6 +487,7 @@ export default function App() {
       hasDensityHourly,
       sourceModes: (filterOptions?.sources ?? []).map(s => s.mode),
       megaSim: isMegaSim(caps),
+      simScale: resolveSimScale(caps),
       pulseBuilt,
       pulseDetail: pulseProbe?.detail
         ?? (hasDensityHourly === false
@@ -647,14 +663,22 @@ export default function App() {
         onLayerToggle={(key) => {
           setLayerVisibility(prev => {
             const next = { ...prev, [key]: !prev[key] };
-            if (isMegaSim(filterOptions?.capabilities) && marksLodOverride(next, key)) {
+            const scale = resolveSimScale(filterOptions?.capabilities);
+            if (
+              (isMegaSim(filterOptions?.capabilities) || isMicroScale(filterOptions?.capabilities))
+              && marksLodOverride(next, key, scale)
+            ) {
               setLodUserOverride(true);
             }
             return next;
           });
         }}
         onApplyPreset={(vis) => {
-          if (isMegaSim(filterOptions?.capabilities) && marksLodOverride(vis)) {
+          const scale = resolveSimScale(filterOptions?.capabilities);
+          if (
+            (isMegaSim(filterOptions?.capabilities) || isMicroScale(filterOptions?.capabilities))
+            && marksLodOverride(vis, undefined, scale)
+          ) {
             setLodUserOverride(true);
           }
           setLayerVisibility(prev => ({ ...prev, ...vis }));

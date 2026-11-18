@@ -14,7 +14,7 @@
  * for lab plugins), instead of being a silent no-op (or worse, a raw 409).
  */
 
-/** Dataset + session context for form availability (Phase B + mega-sim LOD). */
+/** Dataset + session context for form availability (Phase B + scale LOD). */
 export interface LayerAvailabilityContext {
   /** capabilities.has_trajectories / stats.has_trajectories */
   hasTrajectories: boolean;
@@ -34,10 +34,12 @@ export interface LayerAvailabilityContext {
   /** render modes declared by the dataset's sources ('arcs' = trip-only) */
   sourceModes: Array<'trails' | 'points' | 'arcs'>;
   /**
-   * capabilities.mega_sim — when true, OD arcs are a first-class default form
-   * even if no source declares render.mode: arcs.
+   * capabilities.mega_sim / scale=macro — when true, OD arcs are a first-class
+   * default form even if no source declares render.mode: arcs.
    */
   megaSim: boolean;
+  /** Resolved simulation scale (micro | meso | macro), when known. */
+  simScale?: 'micro' | 'meso' | 'macro' | null;
   /**
    * Pulse readiness: true = aggregate ready, false = missing (show fix-it),
    * null = not yet known. Prefer capabilities.has_density_hourly; probe
@@ -177,7 +179,8 @@ export const LAYER_GROUPS: LayerGroup[] = [
       {
         key: 'sourceArcs', label: 'O-D arcs',
         unavailableReason: c => {
-          if (c.megaSim) return null; // mega-sim default form (arcs + pulse)
+          // Macro / mega: first-class default even without render.mode: arcs.
+          if (c.megaSim || c.simScale === 'macro') return null;
           return c.sourceModes.includes('arcs')
             ? null
             : 'Only relevant for sources without waypoint data';
@@ -187,9 +190,14 @@ export const LAYER_GROUPS: LayerGroup[] = [
         key: 'pulse', label: 'Pulse (hourly density)',
         unavailableReason: c => {
           const base = pulseUnavailable(c);
-          if (base) return base;
-          // Encourage aggregates when mega but still allow toggle if built.
-          return null;
+          if (!base) return null;
+          if (c.simScale === 'micro') {
+            return `Pulse optional at micro scale — ${base}`;
+          }
+          if (c.megaSim || c.simScale === 'macro') {
+            return `Macro scale prefers pulse — ${base}`;
+          }
+          return base;
         },
       },
       { key: 'buildings', label: '3D Buildings' },
@@ -239,11 +247,12 @@ export function visibleLayerGroups(ctx: LayerAvailabilityContext): LayerGroup[] 
     .filter(g => g.layers.length > 0);
 }
 
-export type LayerPresetId = 'trails' | 'network' | 'cinematic' | 'mega';
+export type LayerPresetId = 'trails' | 'network' | 'cinematic' | 'mega' | 'macro' | 'micro';
 
 /** One-click layer recipes. Network keeps origins/destinations — some
  *  datasets are trips-only (no waypoints) and those layers ARE the map.
- *  Mega = arcs + pulse (hide trails) for sims ≫1M agents. */
+ *  Macro/Mega = arcs + pulse (hide trails) for city/region sims.
+ *  Micro = fine trails + agents (no forced pulse). */
 export const LAYER_PRESETS: Record<LayerPresetId, {
   label: string;
   visibility: Record<string, boolean>;
@@ -276,6 +285,27 @@ export const LAYER_PRESETS: Record<LayerPresetId, {
       linkDensity: false, odFlows: false, density: false, footfall: false,
     },
   },
+  micro: {
+    label: 'Micro (trails)',
+    visibility: {
+      trajectories: true, origins: true, destinations: true,
+      sourceArcs: true, pulse: false, agents: true, pois: true, zones: true,
+      linkDensity: false, odFlows: false, density: false, buildings: false,
+      footfall: false, speedSegments: false, dwellMarkers: false,
+      clusters: false, compareGrid: false,
+    },
+  },
+  macro: {
+    label: 'Macro (arcs+pulse)',
+    visibility: {
+      trajectories: false, origins: true, destinations: true,
+      sourceArcs: true, pulse: true, agents: true, pois: true, zones: true,
+      linkDensity: false, odFlows: false, density: false, buildings: false,
+      footfall: false, speedSegments: false, dwellMarkers: false,
+      clusters: false, compareGrid: false,
+    },
+  },
+  // Alias of macro — kept so existing Mega preset buttons / tests keep working.
   mega: {
     label: 'Mega (arcs+pulse)',
     visibility: {

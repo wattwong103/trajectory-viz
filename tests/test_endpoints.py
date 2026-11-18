@@ -163,16 +163,19 @@ def test_stats_filter_options(client):
     assert caps.get("schema_version") == "0.3"
     assert "has_legs" in caps
     assert isinstance(caps["attr_keys"], list)
-    # Mega-sim LOD scale estimates (fixture is below threshold → standard)
+    # Scale LOD estimates (fixture is tiny → micro, not macro)
     assert isinstance(caps.get("agent_count"), int)
     assert isinstance(caps.get("trip_count"), int)
     assert isinstance(caps.get("waypoint_count"), int)
     assert caps["agent_count"] >= 1
     assert caps["mega_sim"] is False
-    assert caps["scale"] == "standard"
+    assert caps["scale"] == "micro"
+    assert caps.get("scale_source") == "auto"
     assert caps["trails_default"] is True
+    assert caps["recommended_default_forms"] == ["trails", "agents"]
     assert "lod" in caps
     assert caps["lod"]["trails_override_allowed"] is True
+    assert caps["lod"].get("aggregate_first") is False
     assert isinstance(caps.get("fix_its"), list)
     assert "modes" in body
     assert len(body["modes"]) >= 1
@@ -352,8 +355,9 @@ def test_mega_sim_capabilities_and_sample_cap(client, monkeypatch):
 
     caps = client.get("/api/stats/filter-options").json()["capabilities"]
     assert caps["mega_sim"] is True
-    assert caps["scale"] == "mega"
+    assert caps["scale"] == "macro"
     assert caps["recommended_default_forms"] == ["arcs", "pulse"]
+    assert caps["lod"].get("aggregate_first") is True
     assert caps["trails_default"] is False
     assert caps["lod"]["trajectory_sample_cap"] == lod.TRAJECTORY_RENDER_CAP
     assert caps["lod"]["agent_threshold"] == 1

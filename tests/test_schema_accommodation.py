@@ -55,6 +55,7 @@ def _sources_file(source: dict, **extra) -> SourcesFile:
         "sources-matsim.yaml",
         "sources-sumo-fcd.yaml",
         "sources-od-arcs.yaml",
+        "sources-evacuation-micro.yaml",
         "sources-phone-gps.yaml",
         "sources-joras-v3.yaml",
     ],
@@ -63,6 +64,13 @@ def test_example_yaml_validates(name):
     sf = load_sources(EXAMPLES / name)
     assert sf.version == 1
     assert len(sf.sources) >= 1
+
+
+def test_scale_example_overrides():
+    micro = load_sources(EXAMPLES / "sources-evacuation-micro.yaml")
+    assert micro.scale == "micro"
+    macro = load_sources(EXAMPLES / "sources-od-arcs.yaml")
+    assert macro.scale == "macro"
 
 
 def test_registry_mode_maps_present():

@@ -240,6 +240,30 @@ def test_same_anchor_everywhere_accepted():
     assert sf.time.epoch_anchor == anchor
 
 
+def test_sources_file_scale_override_accepted():
+    for label in ("micro", "meso", "macro", "mega", "standard"):
+        sf = SourcesFile.model_validate({
+            "version": 1,
+            "scale": label,
+            "sources": {"a": POINTS_ONLY_SOURCE},
+        })
+        assert sf.scale == label
+    # Omitted → None (auto-detect at runtime).
+    sf2 = SourcesFile.model_validate({
+        "version": 1, "sources": {"a": POINTS_ONLY_SOURCE},
+    })
+    assert sf2.scale is None
+
+
+def test_sources_file_bad_scale_rejected():
+    with pytest.raises(ValidationError):
+        SourcesFile.model_validate({
+            "version": 1,
+            "scale": "planet",
+            "sources": {"a": POINTS_ONLY_SOURCE},
+        })
+
+
 def test_naive_anchor_rejected():
     source = {**POINTS_ONLY_SOURCE, "time": {"epoch_anchor": "2024-05-01T00:00:00"}}
     with pytest.raises(ValidationError, match="timezone-aware"):

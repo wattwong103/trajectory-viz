@@ -1,12 +1,18 @@
 # Example sources.yaml for trips-only OD CSV → render.mode: arcs.
 #
 # No trajectories_glob: the dashboard draws time-windowed OD arcs from trip
-# endpoints. Ideal for mega-sim / zone OD dumps where full trails are too heavy.
+# endpoints. Ideal for macro (city/region) / mega-sim zone OD dumps where full
+# trails are too heavy. `scale: macro` makes aggregate-first defaults explicit
+# even when agent counts are below the auto-detect threshold.
+#
+# Prefer building density_hourly (and link/mesh aggregates when available):
+#   python -m backend.ingest --aggregates-only
 #
 # Validate:
 #   python -m backend.sources_schema --validate docs/examples/sources-od-arcs.yaml
 
 version: 1
+scale: macro
 
 sources:
   od-zone-flows:

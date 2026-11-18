@@ -393,6 +393,15 @@ def _registry_mode_map() -> dict[str, str]:
     return merge_mode_maps([src.mode_map for src in sources_file.sources.values()])
 
 
+def _scale_override_from_sources() -> str | None:
+    """Optional top-level ``scale:`` from the active sources registry."""
+    try:
+        sources_file = load_sources_merged(default_sources_path())
+    except Exception:
+        return None
+    return getattr(sources_file, "scale", None)
+
+
 def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dict:
     """Inferred dataset capabilities for form availability (Phase A/C + LOD).
 
@@ -400,8 +409,10 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
     at least one non-null value exists (hide-when-empty posture). No JSON
     attrs migration (Phase C locked decision).
 
-    Mega-sim LOD (survey §5–6): agent_count / waypoint_count drive scale
-    classification; when mega, recommended defaults are arcs + pulse.
+    Simulation scale (TV-16): capabilities.scale ∈ {micro, meso, macro}
+    from agent/waypoint estimates, with optional sources.yaml ``scale:``
+    override. Macro aligns with mega-sim LOD (#18); mega_sim stays a
+    boolean alias when scale is macro.
     """
     from ..db import get_schema_version
     from ..lod import lod_capability_block
@@ -467,8 +478,7 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
         "agent_id_column": "agent_id",
         "schema_version": get_schema_version(conn),
     }
-    # Mega-sim LOD (TV-15): scale class, recommended forms, fix_its, and
-    # trip_count / waypoint_count / agent_count estimates.
+    # Scale LOD (TV-16): micro/meso/macro + recommended forms / fix_its.
     caps.update(
         lod_capability_block(
             agent_count=agent_count or 0,
@@ -477,6 +487,7 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
             has_density_hourly=has_density_hourly,
             has_trajectories=has_trajectories,
             has_trips=has_trips,
+            scale_override=_scale_override_from_sources(),
         )
     )
     return caps
