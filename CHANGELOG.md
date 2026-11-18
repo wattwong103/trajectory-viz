@@ -12,6 +12,8 @@ All notable changes to **trajectory-viz** are documented in this file. Format is
 
 ### Changed
 
+- **Registry path redaction (TV-23).** `inspect_registry` / `filter-options.registry` returns repo-relative, `~/…`, or ellipsis path forms (and env-var Fix-it args when `TRAJECTORY_VIZ_SOURCES` / `OUTPUT_ROOT` are set) so absolute host FS paths are not exposed on LAN/Docker while Fix-it commands stay pasteable. FE `RegistryIssues` display updated for the new shapes.
+
 - **Export / share polish (TV-8).** `viz-export` respects Phase D `forms:` on presets (gates pulse / buildings / agents); size-gate failures list actionable shrink steps; `--engine minimal` was reserved then implemented in TV-20 (default remains deck.gl). `scripts/fetch_vendor.py` ships a real pinned SHA-256 (one-command fetch). Docs: vendor-fetch prerequisite, preset gallery, shareable URL hash table. README / QUICKSTART / CONTRIBUTING / EXPORT aligned.
 
 - **Docs/reality sync (TV-4).** README / QUICKSTART / ARCHITECTURE / DATA_FORMATS / CONTRIBUTING aligned with shipped main after #12–#20: accurate ~320 pytest + ~150 vitest counts; demo/universal + Docker one-URL as the default path (no PFLOW-first surprise); DuckDB documented as a module-level singleton with performance budgets living in ARCHITECTURE + CONTRIBUTING (no cite of absent `.claude/rules`); `modes=` preferred over int `transport_modes=`; `TRAJECTORY_VIZ_DB` / `TRAJECTORY_VIZ_OUTPUT_ROOT` as canonical env names; GUFM path points at `profiles/gufm/sources.yaml`; universal-forms vocabulary + profile links surfaced from README / DATA_FORMATS / CONTRIBUTING.

@@ -21,7 +21,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import backend.db  # noqa: E402
 from backend.app import app  # noqa: E402
 from backend.db import _init_schema  # noqa: E402
-from backend.sources_schema import inspect_registry, load_sources  # noqa: E402
+from backend.sources_schema import (  # noqa: E402
+    _cli_path_arg,
+    _safe_display_path,
+    inspect_registry,
+    load_sources,
+)
 
 _ENV_KEYS = (
     "PFLOW_VIZ_DB",
@@ -56,6 +61,56 @@ def clean_env(monkeypatch, tmp_path):
         os.environ.pop(key, None)
 
 
+def _assert_no_absolute_leak(text: str | None) -> None:
+    """Registry API strings must not expose absolute host paths."""
+    if text is None:
+        return
+    assert not text.startswith("/"), text
+    # Windows drive letter (C:\… / C:/…).
+    assert not (len(text) >= 3 and text[1] == ":" and text[2] in "/\\"), text
+    home = str(Path.home().resolve())
+    assert home not in text, text
+    assert str(PROJECT_ROOT.resolve()) not in text, text
+
+
+def _assert_registry_redacted(status: dict) -> None:
+    _assert_no_absolute_leak(status.get("path"))
+    _assert_no_absolute_leak(status.get("output_root"))
+    for issue in status.get("issues") or []:
+        _assert_no_absolute_leak(issue.get("message"))
+        _assert_no_absolute_leak(issue.get("fix_it"))
+
+
+def test_safe_display_path_repo_home_and_ellipsis(tmp_path, monkeypatch):
+    repo_file = PROJECT_ROOT / "demo" / "sources.demo.yaml"
+    assert _safe_display_path(repo_file) == "demo/sources.demo.yaml"
+
+    home_file = Path.home() / "tv-redact-test-sources.yaml"
+    assert _safe_display_path(home_file) == "~/tv-redact-test-sources.yaml"
+
+    deep = tmp_path / "a" / "b" / "c" / "d" / "bad.csv"
+    deep.parent.mkdir(parents=True)
+    deep.write_text("x", encoding="utf-8")
+    shown = _safe_display_path(deep)
+    assert shown is not None
+    assert shown.startswith("…/"), shown
+    assert shown.endswith("c/d/bad.csv") or shown.endswith("bad.csv")
+    _assert_no_absolute_leak(shown)
+
+
+def test_cli_path_arg_prefers_env_var(tmp_path, monkeypatch):
+    src = tmp_path / "custom-sources.yaml"
+    src.write_text("version: 1\nsources: {}\n", encoding="utf-8")
+    monkeypatch.setenv("TRAJECTORY_VIZ_SOURCES", str(src))
+    assert _cli_path_arg(src, env_keys=("TRAJECTORY_VIZ_SOURCES",)) == (
+        '"$TRAJECTORY_VIZ_SOURCES"'
+    )
+    monkeypatch.delenv("TRAJECTORY_VIZ_SOURCES", raising=False)
+    # Outside repo/home → ellipsis display form (still no absolute leak).
+    shown = _cli_path_arg(src, env_keys=("TRAJECTORY_VIZ_SOURCES",))
+    _assert_no_absolute_leak(shown)
+
+
 def test_inspect_registry_ok_for_demo(clean_env, monkeypatch):
     """Healthy demo registry + empty DB may warn on discovery, but not error
     when demo files are present under demo/."""
@@ -65,6 +120,9 @@ def test_inspect_registry_ok_for_demo(clean_env, monkeypatch):
     assert status["ok"] is True
     assert status["profile"] == "demo"
     assert status["path"] is not None
+    assert status["path"] == "demo/sources.demo.yaml"
+    _assert_no_absolute_leak(status["path"])
+    _assert_no_absolute_leak(status.get("output_root"))
     assert status["source_count"] >= 1
     assert all(i["severity"] != "error" for i in status["issues"])
 
@@ -92,6 +150,9 @@ def test_inspect_registry_schema_invalid(clean_env, monkeypatch, tmp_path):
     issue = next(i for i in status["issues"] if i["code"] == "schema_invalid")
     assert "fix_it" in issue
     assert "--validate" in issue["fix_it"]
+    # Env-backed path → Fix-it uses the var (usable) without leaking abs path.
+    assert '"$TRAJECTORY_VIZ_SOURCES"' in issue["fix_it"]
+    _assert_registry_redacted(status)
 
 
 def test_inspect_registry_yaml_parse(clean_env, monkeypatch, tmp_path):
@@ -101,6 +162,7 @@ def test_inspect_registry_yaml_parse(clean_env, monkeypatch, tmp_path):
     status = inspect_registry(None)
     assert status["ok"] is False
     assert any(i["code"] == "yaml_parse" for i in status["issues"])
+    _assert_registry_redacted(status)
 
 
 def test_inspect_registry_missing_file(clean_env, monkeypatch, tmp_path):
@@ -109,6 +171,7 @@ def test_inspect_registry_missing_file(clean_env, monkeypatch, tmp_path):
     status = inspect_registry(None)
     assert status["ok"] is False
     assert any(i["code"] == "sources_missing" for i in status["issues"])
+    _assert_registry_redacted(status)
 
 
 def test_inspect_registry_discovery_empty(clean_env, monkeypatch, tmp_path):
@@ -154,6 +217,9 @@ def test_inspect_registry_discovery_empty(clean_env, monkeypatch, tmp_path):
     assert "discovery_empty" in codes
     issue = next(i for i in status["issues"] if i["code"] == "discovery_empty")
     assert "--discovery" in issue["fix_it"]
+    assert '"$TRAJECTORY_VIZ_SOURCES"' in issue["fix_it"]
+    assert '"$TRAJECTORY_VIZ_OUTPUT_ROOT"' in issue["fix_it"]
+    _assert_registry_redacted(status)
 
 
 def test_inspect_registry_skips_discovery_when_trips_exist(
@@ -222,7 +288,7 @@ def test_inspect_registry_uncovered_and_ingest_failed(clean_env, monkeypatch, tm
     )
     conn.execute(
         """INSERT INTO ingest_log (file_path, table_name, row_count)
-           VALUES ('/tmp/bad.csv', 'trips', -1)"""
+           VALUES ('/secret/path/bad.csv', 'trips', -1)"""
     )
     status = inspect_registry(conn)
     conn.close()
@@ -231,6 +297,10 @@ def test_inspect_registry_uncovered_and_ingest_failed(clean_env, monkeypatch, tm
     assert "ingest_failed" in codes
     uncovered = next(i for i in status["issues"] if i["code"] == "uncovered_sources")
     assert "ghost-fleet" in uncovered["message"]
+    ingest = next(i for i in status["issues"] if i["code"] == "ingest_failed")
+    assert "/secret/path/bad.csv" not in ingest["message"]
+    assert "bad.csv" in ingest["message"]
+    _assert_registry_redacted(status)
 
 
 def test_filter_options_includes_registry(clean_env, monkeypatch):
@@ -249,6 +319,8 @@ def test_filter_options_includes_registry(clean_env, monkeypatch):
     assert "issues" in reg
     assert isinstance(reg["issues"], list)
     assert reg.get("profile") in (None, "demo") or isinstance(reg.get("profile"), str)
+    assert reg.get("path") == "demo/sources.demo.yaml"
+    _assert_registry_redacted(reg)
 
 
 def test_filter_options_surfaces_uncovered_in_registry(clean_env, monkeypatch):

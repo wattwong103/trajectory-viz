@@ -96,8 +96,11 @@ function issueKey(issue: RegistryIssue): string {
   return `${issue.code}:${issue.source_key ?? ''}:${issue.message}`;
 }
 
+/** Display helper — API already redacts to repo-relative / ~/ / ellipsis. */
 function shortPath(path: string): string {
-  const parts = path.replace(/\\/g, '/').split('/');
+  // Already truncated by the backend (…/a/b/c) or short relative/~ form.
+  if (path.startsWith('…/') || path.startsWith('~/')) return path;
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
   if (parts.length <= 3) return path;
   return `…/${parts.slice(-3).join('/')}`;
 }
