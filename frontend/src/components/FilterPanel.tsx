@@ -654,13 +654,33 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                     key={id}
                     onClick={() => onApplyPreset(LAYER_PRESETS[id].visibility)}
                     style={styles.presetBtn}
-                    title={id === 'network'
-                      ? 'Polylines when trajectories exist; origins/destinations/arcs always stay on'
-                      : undefined}
+                    title={
+                      id === 'network'
+                        ? 'Polylines when trajectories exist; origins/destinations/arcs always stay on'
+                        : id === 'mega'
+                          ? 'Mega-sim default: O-D arcs + pulse heatmap (trails hidden; re-enable Trajectories to override)'
+                          : undefined
+                    }
                   >
                     {LAYER_PRESETS[id].label}
                   </button>
                 ))}
+              </div>
+            )}
+            {layerAvailability.megaSim && (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: '#5a6a7a',
+                  marginBottom: 6,
+                  lineHeight: 1.35,
+                }}
+                title={(filterOptions?.capabilities?.fix_its ?? []).join('\n')}
+              >
+                Mega-sim LOD: arcs + pulse by default
+                {filterOptions?.capabilities?.agent_count != null
+                  ? ` (${filterOptions.capabilities.agent_count.toLocaleString()} agents)`
+                  : ''}. Toggle Trajectories to override.
               </div>
             )}
             {layerGroups.map(group => (

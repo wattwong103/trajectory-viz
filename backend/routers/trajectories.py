@@ -170,6 +170,20 @@ def _rows_to_trajectories(
 # backend/trajectory_queries.py (Phase 2D) — shared with the HTML exporter.
 
 
+def _dataset_is_mega(conn) -> bool:
+    """Cheap mega-sim check from row estimates (same thresholds as capabilities)."""
+    from ..lod import is_mega_sim
+
+    wp = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] or 0
+    try:
+        agents = conn.execute(
+            "SELECT COUNT(DISTINCT vehicle_key) FROM trips"
+        ).fetchone()[0] or 0
+    except Exception:
+        agents = 0
+    return is_mega_sim(agents, wp)
+
+
 @router.get("/trajectories/sample")
 async def sample_trajectories(
     n: int = Query(100, ge=1, le=5000),
@@ -184,22 +198,37 @@ async def sample_trajectories(
 
     Shared TripFilters (hour/goods/F1/mode/scenario + Phase A source_id) are
     trip-granular — OD-only sources simply contribute no rows.
+
+    Mega-sim: requested ``n`` is clamped to the render budget (500).
     """
+    from ..lod import TRAJECTORY_RENDER_CAP, clamp_trajectory_sample_n
+
     conn = get_connection()
+    mega = _dataset_is_mega(conn)
+    n_eff, capped = clamp_trajectory_sample_n(n, mega)
     vtype = f.effective_source_id()
     rows = sample_waypoint_rows(
-        conn, n, vtype, f.city, f.simulation_day,
+        conn, n_eff, vtype, f.city, f.simulation_day,
         f.transport_mode_list(),
         scenario_clause=f.scenario_clause(),
         trip_where=f.where() or None,
     )
     if not rows:
-        return TrajectoryResponse(trajectories=[], count=0)
+        return TrajectoryResponse(
+            trajectories=[], count=0,
+            capped=capped,
+            sample_cap=TRAJECTORY_RENDER_CAP if mega else None,
+        )
     trajectories = _rows_to_trajectories(
         rows, vtype, include_segments=include_segments,
         anchor_sec=get_epoch_anchor(conn),
     )
-    return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
+    return TrajectoryResponse(
+        trajectories=trajectories,
+        count=len(trajectories),
+        capped=capped,
+        sample_cap=TRAJECTORY_RENDER_CAP if mega else None,
+    )
 
 
 # Phase 2A — agent selection. vehicle_key format: '<source>:<rest>' where rest
@@ -266,8 +295,14 @@ async def query_trajectories_bbox(q: BBoxQuery):
 
     city and simulation_day are applied by filtering on trips.vehicle_id,
     since those columns live on trips (not waypoints).
+
+    Mega-sim: ``limit`` is clamped to the render budget (500).
     """
+    from ..lod import TRAJECTORY_RENDER_CAP, clamp_trajectory_sample_n
+
     conn = get_connection()
+    mega = _dataset_is_mega(conn)
+    limit_eff, capped = clamp_trajectory_sample_n(q.limit, mega)
     vtype = q.effective_source_id()
 
     vtype_filter = f"AND vehicle_type = '{vtype}'" if vtype else ""
@@ -281,18 +316,27 @@ async def query_trajectories_bbox(q: BBoxQuery):
           AND lat BETWEEN {q.min_lat} AND {q.max_lat}
           {vtype_filter}
           {scope_filter}
-        LIMIT {q.limit}
+        LIMIT {int(limit_eff)}
     """).fetchall()
 
     if not matched:
-        return TrajectoryResponse(trajectories=[], count=0)
+        return TrajectoryResponse(
+            trajectories=[], count=0,
+            capped=capped,
+            sample_cap=TRAJECTORY_RENDER_CAP if mega else None,
+        )
 
     rows = _fetch_full_trajectories(conn, matched)
     trajectories = _rows_to_trajectories(
         rows, vtype, include_segments=q.include_segments,
         anchor_sec=get_epoch_anchor(conn),
     )
-    return TrajectoryResponse(trajectories=trajectories, count=len(trajectories))
+    return TrajectoryResponse(
+        trajectories=trajectories,
+        count=len(trajectories),
+        capped=capped,
+        sample_cap=TRAJECTORY_RENDER_CAP if mega else None,
+    )
 
 
 def _waypoint_scope_filter(q) -> str:

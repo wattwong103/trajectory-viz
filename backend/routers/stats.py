@@ -390,16 +390,26 @@ def _registry_mode_map() -> dict[str, str]:
 
 
 def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dict:
-    """Inferred dataset capabilities for form availability (Phase A/C).
+    """Inferred dataset capabilities for form availability (Phase A/C + LOD).
 
     Lab attr columns stay sparse/nullable — listed in attr_keys only when
     at least one non-null value exists (hide-when-empty posture). No JSON
     attrs migration (Phase C locked decision).
+
+    Mega-sim LOD (survey §5–6): agent_count / waypoint_count drive scale
+    classification; when mega, recommended defaults are arcs + pulse.
     """
     from ..db import get_schema_version
+    from ..lod import lod_capability_block
 
     wp_count = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
     trip_count = conn.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
+    try:
+        agent_count = conn.execute(
+            "SELECT COUNT(DISTINCT vehicle_key) FROM trips"
+        ).fetchone()[0]
+    except Exception:
+        agent_count = 0
     try:
         density_count = conn.execute("SELECT COUNT(*) FROM density_hourly").fetchone()[0]
     except Exception:
@@ -427,10 +437,13 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
         if n and n > 0:
             attr_keys.append(col)
 
-    return {
-        "has_trips": trip_count > 0,
-        "has_trajectories": wp_count > 0,
-        "has_density_hourly": density_count > 0,
+    has_trips = trip_count > 0
+    has_trajectories = wp_count > 0
+    has_density_hourly = density_count > 0
+    caps = {
+        "has_trips": has_trips,
+        "has_trajectories": has_trajectories,
+        "has_density_hourly": has_density_hourly,
         "has_modes": len(transport_modes) > 0 or string_mode_count > 0,
         "attr_keys": attr_keys,
         # agent_key is the public name for vehicle_key (physical rename deferred).
@@ -438,6 +451,17 @@ def _dataset_capabilities(conn, transport_modes: list, goods_types: list) -> dic
         "agent_id_column": "agent_id",
         "schema_version": get_schema_version(conn),
     }
+    caps.update(
+        lod_capability_block(
+            agent_count=agent_count or 0,
+            trip_count=trip_count or 0,
+            waypoint_count=wp_count or 0,
+            has_density_hourly=has_density_hourly,
+            has_trajectories=has_trajectories,
+            has_trips=has_trips,
+        )
+    )
+    return caps
 
 
 def _source_styles(conn) -> list[dict]:

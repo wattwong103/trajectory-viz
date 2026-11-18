@@ -551,8 +551,18 @@ def ingest_source_trajectories(
     source_key: str,
     src: SourceConfig,
     epoch_anchor: int | None = None,
+    *,
+    max_waypoints_per_trip: int | None = None,
+    waypoint_sample_frac: float | None = None,
 ) -> int:
-    """Ingest one source's trajectory file (any format). Returns rows inserted."""
+    """Ingest one source's trajectory file (any format). Returns rows inserted.
+
+    Optional mega-sim LOD caps (survey §5): ``max_waypoints_per_trip`` keeps
+    evenly spaced points per (agent, trip); ``waypoint_sample_frac`` thins
+    rows by deterministic hash. Both default off (full load for small data).
+    """
+    from .lod import downsample_waypoints_sql
+
     if src.columns.waypoints is None:
         return 0
     scope_value = src.discovery.scope.value if src.discovery.scope else None
@@ -567,12 +577,13 @@ def ingest_source_trajectories(
         conn, csv_path, fmt, coord_times_prop=coord_times_prop
     )
 
-    sql = f"""
-        INSERT INTO waypoints ({columns_list})
-        SELECT
-            {select_clause}
-        FROM {table_expr}
-    """
+    sql = downsample_waypoints_sql(
+        select_clause,
+        table_expr,
+        columns_list,
+        max_waypoints_per_trip=max_waypoints_per_trip,
+        sample_frac=waypoint_sample_frac,
+    )
 
     before = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0]
     try:
@@ -1137,7 +1148,34 @@ def main() -> None:
             "Use after upgrading to Phase 2B without a full re-ingest."
         ),
     )
+    parser.add_argument(
+        "--skip-waypoints", action="store_true",
+        help=(
+            "Mega-sim: ingest trips (and aggregates later) but skip trajectory "
+            "files — use arcs + pulse instead of full trails."
+        ),
+    )
+    parser.add_argument(
+        "--max-waypoints-per-trip", type=int, default=None, metavar="N",
+        help=(
+            "Mega-sim LOD: keep at most N evenly spaced waypoints per "
+            "(agent, trip). Omit for a full load (small datasets)."
+        ),
+    )
+    parser.add_argument(
+        "--waypoint-sample-frac", type=float, default=None, metavar="FRAC",
+        help=(
+            "Mega-sim LOD: keep approximately FRAC of waypoint rows "
+            "(0 < FRAC ≤ 1) via deterministic hash sampling."
+        ),
+    )
     args = parser.parse_args()
+    if args.waypoint_sample_frac is not None and not (
+        0.0 < float(args.waypoint_sample_frac) <= 1.0
+    ):
+        parser.error("--waypoint-sample-frac must be in (0, 1]")
+    if args.max_waypoints_per_trip is not None and int(args.max_waypoints_per_trip) < 1:
+        parser.error("--max-waypoints-per-trip must be ≥ 1")
 
     # Apply CLI overrides to env before config functions are called.
     if args.pflow_home:
@@ -1274,32 +1312,48 @@ def main() -> None:
                     _log_failure(csv_path.parent / src.discovery.validation_relative,
                                  "validation_runs", e)
 
-        # Trajectories
+        # Trajectories (optional mega-sim skip / downsample)
         if src.discovery.trajectories_glob:
-            traj_csvs = discover_csvs(
-                src.discovery.trajectories_glob, output_dir,
-                latest_only=src.discovery.latest_only,
-            )
-            if not traj_csvs:
-                print(f"  [TRAJ] no matches for glob: {src.discovery.trajectories_glob}")
-            for csv_path in traj_csvs:
-                print(f"  [traj]  {csv_path}", end=" ... ", flush=True)
-                t = time.time()
-                try:
-                    n = ingest_source_trajectories(
-                        conn, csv_path, source_key, src, anchor_sec
-                    )
-                    total_waypoints += n
-                    src_waypoints += n
-                    src_traj_files += 1
-                    print(f"{n:,} rows ({time.time()-t:.1f}s)")
-                    conn.execute(
-                        "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'waypoints', ?)",
-                        [str(csv_path), n],
-                    )
-                except Exception as e:
-                    print(f"ERROR: {type(e).__name__}: {e}")
-                    _log_failure(csv_path, "waypoints", e)
+            if args.skip_waypoints:
+                print(
+                    "  [TRAJ] skipped (--skip-waypoints); "
+                    "prefer arcs + density_hourly for mega-sims"
+                )
+            else:
+                traj_csvs = discover_csvs(
+                    src.discovery.trajectories_glob, output_dir,
+                    latest_only=src.discovery.latest_only,
+                )
+                if not traj_csvs:
+                    print(f"  [TRAJ] no matches for glob: {src.discovery.trajectories_glob}")
+                lod_note = ""
+                if args.max_waypoints_per_trip or args.waypoint_sample_frac:
+                    parts = []
+                    if args.max_waypoints_per_trip:
+                        parts.append(f"max/trip={args.max_waypoints_per_trip}")
+                    if args.waypoint_sample_frac:
+                        parts.append(f"frac={args.waypoint_sample_frac}")
+                    lod_note = f" [LOD {' '.join(parts)}]"
+                for csv_path in traj_csvs:
+                    print(f"  [traj]  {csv_path}{lod_note}", end=" ... ", flush=True)
+                    t = time.time()
+                    try:
+                        n = ingest_source_trajectories(
+                            conn, csv_path, source_key, src, anchor_sec,
+                            max_waypoints_per_trip=args.max_waypoints_per_trip,
+                            waypoint_sample_frac=args.waypoint_sample_frac,
+                        )
+                        total_waypoints += n
+                        src_waypoints += n
+                        src_traj_files += 1
+                        print(f"{n:,} rows ({time.time()-t:.1f}s)")
+                        conn.execute(
+                            "INSERT INTO ingest_log (file_path, table_name, row_count) VALUES (?, 'waypoints', ?)",
+                            [str(csv_path), n],
+                        )
+                    except Exception as e:
+                        print(f"ERROR: {type(e).__name__}: {e}")
+                        _log_failure(csv_path, "waypoints", e)
 
         # Trip synthesis for points-only sources
         if src.trips_synthesis is not None and src_waypoints > 0:
@@ -1395,6 +1449,39 @@ def main() -> None:
         except Exception as e:
             print(f"[AGGREGATES] ERROR: {type(e).__name__}: {e}")
             errors.append(("(build_density_hourly)", "density_hourly", f"{type(e).__name__}: {e}"))
+
+    # Mega-sim LOD advisory (survey §5–6) — non-fatal operator hints.
+    try:
+        from .lod import (
+            AGGREGATES_FIXIT,
+            MEGA_AGENT_THRESHOLD,
+            MEGA_WAYPOINT_THRESHOLD,
+            WAYPOINT_SAMPLE_FIXIT,
+            is_mega_sim,
+        )
+        agents = conn.execute(
+            "SELECT COUNT(DISTINCT vehicle_key) FROM trips"
+        ).fetchone()[0] or 0
+        wp_total = conn.execute("SELECT COUNT(*) FROM waypoints").fetchone()[0] or 0
+        dens = 0
+        try:
+            dens = conn.execute("SELECT COUNT(*) FROM density_hourly").fetchone()[0] or 0
+        except Exception:
+            dens = 0
+        if is_mega_sim(agents, wp_total):
+            print(f"\n[LOD] Mega-sim scale detected "
+                  f"(agents={agents:,} ≥ {MEGA_AGENT_THRESHOLD:,} or "
+                  f"waypoints={wp_total:,} ≥ {MEGA_WAYPOINT_THRESHOLD:,}).")
+            print("      UI defaults to arcs + pulse; trails remain via user override.")
+            if dens == 0:
+                print(f"      Build pulse aggregate: {AGGREGATES_FIXIT}")
+            if wp_total >= MEGA_WAYPOINT_THRESHOLD and not (
+                args.skip_waypoints or args.max_waypoints_per_trip
+                or args.waypoint_sample_frac
+            ):
+                print(f"      Next ingest, thin trails: {WAYPOINT_SAMPLE_FIXIT}")
+    except Exception as e:
+        print(f"[LOD] scale check skipped: {type(e).__name__}: {e}")
 
     elapsed = time.time() - start
     print(f"\n{'=' * 64}")

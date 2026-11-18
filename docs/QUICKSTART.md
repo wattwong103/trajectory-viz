@@ -195,6 +195,8 @@ pre-midnight starttimes (the animation wraps them mod-86400).
 
 The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom Python ABM) is a config change, not a code change — and as of universal-trajectory support, the inputs can be CSV, GeoJSON, GPX, NDJSON, or Parquet (points-only sources get trips synthesized at ingest). See [CONTRIBUTING.md → Adding a source](CONTRIBUTING.md#adding-a-new-abm-source) for the step-by-step, [DATA_FORMATS.md](DATA_FORMATS.md) for the per-format cookbook, and [docs/examples/sources-matsim.yaml](examples/sources-matsim.yaml) for a worked MATSim config.
 
+**Mega-sims (≫1M agents):** ingest trips (+ `density_hourly`), skip or thin waypoints — see [DATA_FORMATS.md §8](DATA_FORMATS.md#8-mega-sim-ingest-trips--aggregates-first). The UI auto-switches to arcs + pulse; re-enable Trajectories to override.
+
 ---
 
 ## Troubleshooting
@@ -202,6 +204,7 @@ The whole point of v0.2 is that adding a new ABM (e.g. MATSim, SUMO, or a custom
 | Symptom | Fix |
 |---|---|
 | Dashboard shows a red "Backend unreachable" overlay | The frontend is up but the API isn't (or `PFLOW_VIZ_DB` points nowhere). Start the backend (`trajectory-viz-serve` or `npm run dev`, which launches both), then hit ↻ Retry. |
+| Layers default to arcs + pulse / trails off | Dataset is over the mega-sim threshold (~1M agents or ~10M waypoints). Expected — toggle **Trajectories** or the Trails preset to override; build pulse with `python -m backend.ingest --aggregates-only` if the Pulse layer is disabled. |
 | Map shows fleets without labels/colors, Compare tab lists cryptic ids | `PFLOW_VIZ_SOURCES` points at the wrong registry for the DB (e.g. demo registry while serving `gufm.duckdb`). The backend also prints a `[WARN] ... have no entry in the sources registry` line naming the culprits. For GUFM data use `./start-gufm-viz.sh` (or the `.bat`). |
 | `npm run dev` errors with `'vite' is not recognized` | `node_modules/` was synced from a different OS. `rm -rf frontend/node_modules && cd frontend && npm install`. |
 | Backend starts but `/api/stats/filter-options` returns empty arrays | DuckDB exists but no data ingested. Run `trajectory-viz-ingest --reset` (see *Ingest data* above). |
