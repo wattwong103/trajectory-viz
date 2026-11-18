@@ -2,123 +2,20 @@
  * Smoke tests for filter state encoding/decoding (Phase 3 Step 3.3).
  *
  * The URL hash round-trip is load-bearing for shareable dashboard links.
- * Specifically: changing the FilterState shape (Phase 2 added F1 dims) without
- * updating encodeHash/decodeHash would silently lose filter state on copy-paste.
+ * Tests import the real codec from filterHash (extracted from App).
  */
 import { describe, it, expect } from 'vitest';
-
-// Mirror of App.tsx's encodeHash/decodeHash. Tests live separately so a
-// change to App.tsx's filter shape forces a corresponding test edit — the
-// failing test is the alarm.
-type FilterState = {
-  vehicleType: string;
-  minHour: number;
-  maxHour: number;
-  goodsType?: string;
-  city?: string;
-  simulationDay?: number;
-  minSpeed?: number;
-  maxSpeed?: number;
-  maxDwellMinutes?: number;
-  minDetourRatio?: number;
-  maxDetourRatio?: number;
-  transportModes?: number[];
-  colorBy?: 'source' | 'transportMode';
-  scenario?: { type: 'pedestrianize'; bbox: { w: number; s: number; e: number; n: number } };
-};
-
-const DEFAULT_FILTER: FilterState = {
-  vehicleType: '',
-  minHour: 0,
-  maxHour: 23,
-};
-
-function numParam(params: URLSearchParams, key: string): number | undefined {
-  const v = params.get(key);
-  if (v === null) return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-function encodeHash(filter: FilterState): string {
-  const parts: string[] = [];
-  // TEMP: keep hash key `vt=` (encodes source_id). Rename to `sid=` later.
-  if (filter.vehicleType) parts.push(`vt=${filter.vehicleType}`);
-  if (filter.city) parts.push(`city=${encodeURIComponent(filter.city)}`);
-  if (filter.simulationDay !== undefined) parts.push(`day=${filter.simulationDay}`);
-  if (filter.minHour !== 0) parts.push(`minh=${filter.minHour}`);
-  if (filter.maxHour !== 23) parts.push(`maxh=${filter.maxHour}`);
-  if (filter.goodsType) parts.push(`gt=${encodeURIComponent(filter.goodsType)}`);
-  if (filter.minSpeed !== undefined) parts.push(`ms=${filter.minSpeed}`);
-  if (filter.maxSpeed !== undefined) parts.push(`xs=${filter.maxSpeed}`);
-  if (filter.maxDwellMinutes !== undefined) parts.push(`xd=${filter.maxDwellMinutes}`);
-  if (filter.minDetourRatio !== undefined) parts.push(`mr=${filter.minDetourRatio}`);
-  if (filter.maxDetourRatio !== undefined) parts.push(`xr=${filter.maxDetourRatio}`);
-  if (filter.transportModes?.length) parts.push(`tm=${filter.transportModes.join(',')}`);
-  if (filter.colorBy === 'transportMode') parts.push('cb=tm');
-  if (filter.scenario) {
-    const b = filter.scenario.bbox;
-    parts.push(`sc=p:${b.w},${b.s},${b.e},${b.n}`);
-  }
-  return parts.join('&');
-}
-
-function decodeScenario(params: URLSearchParams): FilterState['scenario'] {
-  const sc = params.get('sc');
-  if (!sc || !sc.startsWith('p:')) return undefined;
-  const nums = sc.slice(2).split(',').map(Number);
-  if (nums.length !== 4 || nums.some(v => !Number.isFinite(v))) return undefined;
-  const [w, s, e, n] = nums;
-  if (w >= e || s >= n) return undefined;
-  return { type: 'pedestrianize', bbox: { w, s, e, n } };
-}
-
-const TM_RE = /^\d{1,2}(,\d{1,2}){0,15}$/;
-
-function decodeTransportModes(params: URLSearchParams): number[] | undefined {
-  const tm = params.get('tm');
-  if (!tm || !TM_RE.test(tm)) return undefined;
-  const modes = [...new Set(tm.split(',').map(Number))];
-  return modes.length > 0 ? modes : undefined;
-}
-
-function decodeHash(hash: string): FilterState {
-  if (!hash || hash === '#') return DEFAULT_FILTER;
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  const params = new URLSearchParams(raw);
-  const vt = params.get('vt');
-  return {
-    vehicleType: (vt && /^[a-z][a-z0-9_]*$/.test(vt)) ? vt : '',
-    city: params.get('city') ? decodeURIComponent(params.get('city')!) : undefined,
-    simulationDay: numParam(params, 'day'),
-    minHour: numParam(params, 'minh') ?? 0,
-    maxHour: numParam(params, 'maxh') ?? 23,
-    goodsType: params.get('gt') ? decodeURIComponent(params.get('gt')!) : undefined,
-    minSpeed: numParam(params, 'ms'),
-    maxSpeed: numParam(params, 'xs'),
-    maxDwellMinutes: numParam(params, 'xd'),
-    minDetourRatio: numParam(params, 'mr'),
-    maxDetourRatio: numParam(params, 'xr'),
-    transportModes: decodeTransportModes(params),
-    colorBy: params.get('cb') === 'tm' ? 'transportMode' : undefined,
-    scenario: decodeScenario(params),
-  };
-}
-
-const SOURCE_ID_RE = /^[a-z][a-z0-9_]*$/;
-
-function encodeHiddenSources(hidden: string[]): string {
-  if (hidden.length === 0) return '';
-  return `hs=${hidden.join(',')}`;
-}
-
-function decodeHiddenSources(hash: string): string[] {
-  if (!hash || hash === '#') return [];
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  const hs = new URLSearchParams(raw).get('hs');
-  if (!hs) return [];
-  return hs.split(',').map(s => s.trim()).filter(s => SOURCE_ID_RE.test(s));
-}
+import type { FilterState } from '../types';
+import {
+  DEFAULT_FILTER,
+  encodeHash,
+  decodeHash,
+  encodeHiddenSources,
+  decodeHiddenSources,
+  encodeAgents,
+  decodeAgents,
+} from '../filterHash';
+import { MAX_AGENTS } from '../components/AgentTab';
 
 describe('filter hash encoding', () => {
   it('round-trips an empty filter', () => {
@@ -292,28 +189,6 @@ describe('hidden-sources hash encoding', () => {
 });
 
 // ── Agent-selection hash (Phase 2A) ────────────────────────────────────────
-// Mirror of App.tsx's encodeAgents/decodeAgents (same convention as above:
-// a shape change in App.tsx must break this test).
-
-const MAX_AGENTS = 20;
-const AGENT_KEY_RE = /^[a-z][a-z0-9_]*:[A-Za-z0-9_:.\-]{1,64}$/;
-
-function encodeAgents(agents: string[]): string {
-  if (agents.length === 0) return '';
-  return `ag=${encodeURIComponent(agents.join(','))}`;
-}
-
-function decodeAgents(hash: string): string[] {
-  if (!hash || hash === '#') return [];
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  const ag = new URLSearchParams(raw).get('ag');
-  if (!ag) return [];
-  return decodeURIComponent(ag)
-    .split(',')
-    .map(k => k.trim())
-    .filter(k => AGENT_KEY_RE.test(k))
-    .slice(0, MAX_AGENTS);
-}
 
 describe('agent-selection hash encoding (Phase 2A)', () => {
   it('round-trips a selection', () => {
