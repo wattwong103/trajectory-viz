@@ -40,12 +40,12 @@ describe('phaseLabel', () => {
 
   it('single-file uploads show no counter', () => {
     expect(phaseLabel({ phase: 'ingest', file: 'a.gpx', done_files: 0, total_files: 1 }))
-      .toBe('Ingesting waypoints…');
+      .toBe('Ingesting data…');
   });
 
   it('multi-file uploads show the file counter', () => {
     expect(phaseLabel({ phase: 'ingest', file: 'b.gpx', done_files: 0, total_files: 2 }))
-      .toBe('Ingesting waypoints… (file 1 of 2)');
+      .toBe('Ingesting data… (file 1 of 2)');
     expect(phaseLabel({ phase: 'synthesize', file: 'b.gpx', done_files: 1, total_files: 2 }))
       .toBe('Synthesizing trips… (file 2 of 2)');
   });
@@ -63,7 +63,7 @@ describe('phaseLabel', () => {
 
   it('counter clamps at total_files', () => {
     expect(phaseLabel({ phase: 'ingest', file: 'x', done_files: 5, total_files: 2 }))
-      .toBe('Ingesting waypoints… (file 2 of 2)');
+      .toBe('Ingesting data… (file 2 of 2)');
   });
 });
 

@@ -80,15 +80,17 @@ What happens:
 
 1. The format is sniffed automatically (from the extension; `.json` files are
    content-sniffed as GeoJSON vs NDJSON).
-2. For CSV/NDJSON/Parquet, lon/lat/time/id columns are identified by name
-   heuristics; if they can't, a **column-mapping sheet** opens. **GeoJSON**
-   opens an **Add as…** chooser (Trajectories / POIs / Zones) with a suggested
-   role from geometry — polygons become zone layers, timeless points become
-   POIs, timed points / lines stay trajectories. GPX stays tracks. Optional
-   label + color apply to POI/zone overlays. You can also write an explicit
-   `sources.yaml` block (see below).
-3. Trips are synthesized from the points (30-minute gap split) and ingest runs
-   as a background job with a live progress card.
+2. For CSV/NDJSON/Parquet, the backend picks **GPS tracks** (lon/lat/time/id)
+   or **OD / trips table** (`start_lon`/`end_lon`/… → arcs, no waypoints). If
+   heuristics miss, a **column-mapping sheet** opens with a tracks vs OD
+   toggle. **GeoJSON** opens an **Add as…** chooser (Trajectories / POIs /
+   Zones) with a suggested role from geometry — polygons become zone layers,
+   timeless points become POIs, timed points / lines stay trajectories. GPX
+   stays tracks. Optional label + color apply to POI/zone overlays. You can
+   also write an explicit `sources.yaml` block (see below).
+3. Track uploads synthesize trips (30-minute gap split); OD uploads ingest
+   trips directly as arcs. Ingest runs as a background job with a live
+   progress card.
 4. When the job finishes, the new source simply appears — **Sources** button,
    legend entry, toast ("Added 'couriers.gpx': 412 trips, 2 vehicles").
 

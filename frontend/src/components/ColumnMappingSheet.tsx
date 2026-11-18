@@ -1,8 +1,9 @@
 /**
  * ColumnMappingSheet — interactive role assignment when upload sniff fails.
  *
- * Assigns lon | lat | time | agent_id | name | mode | ignore per column,
- * optional time_kind + mode_map JSON. Confirm posts to /upload/confirm.
+ * Supports GPS tracks (lon/lat/time/agent) and trips-only / OD arcs
+ * (start/end lon/lat, starttime, trip_id, agent). Confirm posts to
+ * /upload/confirm with kind=tracks|trips.
  */
 
 import React, { useMemo, useState } from 'react';
@@ -12,9 +13,10 @@ import type {
   UploadTimeKind,
   ConfirmUploadFile,
   ColumnMappingRequest,
+  UploadTabularKind,
 } from '../types';
 
-const ROLES: { value: ColumnMappingRole; label: string }[] = [
+const TRACK_ROLES: { value: ColumnMappingRole; label: string }[] = [
   { value: 'ignore', label: 'Ignore' },
   { value: 'lon', label: 'Longitude' },
   { value: 'lat', label: 'Latitude' },
@@ -24,13 +26,35 @@ const ROLES: { value: ColumnMappingRole; label: string }[] = [
   { value: 'mode', label: 'Mode (optional)' },
 ];
 
-const TIME_KINDS: { value: UploadTimeKind; label: string }[] = [
+const TRIP_ROLES: { value: ColumnMappingRole; label: string }[] = [
+  { value: 'ignore', label: 'Ignore' },
+  { value: 'start_lon', label: 'Start lon' },
+  { value: 'start_lat', label: 'Start lat' },
+  { value: 'end_lon', label: 'End lon' },
+  { value: 'end_lat', label: 'End lat' },
+  { value: 'starttime', label: 'Start time' },
+  { value: 'agent_id', label: 'Agent / device id' },
+  { value: 'trip_id', label: 'Trip id' },
+  { value: 'mode', label: 'Mode (optional)' },
+];
+
+const TRACK_TIME_KINDS: { value: UploadTimeKind; label: string }[] = [
   { value: 'iso', label: 'ISO-8601' },
   { value: 'epoch_ms', label: 'Epoch ms' },
   { value: 'epoch_s', label: 'Epoch seconds' },
 ];
 
-const REQUIRED: ColumnMappingRole[] = ['lon', 'lat', 'time', 'agent_id'];
+const TRIP_TIME_KINDS: { value: UploadTimeKind; label: string }[] = [
+  { value: 'day_seconds', label: 'Seconds from midnight' },
+  { value: 'iso', label: 'ISO-8601' },
+  { value: 'epoch_ms', label: 'Epoch ms' },
+  { value: 'epoch_s', label: 'Epoch seconds' },
+];
+
+const TRACK_REQUIRED: ColumnMappingRole[] = ['lon', 'lat', 'time', 'agent_id'];
+const TRIP_REQUIRED: ColumnMappingRole[] = [
+  'start_lon', 'start_lat', 'end_lon', 'end_lat', 'starttime', 'agent_id', 'trip_id',
+];
 
 interface ColumnMappingSheetProps {
   files: UploadMappingFile[];
@@ -41,29 +65,46 @@ interface ColumnMappingSheetProps {
 }
 
 type FileDraft = {
+  kind: UploadTabularKind;
   roles: Record<string, ColumnMappingRole>;
   timeKind: UploadTimeKind | '';
   modeMapText: string;
 };
 
+function resolveKind(file: UploadMappingFile): UploadTabularKind {
+  return file.kind ?? file.suggested_kind ?? 'tracks';
+}
+
 function initialDraft(file: UploadMappingFile): FileDraft {
+  const kind = resolveKind(file);
   const roles: Record<string, ColumnMappingRole> = {};
   for (const col of file.columns) {
     roles[col.name] = (col.guessed_role as ColumnMappingRole | null) ?? 'ignore';
   }
-  // Apply top-level guesses when census entries lack guessed_role.
   const g = file.guesses;
-  const assign = (role: ColumnMappingRole, col: string | null) => {
+  const assign = (role: ColumnMappingRole, col: string | null | undefined) => {
     if (col && roles[col] !== undefined) roles[col] = role;
   };
-  assign('lon', g.lon);
-  assign('lat', g.lat);
-  assign('time', g.time);
-  assign('agent_id', g.vehicle_id);
-  assign('name', g.name);
-  assign('mode', g.mode);
+  if (kind === 'trips') {
+    assign('start_lon', g.start_lon);
+    assign('start_lat', g.start_lat);
+    assign('end_lon', g.end_lon);
+    assign('end_lat', g.end_lat);
+    assign('starttime', g.starttime);
+    assign('agent_id', g.vehicle_id);
+    assign('trip_id', g.trip_id);
+    assign('mode', g.mode);
+  } else {
+    assign('lon', g.lon);
+    assign('lat', g.lat);
+    assign('time', g.time);
+    assign('agent_id', g.vehicle_id);
+    assign('name', g.name);
+    assign('mode', g.mode);
+  }
 
   return {
+    kind,
     roles,
     timeKind: g.time_kind ?? '',
     modeMapText: '',
@@ -72,6 +113,11 @@ function initialDraft(file: UploadMappingFile): FileDraft {
 
 function roleToColumn(roles: Record<string, ColumnMappingRole>, role: ColumnMappingRole): string | undefined {
   return Object.entries(roles).find(([, r]) => r === role)?.[0];
+}
+
+function roleLabel(role: ColumnMappingRole): string {
+  if (role === 'agent_id') return 'agent/device id';
+  return role.replace(/_/g, ' ');
 }
 
 export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
@@ -93,14 +139,11 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
     for (const f of files) {
       const d = drafts[f.staged_name];
       if (!d) continue;
-      for (const role of REQUIRED) {
+      const required = d.kind === 'trips' ? TRIP_REQUIRED : TRACK_REQUIRED;
+      for (const role of required) {
         if (!roleToColumn(d.roles, role)) {
-          problems.push(`${f.filename}: assign a ${role === 'agent_id' ? 'agent/device id' : role} column`);
+          problems.push(`${f.filename}: assign a ${roleLabel(role)} column`);
         }
-      }
-      const timeCol = roleToColumn(d.roles, 'time');
-      if (timeCol && !d.timeKind) {
-        // Allow empty if samples look inferable — backend will try; warn softly.
       }
       if (d.modeMapText.trim()) {
         try {
@@ -119,12 +162,25 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
     return problems;
   }, [files, drafts]);
 
+  const setKind = (staged: string, kind: UploadTabularKind) => {
+    setDrafts(prev => {
+      const cur = prev[staged];
+      if (!cur) return prev;
+      const file = files.find(f => f.staged_name === staged);
+      if (!file) return prev;
+      // Rebuild draft for the new kind from server guesses.
+      const next = initialDraft({ ...file, kind, suggested_kind: kind });
+      next.modeMapText = cur.modeMapText;
+      return { ...prev, [staged]: next };
+    });
+    setLocalError(null);
+  };
+
   const setRole = (staged: string, col: string, role: ColumnMappingRole) => {
     setDrafts(prev => {
       const cur = prev[staged];
       if (!cur) return prev;
       const roles = { ...cur.roles };
-      // Enforce one column per role (except ignore).
       if (role !== 'ignore') {
         for (const [name, r] of Object.entries(roles)) {
           if (r === role) roles[name] = 'ignore';
@@ -143,17 +199,29 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
     }
     const payload: ConfirmUploadFile[] = files.map(f => {
       const d = drafts[f.staged_name];
-      const mapping: ColumnMappingRequest = {
-        lon: roleToColumn(d.roles, 'lon')!,
-        lat: roleToColumn(d.roles, 'lat')!,
-        time: roleToColumn(d.roles, 'time')!,
-        vehicle_id: roleToColumn(d.roles, 'agent_id'),
-      };
-      const name = roleToColumn(d.roles, 'name');
-      const mode = roleToColumn(d.roles, 'mode');
-      if (name) mapping.name = name;
-      if (mode) mapping.mode = mode;
-      if (d.timeKind) mapping.time_kind = d.timeKind;
+      const mapping: ColumnMappingRequest = { kind: d.kind };
+      if (d.kind === 'trips') {
+        mapping.start_lon = roleToColumn(d.roles, 'start_lon')!;
+        mapping.start_lat = roleToColumn(d.roles, 'start_lat')!;
+        mapping.end_lon = roleToColumn(d.roles, 'end_lon')!;
+        mapping.end_lat = roleToColumn(d.roles, 'end_lat')!;
+        mapping.starttime = roleToColumn(d.roles, 'starttime')!;
+        mapping.vehicle_id = roleToColumn(d.roles, 'agent_id');
+        mapping.trip_id = roleToColumn(d.roles, 'trip_id')!;
+        const mode = roleToColumn(d.roles, 'mode');
+        if (mode) mapping.mode = mode;
+        if (d.timeKind) mapping.time_kind = d.timeKind;
+      } else {
+        mapping.lon = roleToColumn(d.roles, 'lon')!;
+        mapping.lat = roleToColumn(d.roles, 'lat')!;
+        mapping.time = roleToColumn(d.roles, 'time')!;
+        mapping.vehicle_id = roleToColumn(d.roles, 'agent_id');
+        const name = roleToColumn(d.roles, 'name');
+        const mode = roleToColumn(d.roles, 'mode');
+        if (name) mapping.name = name;
+        if (mode) mapping.mode = mode;
+        if (d.timeKind) mapping.time_kind = d.timeKind;
+      }
       if (d.modeMapText.trim()) {
         mapping.mode_map = JSON.parse(d.modeMapText) as Record<string, string>;
       }
@@ -161,6 +229,7 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
         staged_name: f.staged_name,
         source_id: f.source_id,
         filename: f.filename,
+        kind: d.kind,
         mapping,
       };
     });
@@ -174,8 +243,8 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
           <div>
             <div style={styles.title}>Map columns to ingest</div>
             <div style={styles.subtitle}>
-              Heuristics could not identify required fields. Assign longitude,
-              latitude, time, and agent id — then ingest with the same pipeline.
+              Choose GPS tracks or an OD / trips table, then assign the required
+              columns. Trips-only uploads draw as arcs (no waypoints).
             </div>
           </div>
           <button type="button" onClick={onCancel} style={styles.close} disabled={busy} title="Cancel">
@@ -196,13 +265,43 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
           const d = drafts[f.staged_name];
           if (!d) return null;
           const tried = f.tried_candidates;
+          const roles = d.kind === 'trips' ? TRIP_ROLES : TRACK_ROLES;
+          const timeKinds = d.kind === 'trips' ? TRIP_TIME_KINDS : TRACK_TIME_KINDS;
+          const timeRole: ColumnMappingRole = d.kind === 'trips' ? 'starttime' : 'time';
           return (
             <div key={f.staged_name} style={styles.fileBlock}>
               <div style={styles.fileName}>{f.filename}</div>
-              {tried && (
+              <div style={styles.kindRow} role="group" aria-label="Table kind">
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={d.kind === 'tracks'}
+                  onClick={() => setKind(f.staged_name, 'tracks')}
+                  style={d.kind === 'tracks' ? styles.kindActive : styles.kindIdle}
+                >
+                  GPS tracks
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={d.kind === 'trips'}
+                  onClick={() => setKind(f.staged_name, 'trips')}
+                  style={d.kind === 'trips' ? styles.kindActive : styles.kindIdle}
+                >
+                  OD / trips table
+                </button>
+              </div>
+              {tried && d.kind === 'tracks' && (
                 <div style={styles.tried}>
                   Tried: lon [{(tried.lon || []).join(', ')}] · lat [{(tried.lat || []).join(', ')}]
                   · time [{(tried.time || []).join(', ')}] · id [{(tried.vehicle_id || []).join(', ')}]
+                </div>
+              )}
+              {tried && d.kind === 'trips' && (
+                <div style={styles.tried}>
+                  Tried: start [{(tried.start_lon || []).join(', ')}] / [{(tried.start_lat || []).join(', ')}]
+                  · end [{(tried.end_lon || []).join(', ')}] / [{(tried.end_lat || []).join(', ')}]
+                  · starttime [{(tried.starttime || []).join(', ')}]
                 </div>
               )}
               <table style={styles.table}>
@@ -234,7 +333,7 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
                           )}
                           style={styles.select}
                         >
-                          {ROLES.map(r => (
+                          {roles.map(r => (
                             <option key={r.value} value={r.value}>{r.label}</option>
                           ))}
                         </select>
@@ -249,7 +348,7 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
                   Time kind
                   <select
                     value={d.timeKind}
-                    disabled={busy || !roleToColumn(d.roles, 'time')}
+                    disabled={busy || !roleToColumn(d.roles, timeRole)}
                     onChange={e => setDrafts(prev => ({
                       ...prev,
                       [f.staged_name]: {
@@ -260,7 +359,7 @@ export const ColumnMappingSheet: React.FC<ColumnMappingSheetProps> = ({
                     style={styles.select}
                   >
                     <option value="">Auto-detect</option>
-                    {TIME_KINDS.map(t => (
+                    {timeKinds.map(t => (
                       <option key={t.value} value={t.value}>{t.label}</option>
                     ))}
                   </select>
@@ -351,6 +450,26 @@ const styles: Record<string, React.CSSProperties> = {
   reasonLine: { lineHeight: 1.5 },
   fileBlock: { marginBottom: 14 },
   fileName: { fontSize: 13, fontWeight: 600, marginBottom: 4 },
+  kindRow: { display: 'flex', gap: 8, marginBottom: 8 },
+  kindActive: {
+    background: 'rgba(43, 123, 184, 0.35)',
+    border: '1px solid #3d8fc9',
+    color: '#e6e8ee',
+    borderRadius: 8,
+    padding: '5px 10px',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  kindIdle: {
+    background: 'transparent',
+    border: '1px solid rgba(255,255,255,0.18)',
+    color: '#c5ccd8',
+    borderRadius: 8,
+    padding: '5px 10px',
+    fontSize: 12,
+    cursor: 'pointer',
+  },
   tried: { fontSize: 10, color: '#7d8796', marginBottom: 8, lineHeight: 1.4 },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   th: {

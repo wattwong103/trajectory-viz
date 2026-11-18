@@ -1,24 +1,26 @@
 """Upload-and-go ingest API (upload-and-go change).
 
-POST /api/ingest/upload  — multipart upload of trajectory and/or overlay files.
-    Files are staged to <db dir>/uploads/, sniffed/classified, and ingested
-    into the current DB as a background job. Source / POI / zone configs are
-    auto-generated and persisted to sources.uploads.yaml next to the DB (the
-    user's hand-written sources.yaml is never mutated).
+POST /api/ingest/upload  — multipart upload of trajectory, trips-only OD,
+    and/or overlay files. Files are staged to <db dir>/uploads/, sniffed/
+    classified, and ingested into the current DB as a background job. Source /
+    POI / zone configs are auto-generated and persisted to sources.uploads.yaml
+    next to the DB (the user's hand-written sources.yaml is never mutated).
     Optional form field ``roles`` (JSON object filename→role) selects
     trajectories | pois | zones for GeoJSON; omitted roles are auto-detected.
-    When tabular sniff fails, returns 422 with ``mapping_required`` + column
-    census (staged file kept) so the UI can show an interactive mapping sheet.
-    Ambiguous Point GeoJSON (no role) returns ``role_choice_required``.
+    Tabular OD / trips tables (start_/end_ lon/lat) ingest as arcs with no
+    waypoints. When tabular sniff fails, returns 422 with ``mapping_required``
+    + column census (staged file kept) so the UI can show an interactive
+    mapping sheet (tracks vs OD/trips). Ambiguous Point GeoJSON (no role)
+    returns ``role_choice_required``.
 POST /api/ingest/upload/confirm — apply column mapping to staged tabular files
-    and run the same ingest job pipeline.
+    (kind=tracks|trips) and run the same ingest job pipeline.
 POST /api/ingest/upload/confirm-overlay — apply role/label/color to staged
     GeoJSON and ingest as trajectories / pois / zones.
 GET  /api/ingest/jobs/{job_id} — job status/progress/result/error.
 GET  /api/ingest/jobs — last 20 jobs, newest first.
 
-Job orchestration mirrors backend.ingest.main() for trajectories, plus
-ingest_pois / ingest_zones for overlays.
+Job orchestration mirrors backend.ingest.main() for trajectories and trips,
+plus ingest_pois / ingest_zones for overlays.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from ..config import uploads_dir, uploads_registry_path
+from ..config import BASE_EPOCH_SEC, uploads_dir, uploads_registry_path
 from ..db import get_connection, get_epoch_anchor
 from ..ingest import (
     build_density_hourly,
@@ -42,6 +44,7 @@ from ..ingest import (
     ensure_epoch_anchor,
     ingest_pois,
     ingest_source_trajectories,
+    ingest_source_trips,
     ingest_zones,
     synthesize_trips,
 )
@@ -53,13 +56,19 @@ from ..upload_config import (
     census_to_api_dict,
     generate_poi_config,
     generate_source_config,
+    generate_trips_source_config,
     generate_zone_config,
     geojson_property_keys,
     load_uploads_registry_ids,
+    looks_like_trips_table,
     slugify_source_id,
     sniff_failure_reasons,
     sniff_from_mapping,
+    sniff_trip_columns,
     suggest_geojson_role,
+    suggest_tabular_kind,
+    trip_sniff_failure_reasons,
+    trip_sniff_from_mapping,
     validate_geojson_role,
     write_uploads_registry,
 )
@@ -203,27 +212,49 @@ def _resolve_known_anchor(conn) -> int | None:
     return None
 
 
+def _role_label(kind: str) -> str:
+    return {
+        "trajectory": "trajectories",
+        "trips": "trips",
+        "poi": "pois",
+        "zone": "zones",
+    }.get(kind, kind)
+
+
 def _run_job(job_id: str, prepared: list[dict]) -> None:
-    """Run an upload job for trajectories and/or POI/zone overlays."""
+    """Run an upload job for trajectories, trips-only OD, and/or overlays."""
     job = _JOBS[job_id]
     job["status"] = "running"
     try:
         conn = get_connection()
         traj = [p for p in prepared if p.get("kind", "trajectory") == "trajectory"]
+        trips_only = [p for p in prepared if p.get("kind") == "trips"]
         overlays = [p for p in prepared if p.get("kind") in ("poi", "zone")]
         total_files = len(prepared)
         done = 0
+        need_metrics = bool(traj or trips_only)
 
-        # --- Trajectories (optional) ----------------------------------------
+        # --- Shared epoch for any trip-producing upload ---------------------
+        # Existing DB → reuse its epoch. Fresh DB with trajectories → derive
+        # from waypoints after ingest. Fresh DB with trips-only → pin the
+        # historical default (starttime is typically seconds-from-midnight).
+        anchor = _resolve_known_anchor(conn)
+        fresh_db = anchor is None
+        if anchor is not None:
+            ensure_epoch_anchor(conn, anchor)
+            anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
+            for p in traj + trips_only:
+                p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
+        elif trips_only and not traj:
+            anchor = int(BASE_EPOCH_SEC)
+            ensure_epoch_anchor(conn, anchor)
+            fresh_db = False
+            anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
+            for p in trips_only:
+                p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
+
+        # --- Waypoint trajectories → synthesize trips -----------------------
         if traj:
-            anchor = _resolve_known_anchor(conn)
-            fresh_db = anchor is None
-            if anchor is not None:
-                ensure_epoch_anchor(conn, anchor)
-                anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
-                for p in traj:
-                    p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
-
             for p in traj:
                 _set_progress(
                     job, "ingest", file=p["filename"], done_files=done,
@@ -231,6 +262,9 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
                 )
                 conn.execute(
                     "DELETE FROM waypoints WHERE source_id = ?", [p["source_id"]]
+                )
+                conn.execute(
+                    "DELETE FROM trips WHERE source_id = ?", [p["source_id"]]
                 )
                 n = ingest_source_trajectories(
                     conn, p["staged_path"], p["source_id"], p["cfg"], anchor
@@ -248,7 +282,7 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
                 anchor -= anchor % 86400
                 ensure_epoch_anchor(conn, anchor)
                 anchor_iso = datetime.fromtimestamp(anchor, UTC).isoformat()
-                for p in traj:
+                for p in traj + trips_only:
                     p["cfg"].time = TimeConfig(epoch_anchor=anchor_iso)
 
             _set_progress(
@@ -261,15 +295,34 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
                     [p["source_id"]],
                 ).fetchone()[0]
 
+        # --- Trips-only / OD arcs (no waypoints) ----------------------------
+        for p in trips_only:
+            _set_progress(
+                job, "ingest", file=p["filename"], done_files=done,
+                total_files=total_files,
+            )
+            conn.execute(
+                "DELETE FROM trips WHERE source_id = ?", [p["source_id"]]
+            )
+            conn.execute(
+                "DELETE FROM waypoints WHERE source_id = ?", [p["source_id"]]
+            )
+            n = ingest_source_trips(
+                conn, p["staged_path"], p["source_id"], p["cfg"], anchor
+            )
+            p["trips"] = n
+            p["waypoints"] = 0
+            p["vehicles"] = conn.execute(
+                "SELECT COUNT(DISTINCT vehicle_key) FROM trips WHERE source_id = ?",
+                [p["source_id"]],
+            ).fetchone()[0]
+            done += 1
+
+        if need_metrics:
             _set_progress(job, "derived")
             compute_derived_metrics(conn)
             _set_progress(job, "density")
             build_density_hourly(conn)
-        else:
-            for p in traj:  # pragma: no cover
-                p.setdefault("trips", 0)
-                p.setdefault("waypoints", 0)
-                p.setdefault("vehicles", 0)
 
         # --- Overlays (POIs / zones) ----------------------------------------
         for p in overlays:
@@ -290,15 +343,16 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
             p.setdefault("vehicles", 0)
             done += 1
 
-        for p in traj:
+        for p in traj + trips_only:
             p.setdefault("pois", 0)
             p.setdefault("zones", 0)
+            p.setdefault("waypoints", 0)
 
         # --- Registry -------------------------------------------------------
         _set_progress(job, "registry")
         write_uploads_registry(
             uploads_registry_path(),
-            [p["cfg"] for p in traj],
+            [p["cfg"] for p in traj + trips_only],
             pois={p["source_id"]: p["cfg"] for p in overlays if p["kind"] == "poi"},
             zones={p["source_id"]: p["cfg"] for p in overlays if p["kind"] == "zone"},
         )
@@ -314,7 +368,7 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
                     "filename": p["filename"],
                     "source_id": p["source_id"],
                     "label": p["cfg"].label,
-                    "role": p.get("kind", "trajectory"),
+                    "role": _role_label(p.get("kind", "trajectory")),
                     "trips": p.get("trips", 0),
                     "waypoints": p.get("waypoints", 0),
                     "vehicles": p.get("vehicles", 0),
@@ -332,17 +386,31 @@ def _run_job(job_id: str, prepared: list[dict]) -> None:
 
 
 class ColumnMappingPayload(BaseModel):
-    """Interactive column mapping for one staged tabular upload."""
+    """Interactive column mapping for one staged tabular upload.
 
-    lon: str
-    lat: str
-    time: str
+    ``kind`` selects GPS tracks (waypoints → synthesize trips) vs trips-only
+    OD arcs (``trips_glob`` + ``render.mode: arcs``). Track fields (lon/lat/time)
+    are required for ``tracks``; OD fields for ``trips``.
+    """
+
+    kind: Literal["tracks", "trips"] = "tracks"
+    # Tracks
+    lon: str | None = None
+    lat: str | None = None
+    time: str | None = None
     vehicle_id: str | None = None
     agent_id: str | None = None  # alias for vehicle_id
     name: str | None = None
     mode: str | None = None
     time_kind: str | None = None
     mode_map: dict[str, str] | None = None
+    # Trips / OD
+    start_lon: str | None = None
+    start_lat: str | None = None
+    end_lon: str | None = None
+    end_lat: str | None = None
+    starttime: str | None = None
+    trip_id: str | None = None
 
 
 class ConfirmFilePayload(BaseModel):
@@ -350,6 +418,7 @@ class ConfirmFilePayload(BaseModel):
     source_id: str | None = None
     filename: str | None = None
     mapping: ColumnMappingPayload
+    kind: Literal["tracks", "trips"] | None = None  # optional alias of mapping.kind
 
 
 class ConfirmUploadPayload(BaseModel):
@@ -370,11 +439,7 @@ def _start_job(prepared: list[dict]) -> dict:
                 "filename": p["filename"],
                 "source_id": p["source_id"],
                 "format": p["format"],
-                "role": (
-                    "pois" if p.get("kind") == "poi"
-                    else "zones" if p.get("kind") == "zone"
-                    else "trajectories"
-                ),
+                "role": _role_label(p.get("kind", "trajectory")),
             }
             for p in prepared
         ],
@@ -603,31 +668,71 @@ async def upload(
                 continue
 
             sniff = None
+            item_kind = "trajectory"
             if fmt == "gpx":
-                pass
+                cfg = generate_source_config(
+                    source_id=source_id,
+                    fmt=fmt,
+                    staged_rel_path=f"uploads/{staged_path.name}",
+                    label=Path(name).stem,
+                    sniff=None,
+                )
             else:
                 census = census_tabular(staged_path, fmt)
-                sniff = census.sniff
-                missing = sniff_failure_reasons(sniff)
-                if missing:
-                    mapping_files.append(census_to_api_dict(
-                        filename=name,
+                trip_sniff = sniff_trip_columns(staged_path, fmt)
+                header = [c.name for c in census.columns]
+                suggested = suggest_tabular_kind(census.sniff, trip_sniff, header)
+
+                if suggested == "trips":
+                    trip_missing = trip_sniff_failure_reasons(trip_sniff)
+                    if trip_missing:
+                        mapping_files.append(census_to_api_dict(
+                            filename=name,
+                            source_id=source_id,
+                            fmt=fmt,
+                            staged_name=staged_path.name,
+                            census=census,
+                            kind="trips",
+                            trip_sniff=trip_sniff,
+                        ))
+                        keep_staged.append(staged_path)
+                        existing.add(source_id)
+                        continue
+                    cfg = generate_trips_source_config(
                         source_id=source_id,
                         fmt=fmt,
-                        staged_name=staged_path.name,
-                        census=census,
-                    ))
-                    keep_staged.append(staged_path)
-                    existing.add(source_id)
-                    continue
-
-            cfg = generate_source_config(
-                source_id=source_id,
-                fmt=fmt,
-                staged_rel_path=f"uploads/{staged_path.name}",
-                label=Path(name).stem,
-                sniff=sniff,
-            )
+                        staged_rel_path=f"uploads/{staged_path.name}",
+                        label=Path(name).stem,
+                        sniff=trip_sniff,
+                    )
+                    item_kind = "trips"
+                else:
+                    sniff = census.sniff
+                    missing = sniff_failure_reasons(sniff)
+                    if missing:
+                        # OD-shaped but incomplete → prefer trips mapping sheet.
+                        map_kind = (
+                            "trips" if looks_like_trips_table(header) else "tracks"
+                        )
+                        mapping_files.append(census_to_api_dict(
+                            filename=name,
+                            source_id=source_id,
+                            fmt=fmt,
+                            staged_name=staged_path.name,
+                            census=census,
+                            kind=map_kind,
+                            trip_sniff=trip_sniff,
+                        ))
+                        keep_staged.append(staged_path)
+                        existing.add(source_id)
+                        continue
+                    cfg = generate_source_config(
+                        source_id=source_id,
+                        fmt=fmt,
+                        staged_rel_path=f"uploads/{staged_path.name}",
+                        label=Path(name).stem,
+                        sniff=sniff,
+                    )
         except UploadConfigError as exc:
             hard_reasons.extend(f"{name}: {r}" for r in exc.reasons)
             staged_path.unlink(missing_ok=True)
@@ -644,7 +749,7 @@ async def upload(
             "format": fmt,
             "staged_path": staged_path,
             "cfg": cfg,
-            "kind": "trajectory",
+            "kind": item_kind,
         })
 
     # Prefer interactive affordances over starting a partial job.
@@ -708,31 +813,49 @@ async def upload_confirm(body: ConfirmUploadPayload):
             continue
 
         mapping: dict[str, Any] = item.mapping.model_dump(exclude_none=True)
+        kind = item.kind or mapping.pop("kind", None) or "tracks"
         # Prefer explicit vehicle_id; accept agent_id alias from the sheet.
         if not mapping.get("vehicle_id") and mapping.get("agent_id"):
             mapping["vehicle_id"] = mapping["agent_id"]
         mapping.pop("agent_id", None)
 
         try:
-            sniff, mode_map = sniff_from_mapping(
-                path=staged_path, fmt=fmt, mapping=mapping,
-            )
             source_id = item.source_id or slugify_source_id(
                 staged_path.stem, existing
             )
-            # Re-slug if caller-supplied id collides with a different stem.
-            if source_id in existing and source_id != staged_path.stem:
-                # Same staged stem re-upload: allow replacing that source_id.
-                pass
             label = Path(item.filename or staged_path.stem).stem
-            cfg = generate_source_config(
-                source_id=source_id,
-                fmt=fmt,
-                staged_rel_path=f"uploads/{staged_path.name}",
-                label=label,
-                sniff=sniff,
-                mode_map=mode_map,
-            )
+            if kind == "trips":
+                trip_sniff, mode_map = trip_sniff_from_mapping(
+                    path=staged_path, fmt=fmt, mapping=mapping,
+                )
+                cfg = generate_trips_source_config(
+                    source_id=source_id,
+                    fmt=fmt,
+                    staged_rel_path=f"uploads/{staged_path.name}",
+                    label=label,
+                    sniff=trip_sniff,
+                    mode_map=mode_map,
+                )
+                item_kind = "trips"
+            else:
+                # Tracks confirm still requires lon/lat/time.
+                for req in ("lon", "lat", "time"):
+                    if not mapping.get(req):
+                        raise UploadConfigError([
+                            f"mapping must assign {req} for GPS tracks"
+                        ])
+                sniff, mode_map = sniff_from_mapping(
+                    path=staged_path, fmt=fmt, mapping=mapping,
+                )
+                cfg = generate_source_config(
+                    source_id=source_id,
+                    fmt=fmt,
+                    staged_rel_path=f"uploads/{staged_path.name}",
+                    label=label,
+                    sniff=sniff,
+                    mode_map=mode_map,
+                )
+                item_kind = "trajectory"
         except UploadConfigError as exc:
             reasons.extend(f"{item.staged_name}: {r}" for r in exc.reasons)
             continue
@@ -747,7 +870,7 @@ async def upload_confirm(body: ConfirmUploadPayload):
             "format": fmt,
             "staged_path": staged_path,
             "cfg": cfg,
-            "kind": "trajectory",
+            "kind": item_kind,
         })
 
     if reasons:

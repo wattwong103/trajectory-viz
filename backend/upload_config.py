@@ -50,11 +50,40 @@ MODE_CANDIDATES = (
     "transportation_mode",
 )
 
-# Roles the interactive mapping sheet can assign.
+# Trips-only / OD arcs column candidates (TV-29 S3).
+START_LON_CANDIDATES = (
+    "start_lon", "start_lng", "start_longitude", "origin_lon", "origin_lng",
+    "o_lon", "from_lon", "start_x", "start_lon_wgs84",
+)
+START_LAT_CANDIDATES = (
+    "start_lat", "start_latitude", "origin_lat", "o_lat", "from_lat",
+    "start_y", "start_lat_wgs84",
+)
+END_LON_CANDIDATES = (
+    "end_lon", "end_lng", "end_longitude", "dest_lon", "destination_lon",
+    "d_lon", "to_lon", "end_x", "end_lon_wgs84",
+)
+END_LAT_CANDIDATES = (
+    "end_lat", "end_latitude", "dest_lat", "destination_lat", "d_lat",
+    "to_lat", "end_y", "end_lat_wgs84",
+)
+START_TIME_CANDIDATES = (
+    "starttime", "start_time", "start_time_sec", "dep_time", "departure",
+    "depart", "time", "ts",
+)
+TRIP_ID_CANDIDATES = ("trip_id", "id", "trip", "od_id", "flow_id")
+
+# Roles the interactive mapping sheet can assign (tracks).
 MAPPING_ROLES = frozenset({
     "lon", "lat", "time", "agent_id", "name", "mode", "ignore",
 })
+# Extra roles for trips-only / OD mapping.
+TRIP_MAPPING_ROLES = frozenset({
+    "start_lon", "start_lat", "end_lon", "end_lat", "starttime",
+    "agent_id", "trip_id", "mode", "ignore",
+})
 TIME_KINDS = frozenset({"iso", "epoch_ms", "epoch_s"})
+TRIP_TIME_KINDS = frozenset({"day_seconds", "iso", "epoch_ms", "epoch_s"})
 
 # Deterministic per-source colors (first entry is the source's color).
 _PALETTE = [
@@ -573,13 +602,90 @@ def census_to_api_dict(
     fmt: str,
     staged_name: str,
     census: TabularCensus,
+    kind: str | None = None,
+    trip_sniff: TripColumnSniff | None = None,
 ) -> dict:
-    """Serialize a TabularCensus for the 422 mapping_required payload."""
+    """Serialize a TabularCensus for the 422 mapping_required payload.
+
+    ``kind`` is ``tracks`` | ``trips`` | None (ambiguous). When ``trips``,
+    column guessed roles / reasons / candidates reflect OD mapping.
+    """
+    header = [c.name for c in census.columns]
+    trip = trip_sniff if trip_sniff is not None else TripColumnSniff()
+    if kind is None and trip_sniff is not None:
+        kind = suggest_tabular_kind(census.sniff, trip, header)
+
+    if kind == "trips":
+        role_by_col: dict[str, str] = {}
+        for role, col in (
+            ("start_lon", trip.start_lon),
+            ("start_lat", trip.start_lat),
+            ("end_lon", trip.end_lon),
+            ("end_lat", trip.end_lat),
+            ("starttime", trip.starttime),
+            ("agent_id", trip.vehicle_id),
+            ("trip_id", trip.trip_id),
+            ("mode", trip.mode),
+        ):
+            if col:
+                role_by_col[col] = role
+        columns = [
+            {
+                "name": c.name,
+                "sample_type": c.sample_type,
+                "samples": c.samples,
+                "guessed_role": role_by_col.get(c.name),
+                "time_kind": (
+                    trip.starttime_kind if role_by_col.get(c.name) == "starttime" else None
+                ),
+            }
+            for c in census.columns
+        ]
+        reasons = trip_sniff_failure_reasons(trip) or list(census.reasons)
+        return {
+            "filename": filename,
+            "source_id": source_id,
+            "format": fmt,
+            "staged_name": staged_name,
+            "kind": "trips",
+            "suggested_kind": "trips",
+            "columns": columns,
+            "guesses": {
+                "start_lon": trip.start_lon,
+                "start_lat": trip.start_lat,
+                "end_lon": trip.end_lon,
+                "end_lat": trip.end_lat,
+                "starttime": trip.starttime,
+                "vehicle_id": trip.vehicle_id,
+                "trip_id": trip.trip_id,
+                "mode": trip.mode,
+                "time_kind": trip.starttime_kind,
+                # Keep track-shaped keys null so older FE still parses.
+                "lon": None,
+                "lat": None,
+                "time": None,
+                "name": None,
+            },
+            "reasons": reasons,
+            "tried_candidates": {
+                "start_lon": list(START_LON_CANDIDATES),
+                "start_lat": list(START_LAT_CANDIDATES),
+                "end_lon": list(END_LON_CANDIDATES),
+                "end_lat": list(END_LAT_CANDIDATES),
+                "starttime": list(START_TIME_CANDIDATES),
+                "vehicle_id": list(ID_CANDIDATES),
+                "trip_id": list(TRIP_ID_CANDIDATES),
+                "mode": list(MODE_CANDIDATES),
+            },
+        }
+
     return {
         "filename": filename,
         "source_id": source_id,
         "format": fmt,
         "staged_name": staged_name,
+        "kind": "tracks",
+        "suggested_kind": kind or "tracks",
         "columns": [
             {
                 "name": c.name,
@@ -733,8 +839,341 @@ _UNIX_TIME_SQL = {
     "epoch_s": 'CAST("{col}" AS BIGINT) * 1000',
 }
 
+# Trips.starttime is seconds-from-midnight (mod 86400).
+_START_TIME_SQL = {
+    "day_seconds": 'CAST("{col}" AS INTEGER)',
+    "iso": (
+        'CAST((epoch_ms(CAST("{col}" AS TIMESTAMPTZ)) // 1000 '
+        '- {{epoch_anchor}}) % 86400 AS INTEGER)'
+    ),
+    "epoch_ms": (
+        'CAST((CAST("{col}" AS BIGINT) // 1000 - {{epoch_anchor}}) % 86400 AS INTEGER)'
+    ),
+    "epoch_s": (
+        'CAST((CAST("{col}" AS BIGINT) - {{epoch_anchor}}) % 86400 AS INTEGER)'
+    ),
+}
+
 # Canonical staging roles for normalized formats (no sniffing required).
 _STAGED_VEHICLE_ID_COL = {"gpx": "_trk_name", "geojson": "_feature_id"}
+
+
+@dataclass
+class TripColumnSniff:
+    """Sniffed OD / trips-table column roles."""
+
+    start_lon: str | None = None
+    start_lat: str | None = None
+    end_lon: str | None = None
+    end_lat: str | None = None
+    starttime: str | None = None
+    vehicle_id: str | None = None
+    trip_id: str | None = None
+    mode: str | None = None
+    encoding: str = "utf-8"
+    # day_seconds | iso | epoch_ms | epoch_s
+    starttime_kind: str | None = None
+    mode_as_int: bool = False
+
+
+def _match_candidates(
+    by_lower: dict[str, str], used: set[str], candidates: tuple[str, ...]
+) -> str | None:
+    for cand in candidates:
+        original = by_lower.get(cand)
+        if original is not None and original not in used:
+            used.add(original)
+            return original
+    return None
+
+
+def _starttime_kind(samples: list[str]) -> str | None:
+    """Infer trips.starttime encoding from samples."""
+    vals = [s.strip() for s in samples if s.strip()][:100]
+    if not vals:
+        return None
+    if all(_ISO_DATE_RE.match(v) for v in vals):
+        return "iso"
+    nums: list[float] = []
+    for v in vals:
+        try:
+            nums.append(float(v))
+        except ValueError:
+            return None
+    lo, hi = min(nums), max(nums)
+    # Seconds-from-midnight (and a little slack for end-of-day).
+    if 0 <= lo and hi <= 86400 * 2:
+        return "day_seconds"
+    if _EPOCH_MS_RANGE[0] <= lo and hi <= _EPOCH_MS_RANGE[1]:
+        return "epoch_ms"
+    if _EPOCH_S_RANGE[0] <= lo and hi <= _EPOCH_S_RANGE[1]:
+        return "epoch_s"
+    return None
+
+
+def sniff_trip_columns(path: Path, fmt: str) -> TripColumnSniff:
+    """Sniff a tabular file for OD / trips-table columns."""
+    sniff = TripColumnSniff()
+    header, col_samples, encoding = _read_tabular_samples(path, fmt)
+    sniff.encoding = encoding
+    if not header:
+        return sniff
+    by_lower = {h.lower(): h for h in header}
+    used: set[str] = set()
+    sniff.start_lon = _match_candidates(by_lower, used, START_LON_CANDIDATES)
+    sniff.start_lat = _match_candidates(by_lower, used, START_LAT_CANDIDATES)
+    sniff.end_lon = _match_candidates(by_lower, used, END_LON_CANDIDATES)
+    sniff.end_lat = _match_candidates(by_lower, used, END_LAT_CANDIDATES)
+    sniff.starttime = _match_candidates(by_lower, used, START_TIME_CANDIDATES)
+    # Claim trip_id before vehicle_id so a lone ``id`` column stays the trip
+    # key (agent/vehicle can be mapped interactively if absent).
+    sniff.trip_id = _match_candidates(by_lower, used, TRIP_ID_CANDIDATES)
+    sniff.vehicle_id = _match_candidates(by_lower, used, ID_CANDIDATES)
+    sniff.mode = _match_candidates(by_lower, used, MODE_CANDIDATES)
+
+    for field_name in ("start_lon", "start_lat", "end_lon", "end_lat"):
+        col = getattr(sniff, field_name)
+        if col and col_samples.get(col) and not _looks_numeric(col_samples[col]):
+            setattr(sniff, field_name, None)
+            used.discard(col)
+
+    if sniff.starttime:
+        sniff.starttime_kind = _starttime_kind(col_samples.get(sniff.starttime, []))
+        if sniff.starttime_kind is None:
+            used.discard(sniff.starttime)
+            sniff.starttime = None
+    return sniff
+
+
+def trip_sniff_failure_reasons(sniff: TripColumnSniff) -> list[str]:
+    reasons: list[str] = []
+    if not sniff.start_lon or not sniff.start_lat:
+        reasons.append(
+            "could not identify start lon/lat columns "
+            f"(looked for {START_LON_CANDIDATES} / {START_LAT_CANDIDATES})"
+        )
+    if not sniff.end_lon or not sniff.end_lat:
+        reasons.append(
+            "could not identify end lon/lat columns "
+            f"(looked for {END_LON_CANDIDATES} / {END_LAT_CANDIDATES})"
+        )
+    if not sniff.starttime or not sniff.starttime_kind:
+        reasons.append(
+            f"could not identify a starttime column (looked for {START_TIME_CANDIDATES})"
+        )
+    if not sniff.vehicle_id:
+        reasons.append(
+            f"could not identify a vehicle/agent id column (looked for {ID_CANDIDATES})"
+        )
+    if not sniff.trip_id:
+        reasons.append(
+            f"could not identify a trip_id column (looked for {TRIP_ID_CANDIDATES})"
+        )
+    return reasons
+
+
+def looks_like_trips_table(header: list[str]) -> bool:
+    """True when headers strongly suggest an OD / trips table (not GPS pings)."""
+    lower = {h.lower() for h in header}
+    has_end = any(c in lower for c in END_LON_CANDIDATES) or any(
+        c in lower for c in END_LAT_CANDIDATES
+    )
+    has_start = any(c in lower for c in START_LON_CANDIDATES) or any(
+        c in lower for c in START_LAT_CANDIDATES
+    )
+    return has_end and has_start
+
+
+def suggest_tabular_kind(
+    track: ColumnSniff, trip: TripColumnSniff, header: list[str]
+) -> str | None:
+    """Return ``tracks`` | ``trips`` | None (ambiguous / neither)."""
+    track_ok = not sniff_failure_reasons(track)
+    trip_ok = not trip_sniff_failure_reasons(trip)
+    od_shaped = looks_like_trips_table(header)
+    if trip_ok and (od_shaped or not track_ok):
+        return "trips"
+    if track_ok:
+        return "tracks"
+    if trip_ok:
+        return "trips"
+    return None
+
+
+def trip_sniff_from_mapping(
+    *,
+    path: Path,
+    fmt: str,
+    mapping: dict,
+) -> tuple[TripColumnSniff, dict[str, str] | None]:
+    """Build a TripColumnSniff from interactive mapping (kind=trips)."""
+    header, col_samples, encoding = _read_tabular_samples(path, fmt)
+    header_set = set(header)
+    reasons: list[str] = []
+
+    def _col(key: str, *aliases: str) -> str | None:
+        for k in (key, *aliases):
+            if k in mapping and mapping[k]:
+                return str(mapping[k])
+        return None
+
+    start_lon = _col("start_lon")
+    start_lat = _col("start_lat")
+    end_lon = _col("end_lon")
+    end_lat = _col("end_lat")
+    starttime = _col("starttime", "time")
+    vehicle_id = _col("vehicle_id", "agent_id")
+    trip_id = _col("trip_id")
+    mode = _col("mode")
+
+    for role, col in (
+        ("start_lon", start_lon), ("start_lat", start_lat),
+        ("end_lon", end_lon), ("end_lat", end_lat),
+        ("starttime", starttime), ("vehicle_id", vehicle_id),
+        ("trip_id", trip_id), ("mode", mode),
+    ):
+        if col is None:
+            continue
+        if col not in header_set:
+            reasons.append(f"mapped {role} column {col!r} is not in the file")
+
+    if not start_lon or not start_lat:
+        reasons.append("mapping must assign start_lon and start_lat")
+    if not end_lon or not end_lat:
+        reasons.append("mapping must assign end_lon and end_lat")
+    if not starttime:
+        reasons.append("mapping must assign a starttime column")
+    if not vehicle_id:
+        reasons.append("mapping must assign vehicle_id / agent_id")
+    if not trip_id:
+        reasons.append("mapping must assign trip_id")
+
+    assigned = [
+        c for c in (
+            start_lon, start_lat, end_lon, end_lat, starttime, vehicle_id, trip_id, mode,
+        ) if c
+    ]
+    if len(assigned) != len(set(assigned)):
+        reasons.append("each column may be assigned to at most one role")
+
+    kind = mapping.get("time_kind") or mapping.get("starttime_kind")
+    if kind is not None:
+        kind = str(kind)
+        if kind not in TRIP_TIME_KINDS:
+            reasons.append(
+                f"starttime_kind must be one of {sorted(TRIP_TIME_KINDS)}, got {kind!r}"
+            )
+    elif starttime and starttime in header_set:
+        kind = _starttime_kind(col_samples.get(starttime, []))
+        if kind is None:
+            reasons.append(
+                f"could not infer starttime_kind for {starttime!r} — "
+                "set time_kind to day_seconds, iso, epoch_ms, or epoch_s"
+            )
+
+    mode_map_raw = mapping.get("mode_map")
+    mode_map: dict[str, str] | None = None
+    if mode_map_raw is not None:
+        if not isinstance(mode_map_raw, dict):
+            reasons.append("mode_map must be an object of string→string entries")
+        else:
+            mode_map = {str(k): str(v) for k, v in mode_map_raw.items()}
+            if mode is None:
+                reasons.append("mode_map requires a mode column mapping")
+
+    if reasons:
+        raise UploadConfigError(reasons)
+
+    sniff = TripColumnSniff(
+        start_lon=start_lon,
+        start_lat=start_lat,
+        end_lon=end_lon,
+        end_lat=end_lat,
+        starttime=starttime,
+        vehicle_id=vehicle_id,
+        trip_id=trip_id,
+        mode=mode,
+        encoding=encoding,
+        starttime_kind=kind,
+        mode_as_int=bool(mode_map),
+    )
+    return sniff, mode_map
+
+
+def generate_trips_source_config(
+    *,
+    source_id: str,
+    fmt: str,
+    staged_rel_path: str,
+    label: str,
+    sniff: TripColumnSniff,
+    anchor_iso: str | None = None,
+    mode_map: dict[str, str] | None = None,
+    color: list[int] | tuple[int, ...] | None = None,
+) -> SourceConfig:
+    """Build a trips-only SourceConfig with ``render.mode: arcs``."""
+    reasons = trip_sniff_failure_reasons(sniff)
+    if reasons:
+        raise UploadConfigError(reasons)
+    if sniff.starttime_kind not in _START_TIME_SQL:
+        raise UploadConfigError([
+            f"internal: missing/invalid starttime_kind {sniff.starttime_kind!r}"
+        ])
+
+    if sniff.starttime_kind == "day_seconds":
+        starttime_spec: dict = {"csv": sniff.starttime, "type": "int"}
+    else:
+        # Double braces in _START_TIME_SQL become single for format().
+        expr = _START_TIME_SQL[sniff.starttime_kind].format(col=sniff.starttime)
+        starttime_spec = {"derived": expr}
+
+    starttime_expr = _START_TIME_SQL[sniff.starttime_kind].format(col=sniff.starttime)
+    trips: dict = {
+        "starttime": starttime_spec,
+        "start_lon": {"csv": sniff.start_lon, "type": "double"},
+        "start_lat": {"csv": sniff.start_lat, "type": "double"},
+        "end_lon": {"csv": sniff.end_lon, "type": "double"},
+        "end_lat": {"csv": sniff.end_lat, "type": "double"},
+        "dep_hour": {"derived": f"CAST(({starttime_expr}) / 3600 AS INTEGER)"},
+        "simulation_day": {"derived": "0"},
+    }
+    if sniff.mode:
+        if mode_map or sniff.mode_as_int:
+            trips["transport_mode"] = {"csv": sniff.mode, "type": "int"}
+        else:
+            trips["mode"] = {"csv": sniff.mode, "type": "varchar"}
+
+    rgb = _parse_color(color, source_id)
+
+    payload: dict = {
+        "label": label,
+        "source_id": source_id,
+        "discovery": {
+            "trips_glob": staged_rel_path,
+            "latest_only": False,
+            "format": fmt,
+        },
+        "vehicle_key_template": f"{source_id}:{{vehicle_id}}",
+        "render": {"mode": "arcs", "color": rgb},
+        "forms": ["od-arcs", "od-endpoints", "temporal"],
+        "time": {"epoch_anchor": anchor_iso} if anchor_iso else None,
+        "columns": {
+            "trip_id_col": sniff.trip_id,
+            "vehicle_id_col": sniff.vehicle_id,
+            "trips": trips,
+        },
+    }
+    if mode_map:
+        payload["mode_map"] = mode_map
+
+    try:
+        return SourceConfig.model_validate(payload)
+    except ValidationError as exc:
+        raise UploadConfigError([
+            "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()
+            )
+        ]) from exc
 
 
 def generate_source_config(
